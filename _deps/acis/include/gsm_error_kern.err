@@ -1,0 +1,34 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_GSM_ERROR_KERN_ERRMOD_INCLUDED
+#define SPAACIS_GSM_ERROR_KERN_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_gsm_error_kern_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_gsm_error_kern_errmod;
+
+#endif
+#define GSM_INTERNAL_ERROR spaacis_gsm_error_kern_errmod.message_code(0)
+#define GSM_GENERAL_INTERNAL_ERROR spaacis_gsm_error_kern_errmod.message_code(1)
+#define GSM_3_DIM_DOMAIN_REQUIRED spaacis_gsm_error_kern_errmod.message_code(2)
+#define GSM_2_DIM_DOMAIN_REQUIRED spaacis_gsm_error_kern_errmod.message_code(3)
+#define GSM_1_DIM_DOMAIN_REQUIRED spaacis_gsm_error_kern_errmod.message_code(4)
+#define GSM_FUNCTION_NOT_IMP spaacis_gsm_error_kern_errmod.message_code(5)
+#define GSM_MARCH_STEP_G1 spaacis_gsm_error_kern_errmod.message_code(6)
+#define GSM_ERROR_NO_PROGENITOR spaacis_gsm_error_kern_errmod.message_code(7)
+#define GSM_ERROR_NULL_SPRGBCK_SURF_DEF spaacis_gsm_error_kern_errmod.message_code(8)
+#define GSM_ERROR_UNSPECIFIED_DERIV_DIR spaacis_gsm_error_kern_errmod.message_code(9)
+#define GSM_ERROR_UNBD_SURF spaacis_gsm_error_kern_errmod.message_code(10)
+#define GSM_ERROR_DIR_NOT_SPECIFIED spaacis_gsm_error_kern_errmod.message_code(11)
+#define GSM_INT_CUR_NULL spaacis_gsm_error_kern_errmod.message_code(12)
+#define GSM_INT_CUR_REPARAM_ERROR spaacis_gsm_error_kern_errmod.message_code(13)
+#define GSM_SURF_EXTEND_ERROR spaacis_gsm_error_kern_errmod.message_code(14)
+#define GSM_BAD_SAVE_FORMAT spaacis_gsm_error_kern_errmod.message_code(15)
+
+#endif /* SPAACIS_GSM_ERROR_KERN_ERRMOD_INCLUDED */

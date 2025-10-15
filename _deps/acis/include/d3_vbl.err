@@ -1,0 +1,20 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_D3_VBL_ERRMOD_INCLUDED
+#define SPAACIS_D3_VBL_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_d3_vbl_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_d3_vbl_errmod;
+
+#endif
+#define UNRECOGNIZED_BDY_GEOM spaacis_d3_vbl_errmod.message_code(0)
+#define BAD_VBL_BOUNDARY spaacis_d3_vbl_errmod.message_code(1)
+
+#endif /* SPAACIS_D3_VBL_ERRMOD_INCLUDED */

@@ -1,0 +1,29 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_WIRE_ERRMOD_INCLUDED
+#define SPAACIS_WIRE_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_wire_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_wire_errmod;
+
+#endif
+#define CHORD_NOT_PERP spaacis_wire_errmod.message_code(0)
+#define ENDS_TOO_CLOSE spaacis_wire_errmod.message_code(1)
+#define LESS_3_PTS spaacis_wire_errmod.message_code(2)
+#define LOOP_BRIDGE spaacis_wire_errmod.message_code(3)
+#define FONT_NOT_FOUND spaacis_wire_errmod.message_code(4)
+#define INVALID_CHAR spaacis_wire_errmod.message_code(5)
+#define UNSUPPORTED_OS spaacis_wire_errmod.message_code(6)
+#define FONT_NOT_VALID spaacis_wire_errmod.message_code(7)
+#define FONT_QUESTIONABLE spaacis_wire_errmod.message_code(8)
+#define FONT_RIGHT_TO_LEFT spaacis_wire_errmod.message_code(9)
+#define FONT_LAYOUT_RTL spaacis_wire_errmod.message_code(10)
+
+#endif /* SPAACIS_WIRE_ERRMOD_INCLUDED */

@@ -1,0 +1,19 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_INTCUCU_ERRMOD_INCLUDED
+#define SPAACIS_INTCUCU_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_intcucu_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_intcucu_errmod;
+
+#endif
+#define CURCUR_NOT_IMPL spaacis_intcucu_errmod.message_code(0)
+
+#endif /* SPAACIS_INTCUCU_ERRMOD_INCLUDED */

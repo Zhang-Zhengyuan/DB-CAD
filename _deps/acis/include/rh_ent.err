@@ -1,0 +1,20 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_RH_ENT_ERRMOD_INCLUDED
+#define SPAACIS_RH_ENT_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_rh_ent_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_rh_ent_errmod;
+
+#endif
+#define RH_SHADER_ARG_MISMATCH spaacis_rh_ent_errmod.message_code(0)
+#define RH_MATERIAL_REFLECTION_UNSET spaacis_rh_ent_errmod.message_code(1)
+
+#endif /* SPAACIS_RH_ENT_ERRMOD_INCLUDED */

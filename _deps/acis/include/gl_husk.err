@@ -1,0 +1,21 @@
+// Error code definitions for module "gl_husk/src"
+
+#ifndef GL_HUSK_GL_HUSK_ERRMOD_INCLUDED
+#define GL_HUSK_GL_HUSK_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __gl_husk
+extern EXPORT_SYMBOL message_module gl_husk_gl_husk_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module gl_husk_gl_husk_errmod;
+
+#endif
+#define NO_GLX gl_husk_gl_husk_errmod.message_code(0)
+#define NO_GL_CONTEXT gl_husk_gl_husk_errmod.message_code(1)
+#define NO_GL_VISUAL gl_husk_gl_husk_errmod.message_code(2)
+
+#endif /* GL_HUSK_GL_HUSK_ERRMOD_INCLUDED */

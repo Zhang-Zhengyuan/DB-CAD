@@ -1,0 +1,77 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SWEEPAPI_ERRMOD_INCLUDED
+#define SPAACIS_SWEEPAPI_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_sweepapi_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_sweepapi_errmod;
+
+#endif
+#define SWEEP_ADJACENT_FACE spaacis_sweepapi_errmod.message_code(0)
+#define SWEEP_BRANCHEDWIRE_NONSUPPORTED_OPTION spaacis_sweepapi_errmod.message_code(1)
+#define SWEEP_BRANCHED_WIRE_BAD_PATH spaacis_sweepapi_errmod.message_code(2)
+#define SWEEP_CLOSE_NONPLANAR spaacis_sweepapi_errmod.message_code(3)
+#define SWEEP_DISTANCE_NOT_FACE spaacis_sweepapi_errmod.message_code(4)
+#define SWEEP_DRAFT_NONPLANAR spaacis_sweepapi_errmod.message_code(5)
+#define SWEEP_DRAFT_NON_G1 spaacis_sweepapi_errmod.message_code(6)
+#define SWEEP_ELL_PROF_OFF_CENTER spaacis_sweepapi_errmod.message_code(7)
+#define SWEEP_FACE_NO_VEC spaacis_sweepapi_errmod.message_code(8)
+#define SWEEP_HELIX_SELF_INT spaacis_sweepapi_errmod.message_code(9)
+#define SWEEP_INVALID_RESULT spaacis_sweepapi_errmod.message_code(10)
+#define SWEEP_INVALID_PATH spaacis_sweepapi_errmod.message_code(11)
+#define SWEEP_LAW_SIZE_MISMATCH spaacis_sweepapi_errmod.message_code(12)
+#define SWEEP_NEAR_TANGENT_PATH spaacis_sweepapi_errmod.message_code(13)
+#define SWEEP_NONPLANAR_FACE spaacis_sweepapi_errmod.message_code(14)
+#define SWEEP_OFFSET_FACE_FAILS spaacis_sweepapi_errmod.message_code(15)
+#define SWEEP_OLD_MITERS spaacis_sweepapi_errmod.message_code(16)
+#define SWEEP_OPEN_WIRE_TO_BODY spaacis_sweepapi_errmod.message_code(17)
+#define SWEEP_PORTION_TO_BODY spaacis_sweepapi_errmod.message_code(18)
+#define SWEEP_PORTION_UNKNOWN spaacis_sweepapi_errmod.message_code(19)
+#define SWEEP_PATH_INVERTED spaacis_sweepapi_errmod.message_code(20)
+#define SWEEP_PROFILE_NEAR_TANGENT spaacis_sweepapi_errmod.message_code(21)
+#define SWEEP_PROFILE_NOT_ON_PATH spaacis_sweepapi_errmod.message_code(22)
+#define SWEEP_PROF_DEGEN_AT_START spaacis_sweepapi_errmod.message_code(23)
+#define SWEEP_SCALE_TO_ZERO spaacis_sweepapi_errmod.message_code(24)
+#define SWEEP_SHEETBODY_WARNING spaacis_sweepapi_errmod.message_code(25)
+#define SWEEP_WIRE_IN_SHEETBODY_DRAFT spaacis_sweepapi_errmod.message_code(26)
+#define SWEEP_TO_FACE_OPTIONS spaacis_sweepapi_errmod.message_code(27)
+#define SWEEP_TOL_EDGE_NO_MATCH spaacis_sweepapi_errmod.message_code(28)
+#define SWEEP_UNDEFINED_DRAFT spaacis_sweepapi_errmod.message_code(29)
+#define SWEEP_VECTOR_NOT_CONSTANT_LAW spaacis_sweepapi_errmod.message_code(30)
+#define SWEEP_ZERO_VECTOR spaacis_sweepapi_errmod.message_code(31)
+#define SWEEP_ZERO_LENGTH spaacis_sweepapi_errmod.message_code(32)
+#define SWEEP_PROFILE_DISC_G1 spaacis_sweepapi_errmod.message_code(33)
+#define SWEEP_NON_MANIFOLD_FACE spaacis_sweepapi_errmod.message_code(34)
+#define SWEEP_PARTIAL_ONLY spaacis_sweepapi_errmod.message_code(35)
+#define SWEEP_CLOSED_NON_PLANAR spaacis_sweepapi_errmod.message_code(36)
+#define SWEEP_DRAFT_GAP_CHANGED spaacis_sweepapi_errmod.message_code(37)
+#define SWEEP_NON_PLANAR_INVALID_PATH spaacis_sweepapi_errmod.message_code(38)
+#define SWEEP_NEAR_TANGENT_DIRECTION spaacis_sweepapi_errmod.message_code(39)
+#define SWEEP_DRAFT_TANGENT spaacis_sweepapi_errmod.message_code(40)
+#define SWEEP_SELF_INT_BODY spaacis_sweepapi_errmod.message_code(41)
+#define SWEEP_UV_PARALLEL spaacis_sweepapi_errmod.message_code(42)
+#define SWEEP_TO_BODY_FAILED spaacis_sweepapi_errmod.message_code(43)
+#define SWEEP_SHEET_TO_BODY spaacis_sweepapi_errmod.message_code(44)
+#define SWEEP_PROFILE_SPLIT_AT_G1_DISC spaacis_sweepapi_errmod.message_code(45)
+#define SWEEP_PATH_SPLIT_AT_G1_DISC spaacis_sweepapi_errmod.message_code(46)
+#define SWEEP_DRAFT_GAP_FILL_CHANG spaacis_sweepapi_errmod.message_code(47)
+#define SWEEP_RAIL_NON_G1_PATH spaacis_sweepapi_errmod.message_code(48)
+#define SWEEP_INTERNAL_ERROR spaacis_sweepapi_errmod.message_code(49)
+#define EXTRUDE_BAD_CURVE_TYPE spaacis_sweepapi_errmod.message_code(50)
+#define EXTRUDE_BAD_DRAFT_ANGLE spaacis_sweepapi_errmod.message_code(51)
+#define EXTRUDE_ELLIPSE_DRAFT spaacis_sweepapi_errmod.message_code(52)
+#define EXTRUDE_NON_PLANE spaacis_sweepapi_errmod.message_code(53)
+#define EXTRUDE_NON_TANGENT_EDGES spaacis_sweepapi_errmod.message_code(54)
+#define EXTRUDE_SHEET_DRAFT spaacis_sweepapi_errmod.message_code(55)
+#define EXTRUDE_SHEET_BAD_INPUT_COEDGE spaacis_sweepapi_errmod.message_code(56)
+#define EXTRUDE_SHEET_EMPTY_SHELL spaacis_sweepapi_errmod.message_code(57)
+#define EXTRUDE_SHEET_NON_UNIFORM_NORMAL spaacis_sweepapi_errmod.message_code(58)
+
+#endif /* SPAACIS_SWEEPAPI_ERRMOD_INCLUDED */

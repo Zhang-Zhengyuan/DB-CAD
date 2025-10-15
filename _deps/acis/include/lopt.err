@@ -1,0 +1,25 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_LOPT_ERRMOD_INCLUDED
+#define SPAACIS_LOPT_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_lopt_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_lopt_errmod;
+
+#endif
+#define LOPT_TWK_BAD_OP_ON_ATT spaacis_lopt_errmod.message_code(0)
+#define LOPT_NON_MANIFOLD spaacis_lopt_errmod.message_code(1)
+#define LOPT_FREE_EDGE spaacis_lopt_errmod.message_code(2)
+#define LOPT_INTERNAL spaacis_lopt_errmod.message_code(3)
+#define LOPT_NOT_IMPLEMENTED spaacis_lopt_errmod.message_code(4)
+#define LOPT_BAD_BOX spaacis_lopt_errmod.message_code(5)
+#define LOPT_LAST_SHELL spaacis_lopt_errmod.message_code(6)
+
+#endif /* SPAACIS_LOPT_ERRMOD_INCLUDED */

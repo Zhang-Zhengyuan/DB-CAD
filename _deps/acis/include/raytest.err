@@ -1,0 +1,24 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_RAYTEST_ERRMOD_INCLUDED
+#define SPAACIS_RAYTEST_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_raytest_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_raytest_errmod;
+
+#endif
+#define EDGE_NOT_FOUND spaacis_raytest_errmod.message_code(0)
+#define RAYTEST_NO_HIT spaacis_raytest_errmod.message_code(1)
+#define SPLINE_EDGE spaacis_raytest_errmod.message_code(2)
+#define UNKNOWN_CURVE spaacis_raytest_errmod.message_code(3)
+#define UNKNOWN_SURF spaacis_raytest_errmod.message_code(4)
+#define WRONG_ENTITY_TYPE spaacis_raytest_errmod.message_code(5)
+
+#endif /* SPAACIS_RAYTEST_ERRMOD_INCLUDED */

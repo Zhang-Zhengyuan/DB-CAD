@@ -1,0 +1,21 @@
+// Error code definitions for module "geomchks/src"
+
+#ifndef GEOMCHKS_GCHK_ERRMOD_INCLUDED
+#define GEOMCHKS_GCHK_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __geomchks
+extern EXPORT_SYMBOL message_module geomchks_gchk_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module geomchks_gchk_errmod;
+
+#endif
+#define GCHK_INCOMPLETE_TEST_DATA geomchks_gchk_errmod.message_code(0)
+#define GCHK_INVALID_TEST_FUNC geomchks_gchk_errmod.message_code(1)
+#define GCHK_FAILED_SOME_TESTS geomchks_gchk_errmod.message_code(2)
+
+#endif /* GEOMCHKS_GCHK_ERRMOD_INCLUDED */

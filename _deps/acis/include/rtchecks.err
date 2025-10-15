@@ -1,0 +1,30 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_RTCHECKS_ERRMOD_INCLUDED
+#define SPAACIS_RTCHECKS_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_rtchecks_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_rtchecks_errmod;
+
+#endif
+#define EXCEEDED_STACK_LIMIT spaacis_rtchecks_errmod.message_code(0)
+#define EXCESSIVE_RECURSION spaacis_rtchecks_errmod.message_code(1)
+#define UNREASONABLE_ARG spaacis_rtchecks_errmod.message_code(2)
+#define ALGORITHM_TRAP spaacis_rtchecks_errmod.message_code(3)
+#define MISMATCHED_API_MACROS spaacis_rtchecks_errmod.message_code(4)
+#define DEPRECATED_FUNCTION spaacis_rtchecks_errmod.message_code(5)
+#define PENDING_FP_EXCEPTION_CLEARED spaacis_rtchecks_errmod.message_code(6)
+#define CALLED_DURING_STATIC_INIT spaacis_rtchecks_errmod.message_code(7)
+#define NOT_CALLED_DURING_STATIC_INIT spaacis_rtchecks_errmod.message_code(8)
+#define ASSERTION_FAILED spaacis_rtchecks_errmod.message_code(9)
+#define BAD_FILE_FORMAT spaacis_rtchecks_errmod.message_code(10)
+#define BAD_FILE_POINTER spaacis_rtchecks_errmod.message_code(11)
+
+#endif /* SPAACIS_RTCHECKS_ERRMOD_INCLUDED */

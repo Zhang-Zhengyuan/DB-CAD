@@ -1,0 +1,17 @@
+// Error code definitions for module "scmext/src"
+
+#ifndef SCMEXT_SCMEXT_ERRMOD_INCLUDED
+#define SCMEXT_SCMEXT_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module scmext_scmext_errmod;
+
+#define NO_INTSECT scmext_scmext_errmod.message_code(0)
+#define NOT_SAME_PART scmext_scmext_errmod.message_code(1)
+#define NO_HISTORY scmext_scmext_errmod.message_code(2)
+#define PART_CLEAR_FAILED scmext_scmext_errmod.message_code(3)
+#define NO_VIEW scmext_scmext_errmod.message_code(4)
+
+#endif /* SCMEXT_SCMEXT_ERRMOD_INCLUDED */

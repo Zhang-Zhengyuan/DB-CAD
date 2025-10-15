@@ -1,0 +1,32 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SPRINGBACK_ERRMOD_INCLUDED
+#define SPAACIS_SPRINGBACK_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_springback_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_springback_errmod;
+
+#endif
+#define SPRING_BACK_BDRY_PLANE_NORMAL_NOT_ORTHOG spaacis_springback_errmod.message_code(0)
+#define SPRING_BACK_BDRY_PLANE_NORMAL_TOO_SMALL spaacis_springback_errmod.message_code(1)
+#define SPRING_BACK_INTERNAL_ERROR spaacis_springback_errmod.message_code(2)
+#define SPRING_BACK_DEF_ALREADY_FINALIZED spaacis_springback_errmod.message_code(3)
+#define BAD_WARP_FUNCTION spaacis_springback_errmod.message_code(4)
+#define INVALID_CONSTRAINT_TYPE spaacis_springback_errmod.message_code(5)
+#define INVALID_SHAPING_CONSTRAINT spaacis_springback_errmod.message_code(6)
+#define INVALID_CONSTRAINT_WIRE spaacis_springback_errmod.message_code(7)
+#define INVALID_CONSTRAINT_WIRE_TOP spaacis_springback_errmod.message_code(8)
+#define NO_CONSTRAINT spaacis_springback_errmod.message_code(9)
+#define BODY_OUTSIDE_SPRING_BACK_DEF spaacis_springback_errmod.message_code(10)
+#define POINTS_OUTSIDE_SPRING_BACK_DEF spaacis_springback_errmod.message_code(11)
+#define SPRING_BACK_DEF_NOT_FINALIZED spaacis_springback_errmod.message_code(12)
+#define PROBLEMATIC_SURFACE spaacis_springback_errmod.message_code(13)
+
+#endif /* SPAACIS_SPRINGBACK_ERRMOD_INCLUDED */

@@ -1,0 +1,32 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_FACE_CSTR_ERRMOD_INCLUDED
+#define SPAACIS_FACE_CSTR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_face_cstr_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_face_cstr_errmod;
+
+#endif
+#define ZERO_TORUS spaacis_face_cstr_errmod.message_code(0)
+#define ZERO_CONE spaacis_face_cstr_errmod.message_code(1)
+#define INVALID_HALF_ANGLE spaacis_face_cstr_errmod.message_code(2)
+#define ZERO_SPHERE spaacis_face_cstr_errmod.message_code(3)
+#define UNSUPPORTED_TOPOLOGY spaacis_face_cstr_errmod.message_code(4)
+#define INVALID_FACE_OWNER spaacis_face_cstr_errmod.message_code(5)
+#define DUPLICATE_FACE_SHELLS spaacis_face_cstr_errmod.message_code(6)
+#define PASS_IN_OTHER_LAW_LIST spaacis_face_cstr_errmod.message_code(7)
+#define FACE_ALREADY_IN_SHELL spaacis_face_cstr_errmod.message_code(8)
+#define SPHERE_FACE_WRAP_AROUND spaacis_face_cstr_errmod.message_code(9)
+#define CYL_FACE_WRAP_AROUND spaacis_face_cstr_errmod.message_code(10)
+#define SPHERE_WRONG_INPUT spaacis_face_cstr_errmod.message_code(11)
+#define TORUS_WRONG_SPINE_INPUT spaacis_face_cstr_errmod.message_code(12)
+#define TORUS_WRONG_TUBE_INPUT spaacis_face_cstr_errmod.message_code(13)
+
+#endif /* SPAACIS_FACE_CSTR_ERRMOD_INCLUDED */

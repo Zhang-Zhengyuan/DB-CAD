@@ -1,0 +1,38 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_RBI_ERRMOD_INCLUDED
+#define SPAACIS_RBI_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_rbi_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_rbi_errmod;
+
+#endif
+#define RBI_NO_BODY spaacis_rbi_errmod.message_code(0)
+#define RBI_BAD_FACE spaacis_rbi_errmod.message_code(1)
+#define RBI_NON_MANIFOLD spaacis_rbi_errmod.message_code(2)
+#define RBI_FREE_EDGE spaacis_rbi_errmod.message_code(3)
+#define RBI_INTERNAL spaacis_rbi_errmod.message_code(4)
+#define RBI_BAD_OP_ON_ATT spaacis_rbi_errmod.message_code(5)
+#define RBI_NOT_IMPLEMENTED spaacis_rbi_errmod.message_code(6)
+#define RBI_NOT_IMPLEMENTED_FOR_CELL spaacis_rbi_errmod.message_code(7)
+#define RBI_IRREP_FACE_LOOP spaacis_rbi_errmod.message_code(8)
+#define RBI_NO_LUMP_LEFT spaacis_rbi_errmod.message_code(9)
+#define RBI_NOT_4_COEDGES spaacis_rbi_errmod.message_code(10)
+#define RBI_SELF_INT_FACE spaacis_rbi_errmod.message_code(11)
+#define RBI_POLY_NOT_SUPPORTED spaacis_rbi_errmod.message_code(12)
+#define RBI_INTERNAL_ERROR spaacis_rbi_errmod.message_code(13)
+#define RBI_NO_FACE spaacis_rbi_errmod.message_code(14)
+#define RBI_NO_SOLUTION spaacis_rbi_errmod.message_code(15)
+#define RBI_BAD_BOX spaacis_rbi_errmod.message_code(16)
+#define RBI_NO_MERGE_EDGE_LOST spaacis_rbi_errmod.message_code(17)
+#define RBI_INVERTED_FACES_NOT_ALLOWED spaacis_rbi_errmod.message_code(18)
+#define RBI_REMOTE_FACE_INTR spaacis_rbi_errmod.message_code(19)
+
+#endif /* SPAACIS_RBI_ERRMOD_INCLUDED */

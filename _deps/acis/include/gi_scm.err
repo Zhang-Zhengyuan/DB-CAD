@@ -1,0 +1,13 @@
+// Error code definitions for module "gi_scm/src"
+
+#ifndef GI_SCM_GI_SCM_ERRMOD_INCLUDED
+#define GI_SCM_GI_SCM_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module gi_scm_gi_scm_errmod;
+
+#define ASM_PICK_NOT_IMPLEMENTED gi_scm_gi_scm_errmod.message_code(0)
+
+#endif /* GI_SCM_GI_SCM_ERRMOD_INCLUDED */

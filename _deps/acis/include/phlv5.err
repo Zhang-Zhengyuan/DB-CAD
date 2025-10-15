@@ -1,0 +1,27 @@
+// Error code definitions for module "spaphlv5/src"
+
+#ifndef SPAPHLV5_PHLV5_ERRMOD_INCLUDED
+#define SPAPHLV5_PHLV5_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaPhlV5
+extern EXPORT_SYMBOL message_module spaphlv5_phlv5_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaphlv5_phlv5_errmod;
+
+#endif
+#define BAD_FACE_SPLIT spaphlv5_phlv5_errmod.message_code(0)
+#define GENERAL_CATIA_FAILURE spaphlv5_phlv5_errmod.message_code(1)
+#define DETECT_PCURVE_TROUBLE spaphlv5_phlv5_errmod.message_code(2)
+#define FAILED_LIBRARY_LOAD spaphlv5_phlv5_errmod.message_code(3)
+#define PHLV5_CAMERA_MISMATCH spaphlv5_phlv5_errmod.message_code(4)
+#define DETECT_SPLIT_EDGE spaphlv5_phlv5_errmod.message_code(5)
+#define NO_BODIES_FOUND spaphlv5_phlv5_errmod.message_code(6)
+#define PHLV5_BAD_BODY spaphlv5_phlv5_errmod.message_code(7)
+#define INCORRECT_HATCHLINE_INPUT spaphlv5_phlv5_errmod.message_code(8)
+
+#endif /* SPAPHLV5_PHLV5_ERRMOD_INCLUDED */

@@ -1,0 +1,21 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SPLED_ERRMOD_INCLUDED
+#define SPAACIS_SPLED_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_spled_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_spled_errmod;
+
+#endif
+#define VERTEX_NOT_ON_EDGE spaacis_spled_errmod.message_code(0)
+#define VERTEX_ON_EDGE_END spaacis_spled_errmod.message_code(1)
+#define TEDGE_NOT_VALID spaacis_spled_errmod.message_code(2)
+
+#endif /* SPAACIS_SPLED_ERRMOD_INCLUDED */

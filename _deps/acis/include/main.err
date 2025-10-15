@@ -1,0 +1,14 @@
+// Error code definitions for module "scmmain/src"
+
+#ifndef SCMMAIN_MAIN_ERRMOD_INCLUDED
+#define SCMMAIN_MAIN_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module scmmain_main_errmod;
+
+#define TIME_EXPIRED scmmain_main_errmod.message_code(0)
+#define NO_DIALOG_CREATED scmmain_main_errmod.message_code(1)
+
+#endif /* SCMMAIN_MAIN_ERRMOD_INCLUDED */

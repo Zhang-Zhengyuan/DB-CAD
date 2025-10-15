@@ -1,0 +1,26 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_STITCH_ERRMOD_INCLUDED
+#define SPAACIS_STITCH_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_stitch_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_stitch_errmod;
+
+#endif
+#define ILLEGAL_WIRE_STITCH spaacis_stitch_errmod.message_code(0)
+#define INCOMPATIBLE_COEDS spaacis_stitch_errmod.message_code(1)
+#define MISMATCHED_EDGES spaacis_stitch_errmod.message_code(2)
+#define NO_STITCHABLE_GEOM spaacis_stitch_errmod.message_code(3)
+#define UNSTITCH_INTERNAL_NMS spaacis_stitch_errmod.message_code(4)
+#define UNSTITCH_NO_CURVE_TYPE spaacis_stitch_errmod.message_code(5)
+#define UNSTITCH_NM_OPT_INVALID spaacis_stitch_errmod.message_code(6)
+#define UNSTITCH_NM_INSUFFICIENT_SEL spaacis_stitch_errmod.message_code(7)
+
+#endif /* SPAACIS_STITCH_ERRMOD_INCLUDED */

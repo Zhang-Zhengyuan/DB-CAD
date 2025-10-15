@@ -1,0 +1,13 @@
+// Error code definitions for module "scheme/src"
+
+#ifndef SCHEME_SCHEME_ERRMOD_INCLUDED
+#define SCHEME_SCHEME_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module scheme_scheme_errmod;
+
+#define SCHEME_ERROR scheme_scheme_errmod.message_code(0)
+
+#endif /* SCHEME_SCHEME_ERRMOD_INCLUDED */

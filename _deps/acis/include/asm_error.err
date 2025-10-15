@@ -1,0 +1,71 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_ASM_ERROR_ERRMOD_INCLUDED
+#define SPAACIS_ASM_ERROR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_asm_error_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_asm_error_errmod;
+
+#endif
+#define ASM_EARLY_VERSION spaacis_asm_error_errmod.message_code(0)
+#define ASM_MULTIPLE_ASSEMBLY_ERROR spaacis_asm_error_errmod.message_code(1)
+#define MODEL_SEQUENCE_MISMATCH spaacis_asm_error_errmod.message_code(2)
+#define ENT_HANDLE_SEQUENCE_MISMATCH spaacis_asm_error_errmod.message_code(3)
+#define COMP_HANDLE_SEQUENCE_MISMATCH spaacis_asm_error_errmod.message_code(4)
+#define COMP_ENT_HANDLE_SEQUENCE_MISMATCH spaacis_asm_error_errmod.message_code(5)
+#define BAD_COMP_PATH spaacis_asm_error_errmod.message_code(6)
+#define BAD_COMP_ENT_PATH spaacis_asm_error_errmod.message_code(7)
+#define ASM_ENTITY_NOT_OWNED_BY_MODEL spaacis_asm_error_errmod.message_code(8)
+#define API_ASM_WRONG_HISTORY spaacis_asm_error_errmod.message_code(9)
+#define BAD_MODEL_NESTING spaacis_asm_error_errmod.message_code(10)
+#define ASM_ALREADY_ASSEMBLY_MODEL spaacis_asm_error_errmod.message_code(11)
+#define ASM_ALREADY_ASSEMBLY_MODEL_LOST spaacis_asm_error_errmod.message_code(12)
+#define ASM_NULL_ASSEMBLY spaacis_asm_error_errmod.message_code(13)
+#define ASM_NULL_REFERENCE spaacis_asm_error_errmod.message_code(14)
+#define ASM_NULL_MODEL spaacis_asm_error_errmod.message_code(15)
+#define ASM_NULL_MANAGER spaacis_asm_error_errmod.message_code(16)
+#define ASM_NULL_COMPONENT spaacis_asm_error_errmod.message_code(17)
+#define ASM_NULL_ENTITY spaacis_asm_error_errmod.message_code(18)
+#define ASM_NULL_EHANDLE spaacis_asm_error_errmod.message_code(19)
+#define ASM_NULL_COMP_ENT spaacis_asm_error_errmod.message_code(20)
+#define ASM_ALREADY_HAS_MODEL spaacis_asm_error_errmod.message_code(21)
+#define ASM_INVALID_ADD_MODEL spaacis_asm_error_errmod.message_code(22)
+#define ASM_INVALID_PROP_OWNER spaacis_asm_error_errmod.message_code(23)
+#define ASM_INVALID_TYPE spaacis_asm_error_errmod.message_code(24)
+#define ASM_INVALID_MODEL spaacis_asm_error_errmod.message_code(25)
+#define ASM_SAVING_INCOMPLETE_MODEL spaacis_asm_error_errmod.message_code(26)
+#define ASM_REF_TO_NULL_MODEL spaacis_asm_error_errmod.message_code(27)
+#define UNABLE_TO_LOAD_MODEL spaacis_asm_error_errmod.message_code(28)
+#define ASM_NOT_REFERENCE spaacis_asm_error_errmod.message_code(29)
+#define ASM_PROPERTY_NOT_ATTRIB spaacis_asm_error_errmod.message_code(30)
+#define ASM_ADDING_ASSEMBLY_WITHOUT_MODEL spaacis_asm_error_errmod.message_code(31)
+#define ASM_ADDING_MREF_WITHOUT_ASSEMBLY spaacis_asm_error_errmod.message_code(32)
+#define ASM_CIRCULAR_MREF spaacis_asm_error_errmod.message_code(33)
+#define ASM_CIRCULAR_MREF_LOST spaacis_asm_error_errmod.message_code(34)
+#define MODEL_WITHOUT_MGR spaacis_asm_error_errmod.message_code(35)
+#define ASM_NO_PART spaacis_asm_error_errmod.message_code(36)
+#define ASM_UNABLE_TO_RESTORE spaacis_asm_error_errmod.message_code(37)
+#define ASM_ONE_MODEL_PER_ATOMIC_SAT spaacis_asm_error_errmod.message_code(38)
+#define ASM_MULTIPLE_ATOMIC_FILES spaacis_asm_error_errmod.message_code(39)
+#define ASM_SAVING_ASSEMBLY_TO_SAT spaacis_asm_error_errmod.message_code(40)
+#define ASM_SAVING_ZERO_MODELS spaacis_asm_error_errmod.message_code(41)
+#define ASAT_READ_OF_SAT_NOT_ALLOWED spaacis_asm_error_errmod.message_code(42)
+#define ASAT_UNRECOGNIZED_MODE spaacis_asm_error_errmod.message_code(43)
+#define ASAT_UNEXPECTED_ERROR spaacis_asm_error_errmod.message_code(44)
+#define ASM_NOT_IMPLEMENTED spaacis_asm_error_errmod.message_code(45)
+#define ASM_UNIX_NOT_IMPLEMENTED spaacis_asm_error_errmod.message_code(46)
+#define ATOMIC_SAVE_REQUIRES_MODEL_NAME spaacis_asm_error_errmod.message_code(47)
+#define ASM_COLLECTION_ADD_FROM_INCOMPATIBLE_MODEL spaacis_asm_error_errmod.message_code(48)
+#define ASM_COMPONENT_HANDLE_EMPTY_PATH spaacis_asm_error_errmod.message_code(49)
+#define ASM_BAD_RECURSION spaacis_asm_error_errmod.message_code(50)
+#define ASM_ENT_MGR_NO_HISTORY spaacis_asm_error_errmod.message_code(51)
+#define ASM_ENT_MGR_NO_MODEL spaacis_asm_error_errmod.message_code(52)
+
+#endif /* SPAACIS_ASM_ERROR_ERRMOD_INCLUDED */

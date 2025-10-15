@@ -1,0 +1,25 @@
+// Error code definitions for module "spa3dpmacis/src"
+
+#ifndef SPA3DPMACIS_SPA3DPMACIS_ERRMOD_INCLUDED
+#define SPA3DPMACIS_SPA3DPMACIS_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SPA3dPmAcis
+extern EXPORT_SYMBOL message_module spa3dpmacis_spa3dpmacis_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spa3dpmacis_spa3dpmacis_errmod;
+
+#endif
+#define SPA3DPM_NULL_ENTITY spa3dpmacis_spa3dpmacis_errmod.message_code(0)
+#define SPA3DPM_GENERIC_FAILURE spa3dpmacis_spa3dpmacis_errmod.message_code(1)
+#define SPA3DPM_INDEX_OUT_OF_BOUNDS spa3dpmacis_spa3dpmacis_errmod.message_code(2)
+#define SPA3DPM_NOT_LICENSED spa3dpmacis_spa3dpmacis_errmod.message_code(3)
+#define SPA3DPM_INVALID_PARAMETER spa3dpmacis_spa3dpmacis_errmod.message_code(4)
+#define SPA3DPM_FILE_NOT_FOUND spa3dpmacis_spa3dpmacis_errmod.message_code(5)
+#define SPA3DPM_USER_INTERRUPT spa3dpmacis_spa3dpmacis_errmod.message_code(6)
+
+#endif /* SPA3DPMACIS_SPA3DPMACIS_ERRMOD_INCLUDED */

@@ -1,0 +1,20 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_UTILS_ERRMOD_INCLUDED
+#define SPAACIS_UTILS_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_utils_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_utils_errmod;
+
+#endif
+#define WIRE_SELF_INTERSECTS spaacis_utils_errmod.message_code(0)
+#define INTR_INTERNAL_ERROR spaacis_utils_errmod.message_code(1)
+
+#endif /* SPAACIS_UTILS_ERRMOD_INCLUDED */

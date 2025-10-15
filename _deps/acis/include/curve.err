@@ -1,0 +1,37 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_CURVE_ERRMOD_INCLUDED
+#define SPAACIS_CURVE_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_curve_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_curve_errmod;
+
+#endif
+#define SUBSETTED_CURVE spaacis_curve_errmod.message_code(0)
+#define MIDDLE_OF_UNDEFC spaacis_curve_errmod.message_code(1)
+#define MULT_USE spaacis_curve_errmod.message_code(2)
+#define UNIMPLEMENTED_CURVE spaacis_curve_errmod.message_code(3)
+#define EVALUATE_FAILED spaacis_curve_errmod.message_code(4)
+#define MAKE_APPROX_CURVE_FAILED spaacis_curve_errmod.message_code(5)
+#define BAD_TANGENT spaacis_curve_errmod.message_code(6)
+#define NOT_ALL_DERIVATIVES_FOUND spaacis_curve_errmod.message_code(7)
+#define STR_ZERO_DIRECTION spaacis_curve_errmod.message_code(8)
+#define MAKE_BS3_FROM_SUMMARY_FAILED spaacis_curve_errmod.message_code(9)
+#define INCONSISTENT_SAVE_APPROX_LEVEL spaacis_curve_errmod.message_code(10)
+#define GLOBAL_CACHE_MANAGER_ERROR spaacis_curve_errmod.message_code(11)
+#define NEAR_ZERO_PARAM_PERIOD spaacis_curve_errmod.message_code(12)
+#define INVALID_DISC_CALC_ORDER spaacis_curve_errmod.message_code(13)
+#define CURVE_BAD_PARAM_OR_CURATURE_MAX_FAILURE spaacis_curve_errmod.message_code(14)
+#define EXACT_CUR_NO_BS3 spaacis_curve_errmod.message_code(15)
+#define CURVE_ZERO_DERIVATIVE spaacis_curve_errmod.message_code(16)
+#define NOT_EXACT_CURVE_LENGTH spaacis_curve_errmod.message_code(17)
+#define NOT_EXACT_LENGTH_PARAM spaacis_curve_errmod.message_code(18)
+
+#endif /* SPAACIS_CURVE_ERRMOD_INCLUDED */

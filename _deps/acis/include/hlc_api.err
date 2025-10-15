@@ -1,0 +1,33 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_HLC_API_ERRMOD_INCLUDED
+#define SPAACIS_HLC_API_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_hlc_api_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_hlc_api_errmod;
+
+#endif
+#define INCR_NO_COMPLEXITIES spaacis_hlc_api_errmod.message_code(0)
+#define INCR_UNKNOWN_COMPLEXITY spaacis_hlc_api_errmod.message_code(1)
+#define INCR_FAILED spaacis_hlc_api_errmod.message_code(2)
+#define INCR_NO_PROGRESS spaacis_hlc_api_errmod.message_code(3)
+#define INCR_INVALID_OPTIONS spaacis_hlc_api_errmod.message_code(4)
+#define WRAP_MULTI_SHELL spaacis_hlc_api_errmod.message_code(5)
+#define FACE_SAMPLING_ERROR spaacis_hlc_api_errmod.message_code(6)
+#define FACE_SAMPLING_EDGE_OFFSET spaacis_hlc_api_errmod.message_code(7)
+#define FACE_SAMPLING_EDGE_OFFSET_BOOLEAN spaacis_hlc_api_errmod.message_code(8)
+#define FACE_SAMPLING_ISOLINE spaacis_hlc_api_errmod.message_code(9)
+#define FACE_SAMPLING_FACETER spaacis_hlc_api_errmod.message_code(10)
+#define FACE_SAMPLING_WARNING spaacis_hlc_api_errmod.message_code(11)
+#define UNFOLD_WRONG_INPUT spaacis_hlc_api_errmod.message_code(12)
+#define UNFOLD_WRONG_INPUT_EDGE spaacis_hlc_api_errmod.message_code(13)
+#define UNFOLD_WRONG_INPUT_MULTIPLE_SHELL spaacis_hlc_api_errmod.message_code(14)
+
+#endif /* SPAACIS_HLC_API_ERRMOD_INCLUDED */

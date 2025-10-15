@@ -1,0 +1,25 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_API_BOOL_ERRMOD_INCLUDED
+#define SPAACIS_API_BOOL_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_api_bool_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_api_bool_errmod;
+
+#endif
+#define INVALID_TYPE_REFRESH_LIST spaacis_api_bool_errmod.message_code(0)
+#define INVALID_ENTITY_REFRESH_LIST spaacis_api_bool_errmod.message_code(1)
+#define INVALID_GLUE_OPTS spaacis_api_bool_errmod.message_code(2)
+#define INVALID_BOOL_TYPE spaacis_api_bool_errmod.message_code(3)
+#define SCRIBE_EDGE_HAS_COEDGE spaacis_api_bool_errmod.message_code(4)
+#define SCRIBE_EDGE_START_VERTEX_CONNECTED spaacis_api_bool_errmod.message_code(5)
+#define SCRIBE_EDGE_END_VERTEX_CONNECTED spaacis_api_bool_errmod.message_code(6)
+
+#endif /* SPAACIS_API_BOOL_ERRMOD_INCLUDED */

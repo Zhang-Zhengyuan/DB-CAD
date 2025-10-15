@@ -1,0 +1,15 @@
+// Error code definitions for module "ha_scm/src"
+
+#ifndef HA_SCM_HOOPS_ERRMOD_INCLUDED
+#define HA_SCM_HOOPS_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module ha_scm_hoops_errmod;
+
+#define HOOPS_ERROR ha_scm_hoops_errmod.message_code(0)
+#define ASM_PICK_INTERNAL_ERROR ha_scm_hoops_errmod.message_code(1)
+#define PARALLEL_UP_VECTOR ha_scm_hoops_errmod.message_code(2)
+
+#endif /* HA_SCM_HOOPS_ERRMOD_INCLUDED */

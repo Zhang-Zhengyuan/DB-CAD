@@ -1,0 +1,27 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_GEOMHUSK_CSTR_ERRMOD_INCLUDED
+#define SPAACIS_GEOMHUSK_CSTR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_geomhusk_cstr_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_geomhusk_cstr_errmod;
+
+#endif
+#define MK_WIRE_BODY_FAIL spaacis_geomhusk_cstr_errmod.message_code(0)
+#define MK_WIRE_BODY_NO_LOOP spaacis_geomhusk_cstr_errmod.message_code(1)
+#define CURVE_NOT_SPLIT spaacis_geomhusk_cstr_errmod.message_code(2)
+#define SPLINE_EDGE_NOT_CREATED spaacis_geomhusk_cstr_errmod.message_code(3)
+#define TOL_SAME_SCALE_AS_MODEL spaacis_geomhusk_cstr_errmod.message_code(4)
+#define INCORRECT_OFFSETS spaacis_geomhusk_cstr_errmod.message_code(5)
+#define NO_OFF_INT_CUR_CREATED spaacis_geomhusk_cstr_errmod.message_code(6)
+#define PLANE_FIT_INSUFFICIENT_POINTS spaacis_geomhusk_cstr_errmod.message_code(7)
+#define CREATE_DEGENERATE_LINE spaacis_geomhusk_cstr_errmod.message_code(8)
+
+#endif /* SPAACIS_GEOMHUSK_CSTR_ERRMOD_INCLUDED */

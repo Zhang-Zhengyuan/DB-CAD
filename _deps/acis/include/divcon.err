@@ -1,0 +1,26 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_DIVCON_ERRMOD_INCLUDED
+#define SPAACIS_DIVCON_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_divcon_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_divcon_errmod;
+
+#endif
+#define CLOSED_LOOP spaacis_divcon_errmod.message_code(0)
+#define CORNER_TANGENCY spaacis_divcon_errmod.message_code(1)
+#define DISASTER spaacis_divcon_errmod.message_code(2)
+#define INFINITE_RECURSION spaacis_divcon_errmod.message_code(3)
+#define NO_END_PT spaacis_divcon_errmod.message_code(4)
+#define NO_START_PT spaacis_divcon_errmod.message_code(5)
+#define THREE_NEIGHBOURHOODS spaacis_divcon_errmod.message_code(6)
+#define UNMATCHED_POINT spaacis_divcon_errmod.message_code(7)
+
+#endif /* SPAACIS_DIVCON_ERRMOD_INCLUDED */

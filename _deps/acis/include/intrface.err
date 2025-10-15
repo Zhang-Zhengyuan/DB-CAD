@@ -1,0 +1,68 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_INTRFACE_ERRMOD_INCLUDED
+#define SPAACIS_INTRFACE_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_intrface_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_intrface_errmod;
+
+#endif
+#define RH_CE_NONE spaacis_intrface_errmod.message_code(0)
+#define RH_CE_MISC spaacis_intrface_errmod.message_code(1)
+#define RH_CE_SYSTEM spaacis_intrface_errmod.message_code(2)
+#define RH_CE_READ_FILE spaacis_intrface_errmod.message_code(3)
+#define RH_CE_WRITE_FILE spaacis_intrface_errmod.message_code(4)
+#define RH_CE_INVALID_FILE spaacis_intrface_errmod.message_code(5)
+#define RH_CE_MATHS spaacis_intrface_errmod.message_code(6)
+#define RH_CE_MEMORY spaacis_intrface_errmod.message_code(7)
+#define RH_CE_SHADOW_MEMORY spaacis_intrface_errmod.message_code(8)
+#define RH_CE_INVALID_CALL spaacis_intrface_errmod.message_code(9)
+#define RH_CE_INTERNAL spaacis_intrface_errmod.message_code(10)
+#define RH_CE_SHADOWS_START spaacis_intrface_errmod.message_code(11)
+#define RH_CE_SHADOWS_END spaacis_intrface_errmod.message_code(12)
+#define RH_CE_ENVIRONMENT_START spaacis_intrface_errmod.message_code(13)
+#define RH_CE_ENVIRONMENT_END spaacis_intrface_errmod.message_code(14)
+#define RH_CE_ENVIRONMENT_MEMORY spaacis_intrface_errmod.message_code(15)
+#define RH_CE_TEXTURE_START spaacis_intrface_errmod.message_code(16)
+#define RH_CE_TEXTURE_END spaacis_intrface_errmod.message_code(17)
+#define RH_CE_TEXTURE_MEMORY spaacis_intrface_errmod.message_code(18)
+#define RH_CE_INVALID_SHADER spaacis_intrface_errmod.message_code(19)
+#define RH_IE_UNDEF_ERR spaacis_intrface_errmod.message_code(20)
+#define RH_IE_ARG_LMTEX spaacis_intrface_errmod.message_code(21)
+#define RH_IE_ARG_UNKNOWN spaacis_intrface_errmod.message_code(22)
+#define RH_IE_NULL_HANDLE spaacis_intrface_errmod.message_code(23)
+#define RH_IE_BAD_HANDLE spaacis_intrface_errmod.message_code(24)
+#define RH_IE_CRT_FAIL spaacis_intrface_errmod.message_code(25)
+#define RH_IE_NOT_INIT spaacis_intrface_errmod.message_code(26)
+#define RH_IE_CPY_NULL spaacis_intrface_errmod.message_code(27)
+#define RH_IE_BCLS_CPY spaacis_intrface_errmod.message_code(28)
+#define RH_IE_BCLS_IRES spaacis_intrface_errmod.message_code(29)
+#define RH_IE_BCLS_ISAV spaacis_intrface_errmod.message_code(30)
+#define RH_IE_RST_ERR spaacis_intrface_errmod.message_code(31)
+#define RH_IE_SAV_ERR spaacis_intrface_errmod.message_code(32)
+#define RH_IE_UNKN_RMODE spaacis_intrface_errmod.message_code(33)
+#define RH_IE_UNKN_LIMODE spaacis_intrface_errmod.message_code(34)
+#define RH_IE_UNKN_OMODE spaacis_intrface_errmod.message_code(35)
+#define RH_IE_UNKN_CVAR spaacis_intrface_errmod.message_code(36)
+#define RH_IE_UNKN_LITYPE spaacis_intrface_errmod.message_code(37)
+#define RH_IE_UNKN_FOTYPE spaacis_intrface_errmod.message_code(38)
+#define RH_IE_SHEAR_TRAN spaacis_intrface_errmod.message_code(39)
+#define RH_IE_OP_INTERRUPT spaacis_intrface_errmod.message_code(40)
+#define RH_IE_ENTITY_MISMATCH spaacis_intrface_errmod.message_code(41)
+#define RH_IE_UNKN_SHADER spaacis_intrface_errmod.message_code(42)
+#define RH_IE_UNKN_ARG spaacis_intrface_errmod.message_code(43)
+#define RH_IE_ARG_MISMATCH spaacis_intrface_errmod.message_code(44)
+#define RH_IE_EMAP_SAVRES spaacis_intrface_errmod.message_code(45)
+#define RH_UE_BAD_COLOR_VAL spaacis_intrface_errmod.message_code(46)
+#define RH_UE_BAD_REFLECT_VAL spaacis_intrface_errmod.message_code(47)
+#define RH_UE_BAD_TRANSP_VAL spaacis_intrface_errmod.message_code(48)
+#define RH_NO_COLOR_ASSIGNED spaacis_intrface_errmod.message_code(49)
+
+#endif /* SPAACIS_INTRFACE_ERRMOD_INCLUDED */

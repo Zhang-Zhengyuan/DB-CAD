@@ -1,0 +1,24 @@
+// Error code definitions for module "abl_scm/src"
+
+#ifndef ABL_SCM_ABLSCM_ERRMOD_INCLUDED
+#define ABL_SCM_ABLSCM_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module abl_scm_ablscm_errmod;
+
+#define WRONG_LENGTH abl_scm_ablscm_errmod.message_code(0)
+#define WRONG_INPUT abl_scm_ablscm_errmod.message_code(1)
+#define NOT_SOLID_OWNER abl_scm_ablscm_errmod.message_code(2)
+#define THUMBWTS_NOT_VALID abl_scm_ablscm_errmod.message_code(3)
+#define INCORRECT_RND_CHAMFER abl_scm_ablscm_errmod.message_code(4)
+#define INVALID_STRING abl_scm_ablscm_errmod.message_code(5)
+#define NO_ENTS_FOUND abl_scm_ablscm_errmod.message_code(6)
+#define NO_COEDGE abl_scm_ablscm_errmod.message_code(7)
+#define NOT_SAME_OWNER abl_scm_ablscm_errmod.message_code(8)
+#define CONST_WITH_THUMBWTS abl_scm_ablscm_errmod.message_code(9)
+#define DEF_EDGE_NOT_SELECTED abl_scm_ablscm_errmod.message_code(10)
+#define INVALID_RADIUS abl_scm_ablscm_errmod.message_code(11)
+
+#endif /* ABL_SCM_ABLSCM_ERRMOD_INCLUDED */

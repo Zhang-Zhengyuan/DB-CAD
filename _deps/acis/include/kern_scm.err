@@ -1,0 +1,15 @@
+// Error code definitions for module "kern_scm/src"
+
+#ifndef KERN_SCM_KERN_SCM_ERRMOD_INCLUDED
+#define KERN_SCM_KERN_SCM_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module kern_scm_kern_scm_errmod;
+
+#define NO_ANNOTATION kern_scm_kern_scm_errmod.message_code(0)
+#define BAD_ANNOTATION_FOUND kern_scm_kern_scm_errmod.message_code(1)
+#define BAD_VERSION_TAG kern_scm_kern_scm_errmod.message_code(2)
+
+#endif /* KERN_SCM_KERN_SCM_ERRMOD_INCLUDED */

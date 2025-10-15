@@ -1,0 +1,23 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_GEOMETRY_ERRMOD_INCLUDED
+#define SPAACIS_GEOMETRY_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_geometry_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_geometry_errmod;
+
+#endif
+#define NOT_LOOP_COEDGE spaacis_geometry_errmod.message_code(0)
+#define NULL_FACE_DERIV spaacis_geometry_errmod.message_code(1)
+#define NULL_SURFACE_DERIV spaacis_geometry_errmod.message_code(2)
+#define NULL_SURFACE_GEOM spaacis_geometry_errmod.message_code(3)
+#define NULL_COEDGE_RANGE spaacis_geometry_errmod.message_code(4)
+
+#endif /* SPAACIS_GEOMETRY_ERRMOD_INCLUDED */

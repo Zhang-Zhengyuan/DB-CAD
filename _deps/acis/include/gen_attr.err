@@ -1,0 +1,20 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_GEN_ATTR_ERRMOD_INCLUDED
+#define SPAACIS_GEN_ATTR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_gen_attr_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_gen_attr_errmod;
+
+#endif
+#define GA_COPY_SCAN_UNSUPPORTED spaacis_gen_attr_errmod.message_code(0)
+#define GA_INPUT_NULL_NAME spaacis_gen_attr_errmod.message_code(1)
+
+#endif /* SPAACIS_GEN_ATTR_ERRMOD_INCLUDED */

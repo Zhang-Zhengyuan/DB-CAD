@@ -1,0 +1,21 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_API_CSTR_ERRMOD_INCLUDED
+#define SPAACIS_API_CSTR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_api_cstr_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_api_cstr_errmod;
+
+#endif
+#define INVALID_POINTS_SEGMENT_HANDLE spaacis_api_cstr_errmod.message_code(0)
+#define INCORRECT_POINTS_SEGMENT_HANDLE_TYPE spaacis_api_cstr_errmod.message_code(1)
+#define SEGMENTATION_ANGLE_TOO_SMALL spaacis_api_cstr_errmod.message_code(2)
+
+#endif /* SPAACIS_API_CSTR_ERRMOD_INCLUDED */

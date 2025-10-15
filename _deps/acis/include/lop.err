@@ -1,0 +1,90 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_LOP_ERRMOD_INCLUDED
+#define SPAACIS_LOP_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_lop_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_lop_errmod;
+
+#endif
+#define LOP_TWK_NO_FACE spaacis_lop_errmod.message_code(0)
+#define LOP_TWK_BAD_FACE spaacis_lop_errmod.message_code(1)
+#define LOP_TWK_BAD_SURFACE spaacis_lop_errmod.message_code(2)
+#define LOP_TWK_NON_MANIFOLD spaacis_lop_errmod.message_code(3)
+#define LOP_TWK_FREE_EDGE spaacis_lop_errmod.message_code(4)
+#define LOP_TWK_MULTIPLE_EDGE spaacis_lop_errmod.message_code(5)
+#define LOP_TWK_MULTIPLE_VERT spaacis_lop_errmod.message_code(6)
+#define LOP_TWK_NO_EDGE spaacis_lop_errmod.message_code(7)
+#define LOP_TWK_NO_VERT spaacis_lop_errmod.message_code(8)
+#define LOP_TWK_ZERO_LEN_EDGE spaacis_lop_errmod.message_code(9)
+#define LOP_TWK_INTERNAL spaacis_lop_errmod.message_code(10)
+#define LOP_TWK_BAD_OP_ON_ATT spaacis_lop_errmod.message_code(11)
+#define LOP_TWK_TOPOL_CHANGE spaacis_lop_errmod.message_code(12)
+#define LOP_TWK_NO_BLEND_EDIT_SF spaacis_lop_errmod.message_code(13)
+#define LOP_TWK_STACK_LIMIT spaacis_lop_errmod.message_code(14)
+#define LOP_TWK_COMPUTE_FAILED spaacis_lop_errmod.message_code(15)
+#define LOP_CMPLX_HUGE_TOL spaacis_lop_errmod.message_code(16)
+#define LOP_OFF_BAD_OFFSET spaacis_lop_errmod.message_code(17)
+#define LOP_OFF_NO_SURF spaacis_lop_errmod.message_code(18)
+#define LOP_OFF_BAD_CURVATURE spaacis_lop_errmod.message_code(19)
+#define LOP_OFF_BAD_MODEL_EXTENTS spaacis_lop_errmod.message_code(20)
+#define LOP_OFF_NO_APPROX_CUR spaacis_lop_errmod.message_code(21)
+#define LOP_HOL_MULTI_SHELL spaacis_lop_errmod.message_code(22)
+#define LOP_HOL_ALL_OPEN spaacis_lop_errmod.message_code(23)
+#define LOP_HOL_BAD_VBL_OFFSET spaacis_lop_errmod.message_code(24)
+#define LOP_TAP_BAD_NORMAL spaacis_lop_errmod.message_code(25)
+#define LOP_TAP_BAD_ANGLE spaacis_lop_errmod.message_code(26)
+#define LOP_TAP_NO_SURF spaacis_lop_errmod.message_code(27)
+#define LOP_TAP_NO_ADJ_FACE spaacis_lop_errmod.message_code(28)
+#define LOP_TAP_BAD_PICK spaacis_lop_errmod.message_code(29)
+#define LOP_TAP_BAD_SURF spaacis_lop_errmod.message_code(30)
+#define LOP_TAP_TAN_EDGE spaacis_lop_errmod.message_code(31)
+#define LOP_TAP_NOR_FACE spaacis_lop_errmod.message_code(32)
+#define LOP_TAP_DUP_FACE spaacis_lop_errmod.message_code(33)
+#define LOP_TAP_BAD_EDGE spaacis_lop_errmod.message_code(34)
+#define LOP_TAP_SURFACE_CROPPED spaacis_lop_errmod.message_code(35)
+#define LOP_MOVE_BAD_TRANSFORM spaacis_lop_errmod.message_code(36)
+#define LOP_NOT_IMPLEMENTED spaacis_lop_errmod.message_code(37)
+#define LOP_BAD_BOX spaacis_lop_errmod.message_code(38)
+#define LOP_BAD_BODY_TRANSFORM spaacis_lop_errmod.message_code(39)
+#define LOP_TWK_NO_LOOP spaacis_lop_errmod.message_code(40)
+#define LOP_INVALID_PLANE_TOL_OPTION spaacis_lop_errmod.message_code(41)
+#define LOP_INVALID_API spaacis_lop_errmod.message_code(42)
+#define LOP_SWP_BAD_RAIL_OR_PATH spaacis_lop_errmod.message_code(43)
+#define LOP_LOOP_TYPE spaacis_lop_errmod.message_code(44)
+#define LOP_SHEET_THICKEN_NON_MANIFOLD_VERTEX spaacis_lop_errmod.message_code(45)
+#define LOP_TWK_NO_BODY spaacis_lop_errmod.message_code(46)
+#define LOP_SHEET_EXTEND_EDGE_NO_SOLUTION spaacis_lop_errmod.message_code(47)
+#define LOP_SHEET_EXTEND_COLLAPSED spaacis_lop_errmod.message_code(48)
+#define LOP_TWK_NO_EDGE_SUPPLIED spaacis_lop_errmod.message_code(49)
+#define LOP_TWK_BAD_EDGE_SUPPLIED spaacis_lop_errmod.message_code(50)
+#define LOP_TWK_BAD_BODY_SUPPLIED spaacis_lop_errmod.message_code(51)
+#define LOP_THICK_NO_RIM_FACE spaacis_lop_errmod.message_code(52)
+#define LOP_THICK_NO_VENT_FACE spaacis_lop_errmod.message_code(53)
+#define LOP_TWK_BAD_VERTEX spaacis_lop_errmod.message_code(54)
+#define LOP_NO_LUMP_LEFT spaacis_lop_errmod.message_code(55)
+#define LOP_BAD_EDM_OFFSET spaacis_lop_errmod.message_code(56)
+#define LOP_BAD_EDM_OFFSET_MANUF spaacis_lop_errmod.message_code(57)
+#define LOP_EDM_OUTWARD_OFFSET spaacis_lop_errmod.message_code(58)
+#define LOP_EDM_INVALID_MOTION spaacis_lop_errmod.message_code(59)
+#define LOP_EDM_REPRAM_TANGENT_EDGE spaacis_lop_errmod.message_code(60)
+#define LOP_EDM_EDGE_NOT_MANUF spaacis_lop_errmod.message_code(61)
+#define LOP_OFF_NO_TANGENT_EDGE spaacis_lop_errmod.message_code(62)
+#define LOP_REPLACE_FACE_TOO_DIFFERENT spaacis_lop_errmod.message_code(63)
+#define LOP_DBL_SIDED_FACE spaacis_lop_errmod.message_code(64)
+#define LOP_BODY_NON_MANIFOLD spaacis_lop_errmod.message_code(65)
+#define LOP_SHEET_EXTEND_NO_SOLUTION spaacis_lop_errmod.message_code(66)
+#define LOP_SHEET_EXTEND_PERIODIC_SURF_CLOSES spaacis_lop_errmod.message_code(67)
+#define LOP_SHEET_EXTEND_HIGH_CRV_EDGE spaacis_lop_errmod.message_code(68)
+#define LOP_SHEET_EXTEND_BAD_EDGE_INPUT spaacis_lop_errmod.message_code(69)
+#define LOP_SHEET_EXTEND_ZERO_EXTN spaacis_lop_errmod.message_code(70)
+#define LOP_OP_BAD_INPUT_PAR spaacis_lop_errmod.message_code(71)
+
+#endif /* SPAACIS_LOP_ERRMOD_INCLUDED */

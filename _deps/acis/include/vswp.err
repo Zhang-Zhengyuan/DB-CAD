@@ -1,0 +1,24 @@
+// Error code definitions for module "swp_scm_dev/src"
+
+#ifndef SWP_SCM_DEV_VSWP_ERRMOD_INCLUDED
+#define SWP_SCM_DEV_VSWP_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module swp_scm_dev_vswp_errmod;
+
+#define VSWP_UNSUPPORTED_AXISYM swp_scm_dev_vswp_errmod.message_code(0)
+#define VSWP_CHAR_COMPLEX_TOPOLOGY swp_scm_dev_vswp_errmod.message_code(1)
+#define VSWP_CHAR_MISSING_EDGE swp_scm_dev_vswp_errmod.message_code(2)
+#define VSWP_UNEXPECTED_IMPRINT swp_scm_dev_vswp_errmod.message_code(3)
+#define VSWP_FAILED_SPLIT swp_scm_dev_vswp_errmod.message_code(4)
+#define VSWP_SEDE_DIVERGES swp_scm_dev_vswp_errmod.message_code(5)
+#define VSWP_SEDE_VAR_DIVERGES swp_scm_dev_vswp_errmod.message_code(6)
+#define VSWP_SWEEP_BNDRY_DIVERGES swp_scm_dev_vswp_errmod.message_code(7)
+#define VSWP_FAILED_BNDRY_RELAX swp_scm_dev_vswp_errmod.message_code(8)
+#define VSWP_FAILED_SEDE_RELAX swp_scm_dev_vswp_errmod.message_code(9)
+#define VSWP_STITCH_FAILURE swp_scm_dev_vswp_errmod.message_code(10)
+#define VSWP_HIGH_TOL swp_scm_dev_vswp_errmod.message_code(11)
+
+#endif /* SWP_SCM_DEV_VSWP_ERRMOD_INCLUDED */

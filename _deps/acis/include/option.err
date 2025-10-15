@@ -1,0 +1,19 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_OPTION_ERRMOD_INCLUDED
+#define SPAACIS_OPTION_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_option_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_option_errmod;
+
+#endif
+#define DUPLICATE_OPTION_NAME spaacis_option_errmod.message_code(0)
+
+#endif /* SPAACIS_OPTION_ERRMOD_INCLUDED */

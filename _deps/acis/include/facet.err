@@ -1,0 +1,86 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_FACET_ERRMOD_INCLUDED
+#define SPAACIS_FACET_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_facet_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_facet_errmod;
+
+#endif
+#define MAX_GRID_LINES_EXCEEDED_ON_EDGE spaacis_facet_errmod.message_code(0)
+#define EDGE_HAS_DISCONTINUITY spaacis_facet_errmod.message_code(1)
+#define AUTO_CLIP_UNSUPPORTED spaacis_facet_errmod.message_code(2)
+#define FACET_FUNCTION_NOT_IMPLEMENTED spaacis_facet_errmod.message_code(3)
+#define NOT_FACETED spaacis_facet_errmod.message_code(4)
+#define COINCIDENT_UV spaacis_facet_errmod.message_code(5)
+#define REDO_NARROW_REGIONS spaacis_facet_errmod.message_code(6)
+#define REDO_NO_APPROX spaacis_facet_errmod.message_code(7)
+#define FCT_ERRORS spaacis_facet_errmod.message_code(8)
+#define LINKED_MESH_ERRORS spaacis_facet_errmod.message_code(9)
+#define FCT_QUAD_TO_TRI_PROBLEMS spaacis_facet_errmod.message_code(10)
+#define NO_TOLERANCE_SPECIFIED spaacis_facet_errmod.message_code(11)
+#define EDGE_WITH_NO_GEOMETRY spaacis_facet_errmod.message_code(12)
+#define MISMARKED_SINGULARITY spaacis_facet_errmod.message_code(13)
+#define CLOCKWISE_FACET spaacis_facet_errmod.message_code(14)
+#define FACET_NORMAL_IS_BAD spaacis_facet_errmod.message_code(15)
+#define FACET_AREA_IS_BAD spaacis_facet_errmod.message_code(16)
+#define UNKNOWN_MM_WHILE_JOURNALING_DEF_TO_LINKED spaacis_facet_errmod.message_code(17)
+#define SPLIT_SMALL_FACET spaacis_facet_errmod.message_code(18)
+#define SPLIT_AT_BAD_POSITION spaacis_facet_errmod.message_code(19)
+#define SPLIT_TILTED_FACET spaacis_facet_errmod.message_code(20)
+#define DEACTIVATED_ADAPTIVE_FACETING spaacis_facet_errmod.message_code(21)
+#define SKIPPED_TILT_CHECK spaacis_facet_errmod.message_code(22)
+#define FAILED_TO_REMESH_FACE spaacis_facet_errmod.message_code(23)
+#define FAILED_TO_MESH_FACE spaacis_facet_errmod.message_code(24)
+#define FAILED_TO_FACET_EDGE spaacis_facet_errmod.message_code(25)
+#define FAILED_TO_DETECT_FACE_FEATURES spaacis_facet_errmod.message_code(26)
+#define QUAD_TOO_SMALL spaacis_facet_errmod.message_code(27)
+#define SURFACE_TOL_TOO_SMALL_RESET spaacis_facet_errmod.message_code(28)
+#define NORMAL_TOL_TOO_SMALL_RESET spaacis_facet_errmod.message_code(29)
+#define NORMAL_TOL_ASPECT_RATIO_TOO_SMALL_RESET spaacis_facet_errmod.message_code(30)
+#define COULD_NOT_PUSH_GRIDLINE_TO_EDGE spaacis_facet_errmod.message_code(31)
+#define CANNOT_MEET_SURFTOL_TENTITY spaacis_facet_errmod.message_code(32)
+#define STOP_REFINING_IRREG_SURFACE spaacis_facet_errmod.message_code(33)
+#define CHECK_FOR_NARROW_REGIONS_FAILED spaacis_facet_errmod.message_code(34)
+#define COULD_NOT_ALIGN_CLOSE_POINTS spaacis_facet_errmod.message_code(35)
+#define BAD_PCURVE_ON_COEDGE spaacis_facet_errmod.message_code(36)
+#define SURFACE_IRREGULAR_NO_FIXUP spaacis_facet_errmod.message_code(37)
+#define FCT_BAD_LOOP_DESCRITIZATION spaacis_facet_errmod.message_code(38)
+#define CATASTROPHIC_PCURVE spaacis_facet_errmod.message_code(39)
+#define ALIGN_FAILED spaacis_facet_errmod.message_code(40)
+#define INCONSISTENT_ALIGN_OPTS spaacis_facet_errmod.message_code(41)
+#define INCONSISTENT_ALIGN_OPTS2 spaacis_facet_errmod.message_code(42)
+#define MUST_BE_TOP_LEVEL spaacis_facet_errmod.message_code(43)
+#define FACET_BAD_MODEL spaacis_facet_errmod.message_code(44)
+#define EDGES_INTERSECT spaacis_facet_errmod.message_code(45)
+#define REFACET_FACE spaacis_facet_errmod.message_code(46)
+#define FCT_MISSING_AF_POINT_LIST spaacis_facet_errmod.message_code(47)
+#define FACE_AREA_ZERO spaacis_facet_errmod.message_code(48)
+#define FCT_NO_ENTITIES_SPECIFIED spaacis_facet_errmod.message_code(49)
+#define FCT_NOT_3_SIDED spaacis_facet_errmod.message_code(50)
+#define FCT_NEED_COEDGE_INDICES spaacis_facet_errmod.message_code(51)
+#define FCT_SINGULARITY_WITH_NO_VERTEX_OR_EDGE spaacis_facet_errmod.message_code(52)
+#define FCT_SLIVERS spaacis_facet_errmod.message_code(53)
+#define FCT_MESH_MANAGER_PROBLEM spaacis_facet_errmod.message_code(54)
+#define FCT_EMBEDDED_EDGE spaacis_facet_errmod.message_code(55)
+#define FCT_SINGULARITY_PROBLEM spaacis_facet_errmod.message_code(56)
+#define FCT_CORRUPTED_INTERNAL_DATA spaacis_facet_errmod.message_code(57)
+#define FCT_TOO_MANY_MATES spaacis_facet_errmod.message_code(58)
+#define FACET_CHECKER_CRASHED spaacis_facet_errmod.message_code(59)
+#define FCT_AF_POINT_VECTOR_IS_WRONG_SIZE spaacis_facet_errmod.message_code(60)
+#define FCT_DUP_SEAM_NODE_ERROR spaacis_facet_errmod.message_code(61)
+#define FCT_EDGE_MIN_MAX spaacis_facet_errmod.message_code(62)
+#define FCT_EDGE_SPLIT spaacis_facet_errmod.message_code(63)
+#define FCT_SEAM_INSERT spaacis_facet_errmod.message_code(64)
+#define FCT_SEAM_CROSSING spaacis_facet_errmod.message_code(65)
+#define FCT_SEAM_CROSSING_COUNT spaacis_facet_errmod.message_code(66)
+#define FCT_SEAM_CROSSING_PAIR spaacis_facet_errmod.message_code(67)
+
+#endif /* SPAACIS_FACET_ERRMOD_INCLUDED */

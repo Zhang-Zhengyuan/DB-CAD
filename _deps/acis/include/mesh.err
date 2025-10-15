@@ -1,0 +1,28 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_MESH_ERRMOD_INCLUDED
+#define SPAACIS_MESH_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_mesh_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_mesh_errmod;
+
+#endif
+#define CANT_FIND_NEW_TRI spaacis_mesh_errmod.message_code(0)
+#define CURVE_REMESH_NOT_IMPL spaacis_mesh_errmod.message_code(1)
+#define UNKNOWN_ELEMENT spaacis_mesh_errmod.message_code(2)
+#define FREE_NODE_OFF_SIDE spaacis_mesh_errmod.message_code(3)
+#define MISSING_SURF_ATT spaacis_mesh_errmod.message_code(4)
+#define OFF_SIDE_AND_NODE spaacis_mesh_errmod.message_code(5)
+#define CANT_BUILD_ELEM_LOOP spaacis_mesh_errmod.message_code(6)
+#define LEFTOVER_STUFF_IN_REMESH spaacis_mesh_errmod.message_code(7)
+#define START_END_NULL spaacis_mesh_errmod.message_code(8)
+#define CANT_SUBDIV_SPA_MESH_ELEM spaacis_mesh_errmod.message_code(9)
+
+#endif /* SPAACIS_MESH_ERRMOD_INCLUDED */

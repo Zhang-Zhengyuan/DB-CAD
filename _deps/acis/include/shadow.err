@@ -1,0 +1,20 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SHADOW_ERRMOD_INCLUDED
+#define SPAACIS_SHADOW_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_shadow_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_shadow_errmod;
+
+#endif
+#define ELEMENTARY_CIRCUIT_ITER_LIMIT spaacis_shadow_errmod.message_code(0)
+#define SHADOW_PROJECTION_TOPO spaacis_shadow_errmod.message_code(1)
+
+#endif /* SPAACIS_SHADOW_ERRMOD_INCLUDED */

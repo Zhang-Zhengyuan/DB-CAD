@@ -1,0 +1,55 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_BULLETIN_ERRMOD_INCLUDED
+#define SPAACIS_BULLETIN_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_bulletin_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_bulletin_errmod;
+
+#endif
+#define BAD_AUTO_CHECK spaacis_bulletin_errmod.message_code(0)
+#define BAD_DELETE_BB spaacis_bulletin_errmod.message_code(1)
+#define NO_CUR_BB spaacis_bulletin_errmod.message_code(2)
+#define NO_CUR_DS spaacis_bulletin_errmod.message_code(3)
+#define ROLL_NULL_BB spaacis_bulletin_errmod.message_code(4)
+#define UNNOTED_STATE spaacis_bulletin_errmod.message_code(5)
+#define UNMERGEABLE_STATES spaacis_bulletin_errmod.message_code(6)
+#define NEED_PRUNE_PARTNERS spaacis_bulletin_errmod.message_code(7)
+#define WRONG_STATE spaacis_bulletin_errmod.message_code(8)
+#define STATE_NOT_IN_STREAM spaacis_bulletin_errmod.message_code(9)
+#define STATE_NOT_ON_TRUNK spaacis_bulletin_errmod.message_code(10)
+#define BAD_ATTACH spaacis_bulletin_errmod.message_code(11)
+#define BAD_DELETE_ALL_STATES spaacis_bulletin_errmod.message_code(12)
+#define ROLL_OVER_ROOT spaacis_bulletin_errmod.message_code(13)
+#define ROLL_DIRECTION_CONFUSED spaacis_bulletin_errmod.message_code(14)
+#define ROOT_DS_LOST spaacis_bulletin_errmod.message_code(15)
+#define ROLLED_SPATIAL_ENTITY spaacis_bulletin_errmod.message_code(16)
+#define ERROR_DURING_ROLL spaacis_bulletin_errmod.message_code(17)
+#define ERROR_DURING_DISCARD spaacis_bulletin_errmod.message_code(18)
+#define ERROR_DURING_MERGE spaacis_bulletin_errmod.message_code(19)
+#define BULLETIN_SEQUENCE spaacis_bulletin_errmod.message_code(20)
+#define NOTE_UNBALANCED_BB spaacis_bulletin_errmod.message_code(21)
+#define CHANGE_DEFAULT_UNBALANCED_BB spaacis_bulletin_errmod.message_code(22)
+#define CLEAR_UNBALANCED_BB spaacis_bulletin_errmod.message_code(23)
+#define BULLETIN_NOT_ON_BOARD spaacis_bulletin_errmod.message_code(24)
+#define BAD_TAG spaacis_bulletin_errmod.message_code(25)
+#define ENTITY_NOT_IN_STREAM spaacis_bulletin_errmod.message_code(26)
+#define MIXED_STREAMS spaacis_bulletin_errmod.message_code(27)
+#define CORRUPT_STREAM spaacis_bulletin_errmod.message_code(28)
+#define ADD_TO_CLOSED_BB spaacis_bulletin_errmod.message_code(29)
+#define ILLEGAL_BULLETIN_CHANGE spaacis_bulletin_errmod.message_code(30)
+#define CORRUPT_BB spaacis_bulletin_errmod.message_code(31)
+#define NESTED_API_ERROR_IGNORED spaacis_bulletin_errmod.message_code(32)
+#define MIXING_STREAMS_WHEN_NESTED spaacis_bulletin_errmod.message_code(33)
+#define UNPROCESSED_BB spaacis_bulletin_errmod.message_code(34)
+#define LEAVING_UNPROCESSED_STREAM spaacis_bulletin_errmod.message_code(35)
+#define CURRENT_DS_LOST spaacis_bulletin_errmod.message_code(36)
+
+#endif /* SPAACIS_BULLETIN_ERRMOD_INCLUDED */

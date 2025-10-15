@@ -1,0 +1,27 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_CHECK_ERRMOD_INCLUDED
+#define SPAACIS_CHECK_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_check_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_check_errmod;
+
+#endif
+#define CHECK_BAD_FF_INT spaacis_check_errmod.message_code(0)
+#define CHECK_BAD_FF_INT_WITH_DUP_ED spaacis_check_errmod.message_code(1)
+#define CHECK_BAD_FF_INT_WITH_PART_COIN_ED spaacis_check_errmod.message_code(2)
+#define CHECK_BAD_FF_COIN spaacis_check_errmod.message_code(3)
+#define CHECK_BAD_SHELL_CONT spaacis_check_errmod.message_code(4)
+#define CHECK_BAD_LUMP_CONT spaacis_check_errmod.message_code(5)
+#define CHECK_FAILED_FF_INT spaacis_check_errmod.message_code(6)
+#define CHECK_BAD_EE_INT spaacis_check_errmod.message_code(7)
+#define CHECK_ENTITY_NOT_WIRE spaacis_check_errmod.message_code(8)
+
+#endif /* SPAACIS_CHECK_ERRMOD_INCLUDED */

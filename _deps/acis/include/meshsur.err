@@ -1,0 +1,24 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_MESHSUR_ERRMOD_INCLUDED
+#define SPAACIS_MESHSUR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_meshsur_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_meshsur_errmod;
+
+#endif
+#define LOOPING_FINDING_SEAM spaacis_meshsur_errmod.message_code(0)
+#define UNIMPLEMENTED_MSH_SUR spaacis_meshsur_errmod.message_code(1)
+#define POINT_IN_MESH_ERROR spaacis_meshsur_errmod.message_code(2)
+#define CANT_WRITE_MESH spaacis_meshsur_errmod.message_code(3)
+#define DEEP_COPY_MESH_NOT_IMPLEMENTED spaacis_meshsur_errmod.message_code(4)
+#define NULL_ELEMENT spaacis_meshsur_errmod.message_code(5)
+
+#endif /* SPAACIS_MESHSUR_ERRMOD_INCLUDED */

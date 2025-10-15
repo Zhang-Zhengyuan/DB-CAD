@@ -1,0 +1,47 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SG_BS3C_ERRMOD_INCLUDED
+#define SPAACIS_SG_BS3C_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_sg_bs3c_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_sg_bs3c_errmod;
+
+#endif
+#define FAC_MAX_NPTS spaacis_sg_bs3c_errmod.message_code(0)
+#define SMOOTH_DISC_AT_END spaacis_sg_bs3c_errmod.message_code(1)
+#define SMOOTH_RANGE_INVALID spaacis_sg_bs3c_errmod.message_code(2)
+#define SMOOTH_DISC_FAILED spaacis_sg_bs3c_errmod.message_code(3)
+#define CHAIN_INSUFFICIENT spaacis_sg_bs3c_errmod.message_code(4)
+#define CHAIN_ILL_FORMED spaacis_sg_bs3c_errmod.message_code(5)
+#define CHAIN_CURVE_INVALID spaacis_sg_bs3c_errmod.message_code(6)
+#define CHAIN_COIN_INVALID spaacis_sg_bs3c_errmod.message_code(7)
+#define CHAIN_CLOSURE_INCONSISTENT spaacis_sg_bs3c_errmod.message_code(8)
+#define CHAIN_APPROX_FAILED spaacis_sg_bs3c_errmod.message_code(9)
+#define APPROX_ARCLEN_INCORRECT_DISC_INFO spaacis_sg_bs3c_errmod.message_code(10)
+#define ARCLEN_FIT_FAILURE spaacis_sg_bs3c_errmod.message_code(11)
+#define NO_INPUT_CURVE spaacis_sg_bs3c_errmod.message_code(12)
+#define INCONSISTENT_DATA spaacis_sg_bs3c_errmod.message_code(13)
+#define SIMPLIFICATION_FAILURE spaacis_sg_bs3c_errmod.message_code(14)
+#define APPROX_DOMAIN_LARGER_THAN_ORIGINAL spaacis_sg_bs3c_errmod.message_code(15)
+#define COEDGE_NO_LOOP spaacis_sg_bs3c_errmod.message_code(16)
+#define COEDGE_NO_SURF spaacis_sg_bs3c_errmod.message_code(17)
+#define APPROX_INTERNAL spaacis_sg_bs3c_errmod.message_code(18)
+#define APPROX_ARCLEN_OPTION_UNAVAILBLE spaacis_sg_bs3c_errmod.message_code(19)
+#define NULL_LOOP spaacis_sg_bs3c_errmod.message_code(20)
+#define LOOP_NO_SURF spaacis_sg_bs3c_errmod.message_code(21)
+#define CORRUPT_GEOM spaacis_sg_bs3c_errmod.message_code(22)
+#define BS3_CURVE_INCOMPAT spaacis_sg_bs3c_errmod.message_code(23)
+#define REQUESTED_DOMAIN_TOO_BIG spaacis_sg_bs3c_errmod.message_code(24)
+#define BS2_CURVE_CONNECT_FAILED spaacis_sg_bs3c_errmod.message_code(25)
+#define DEGENERATE_LOOP spaacis_sg_bs3c_errmod.message_code(26)
+#define CLOSURE_FORM_MODIFIED spaacis_sg_bs3c_errmod.message_code(27)
+#define UNIQUE_KNOTS_NOT_FITOL spaacis_sg_bs3c_errmod.message_code(28)
+
+#endif /* SPAACIS_SG_BS3C_ERRMOD_INCLUDED */

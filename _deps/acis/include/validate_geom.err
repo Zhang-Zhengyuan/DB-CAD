@@ -1,0 +1,32 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_VALIDATE_GEOM_ERRMOD_INCLUDED
+#define SPAACIS_VALIDATE_GEOM_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_validate_geom_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_validate_geom_errmod;
+
+#endif
+#define VALIDATE_FINITE_DIFF_DERIVS_FAILURE spaacis_validate_geom_errmod.message_code(0)
+#define VALIDATE_DOMAIN_INFINITE spaacis_validate_geom_errmod.message_code(1)
+#define VALIDATE_APPROX_CONV_FAILURE spaacis_validate_geom_errmod.message_code(2)
+#define TEST_UNSPECIFIED_FAILURE spaacis_validate_geom_errmod.message_code(3)
+#define VALIDATE_SPLIT_FAILURE spaacis_validate_geom_errmod.message_code(4)
+#define VALIDATE_OFFSET_FAILURE spaacis_validate_geom_errmod.message_code(5)
+#define VALIDATE_EXTEND_FAILURE spaacis_validate_geom_errmod.message_code(6)
+#define VALIDATE_REPARAM_FAILURE spaacis_validate_geom_errmod.message_code(7)
+#define VALIDATE_SUBSET_FAILURE spaacis_validate_geom_errmod.message_code(8)
+#define VALIDATE_COPY_FAILURE spaacis_validate_geom_errmod.message_code(9)
+#define VALIDATE_TRANSFORM_FAILURE spaacis_validate_geom_errmod.message_code(10)
+#define VALIDATE_NEGATE_FAILURE spaacis_validate_geom_errmod.message_code(11)
+#define CURVE_WRITE_READ_TEST_FAILURE spaacis_validate_geom_errmod.message_code(12)
+#define SURFACE_WRITE_READ_TEST_FAILURE spaacis_validate_geom_errmod.message_code(13)
+
+#endif /* SPAACIS_VALIDATE_GEOM_ERRMOD_INCLUDED */

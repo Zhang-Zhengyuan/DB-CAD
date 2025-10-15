@@ -1,0 +1,57 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_LICENSE_ERRMOD_INCLUDED
+#define SPAACIS_LICENSE_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_license_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_license_errmod;
+
+#endif
+#define LICENSING_UNKNOWN_ERROR spaacis_license_errmod.message_code(0)
+#define BAD_LICENSE_INFO_ARRAY_MEMBER spaacis_license_errmod.message_code(1)
+#define BAD_LICENSE_INFO_ARRAY_TYPE spaacis_license_errmod.message_code(2)
+#define BAD_LICENSE_INFO_NAME spaacis_license_errmod.message_code(3)
+#define BAD_SERIAL_LIC_INFO_FORMAT spaacis_license_errmod.message_code(4)
+#define BIG_INT_DIVIDE_BY_ZERO spaacis_license_errmod.message_code(5)
+#define DUPLICATE_LICENSE_INFO_NAME spaacis_license_errmod.message_code(6)
+#define INCOMPATIBLE_RADICES spaacis_license_errmod.message_code(7)
+#define INVALID_ALK_VERSION spaacis_license_errmod.message_code(8)
+#define INVALID_BIG_INT_SUBTRACT spaacis_license_errmod.message_code(9)
+#define INVALID_CIPHER_TEXT spaacis_license_errmod.message_code(10)
+#define INVALID_CRYPTO_KEY_SIZE spaacis_license_errmod.message_code(11)
+#define INVALID_ENCODER_SETTINGS spaacis_license_errmod.message_code(12)
+#define INVALID_ENCODING_HEADER spaacis_license_errmod.message_code(13)
+#define INVALID_ENCRYPTION_MESSAGE spaacis_license_errmod.message_code(14)
+#define INVALID_ILK_VERSION spaacis_license_errmod.message_code(15)
+#define INVALID_LICENSE_INFO_PTR_LACA spaacis_license_errmod.message_code(16)
+#define INVALID_LICENSE_INFO_PTR_LIAA spaacis_license_errmod.message_code(17)
+#define INVALID_LICENSE_INFO_PTR_LIAP spaacis_license_errmod.message_code(18)
+#define INVALID_LICENSE_INFO_PTR_LICA spaacis_license_errmod.message_code(19)
+#define INVALID_LICENSE_INFO_PTR_LIMP spaacis_license_errmod.message_code(20)
+#define INVALID_LIC_INFO_ARRAY_INDEX spaacis_license_errmod.message_code(21)
+#define INVALID_LIC_INFO_FUNCTION_CALL spaacis_license_errmod.message_code(22)
+#define INVALID_LIC_INFO_VALUE_FORMAT spaacis_license_errmod.message_code(23)
+#define INVALID_LIC_KEY_ALGORITHM_VERSION spaacis_license_errmod.message_code(24)
+#define INVALID_RADIX_INT_CONV spaacis_license_errmod.message_code(25)
+#define INVALID_RADIX_INT_DIV spaacis_license_errmod.message_code(26)
+#define INVALID_RADIX_INT_MULT spaacis_license_errmod.message_code(27)
+#define INVALID_RADIX_INT_SUBTRACT spaacis_license_errmod.message_code(28)
+#define INVALID_SERIALIZATION_NAME spaacis_license_errmod.message_code(29)
+#define INVALID_SERIALIZATION_VERSION spaacis_license_errmod.message_code(30)
+#define INVALID_SERIAL_LIC_FILE spaacis_license_errmod.message_code(31)
+#define LICENSE_MISSING_END_USER_INFO spaacis_license_errmod.message_code(32)
+#define RADIX_INT_DIVIDE_BY_ZERO spaacis_license_errmod.message_code(33)
+#define SPA_INVALID_DATE_FORMAT spaacis_license_errmod.message_code(34)
+#define SPA_INVALID_DATE_VALUE spaacis_license_errmod.message_code(35)
+#define UNINITIALIZED_LIC_INFO_ARRAY_LACG spaacis_license_errmod.message_code(36)
+#define UNINITIALIZED_LIC_INFO_ARRAY_LAGE spaacis_license_errmod.message_code(37)
+#define UNRECOGNIZED_LICENSE_INFO_TYPE spaacis_license_errmod.message_code(38)
+
+#endif /* SPAACIS_LICENSE_ERRMOD_INCLUDED */

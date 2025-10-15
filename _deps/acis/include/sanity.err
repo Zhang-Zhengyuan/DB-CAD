@@ -1,0 +1,20 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SANITY_ERRMOD_INCLUDED
+#define SPAACIS_SANITY_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_sanity_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_sanity_errmod;
+
+#endif
+#define ABORT_CHECKING spaacis_sanity_errmod.message_code(0)
+#define CHECK_UNINIT spaacis_sanity_errmod.message_code(1)
+
+#endif /* SPAACIS_SANITY_ERRMOD_INCLUDED */

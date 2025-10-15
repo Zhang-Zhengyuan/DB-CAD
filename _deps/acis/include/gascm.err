@@ -1,0 +1,15 @@
+// Error code definitions for module "ga_scm/src"
+
+#ifndef GA_SCM_GASCM_ERRMOD_INCLUDED
+#define GA_SCM_GASCM_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module ga_scm_gascm_errmod;
+
+#define AOPT_NOT_SUPP ga_scm_gascm_errmod.message_code(0)
+#define NOT_AN_ENTITY ga_scm_gascm_errmod.message_code(1)
+#define FORGOT_ENTITY ga_scm_gascm_errmod.message_code(2)
+
+#endif /* GA_SCM_GASCM_ERRMOD_INCLUDED */

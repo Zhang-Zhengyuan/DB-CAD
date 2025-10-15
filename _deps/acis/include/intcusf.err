@@ -1,0 +1,21 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_INTCUSF_ERRMOD_INCLUDED
+#define SPAACIS_INTCUSF_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_intcusf_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_intcusf_errmod;
+
+#endif
+#define NO_CURVE_BOUNDS spaacis_intcusf_errmod.message_code(0)
+#define NO_INTERSECTOR_FOUND spaacis_intcusf_errmod.message_code(1)
+#define BAD_UNEXT_RANGE spaacis_intcusf_errmod.message_code(2)
+
+#endif /* SPAACIS_INTCUSF_ERRMOD_INCLUDED */

@@ -1,0 +1,49 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_PATTERN_ERRMOD_INCLUDED
+#define SPAACIS_PATTERN_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_pattern_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_pattern_errmod;
+
+#endif
+#define PTRN_INVALID_DIM spaacis_pattern_errmod.message_code(0)
+#define PTRN_ZERO_COUNT spaacis_pattern_errmod.message_code(1)
+#define PTRN_MISSING_ROOT spaacis_pattern_errmod.message_code(2)
+#define PTRN_FACE_NOT_CYLINDRICAL spaacis_pattern_errmod.message_code(3)
+#define PTRN_INCOMPLETE_ORIENTATION spaacis_pattern_errmod.message_code(4)
+#define PTRN_NULL_ENTITY1 spaacis_pattern_errmod.message_code(5)
+#define PTRN_NULL_ENTITY2 spaacis_pattern_errmod.message_code(6)
+#define PTRN_INVALID_ARGUMENT spaacis_pattern_errmod.message_code(7)
+#define PTRN_INVALID_ENTITY spaacis_pattern_errmod.message_code(8)
+#define PTRN_ZERO_ORIENT_RANGE spaacis_pattern_errmod.message_code(9)
+#define PTRN_ORIENT_AXIS spaacis_pattern_errmod.message_code(10)
+#define PTRN_ORIENT_PARALLEL spaacis_pattern_errmod.message_code(11)
+#define PTRN_ORIENT_PARALLEL1 spaacis_pattern_errmod.message_code(12)
+#define PTRN_INVALID_SCALE spaacis_pattern_errmod.message_code(13)
+#define PTRN_INVALID_KEEP spaacis_pattern_errmod.message_code(14)
+#define PTRN_INVALID_SEED spaacis_pattern_errmod.message_code(15)
+#define PTRN_NULL_PATTERN spaacis_pattern_errmod.message_code(16)
+#define PTRN_NON_NULL_PATTERN spaacis_pattern_errmod.message_code(17)
+#define PTRN_INVALID_SCALE_DIM spaacis_pattern_errmod.message_code(18)
+#define PTRN_INCOMPATIBLE_DIM spaacis_pattern_errmod.message_code(19)
+#define PTRN_SIZE_UNITY spaacis_pattern_errmod.message_code(20)
+#define PTRN_NULL_COORDS spaacis_pattern_errmod.message_code(21)
+#define PTRN_NULL_SCALE spaacis_pattern_errmod.message_code(22)
+#define PTRN_NULL_FILTER spaacis_pattern_errmod.message_code(23)
+#define PTRN_FACES_INVALID spaacis_pattern_errmod.message_code(24)
+#define PTRN_INVALID_COORDS spaacis_pattern_errmod.message_code(25)
+#define PTRN_NO_REFLECT_FACES spaacis_pattern_errmod.message_code(26)
+#define PTRN_DUPLICATION spaacis_pattern_errmod.message_code(27)
+#define PTRN_FACES_INCONSIS spaacis_pattern_errmod.message_code(28)
+#define PTRN_BAD_BUMP_BOUNDARY spaacis_pattern_errmod.message_code(29)
+#define COMPOSITE_CU_DISC spaacis_pattern_errmod.message_code(30)
+
+#endif /* SPAACIS_PATTERN_ERRMOD_INCLUDED */

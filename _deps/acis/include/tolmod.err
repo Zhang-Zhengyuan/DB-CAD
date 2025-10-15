@@ -1,0 +1,25 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_TOLMOD_ERRMOD_INCLUDED
+#define SPAACIS_TOLMOD_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_tolmod_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_tolmod_errmod;
+
+#endif
+#define TOL_INT_MISMATCH spaacis_tolmod_errmod.message_code(0)
+#define TOL_BAD_EDGE_COUNT spaacis_tolmod_errmod.message_code(1)
+#define TOL_ADD_TANG_TEDGE spaacis_tolmod_errmod.message_code(2)
+#define TOL_BAD_PARAM spaacis_tolmod_errmod.message_code(3)
+#define TOL_MOD_INCOMPATIBLE spaacis_tolmod_errmod.message_code(4)
+#define TOL_MOD_ZERO_RANGE_TEDGE spaacis_tolmod_errmod.message_code(5)
+#define GAP_EXCEEDS_MAX_GAP spaacis_tolmod_errmod.message_code(6)
+
+#endif /* SPAACIS_TOLMOD_ERRMOD_INCLUDED */

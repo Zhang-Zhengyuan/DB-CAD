@@ -1,0 +1,52 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_WARPAPI_ERRMOD_INCLUDED
+#define SPAACIS_WARPAPI_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_warpapi_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_warpapi_errmod;
+
+#endif
+#define BEND_PARAM_NOT_POSITIVE spaacis_warpapi_errmod.message_code(0)
+#define BEND_INTO_AXIS spaacis_warpapi_errmod.message_code(1)
+#define BEND_OUTSIDE_REGION spaacis_warpapi_errmod.message_code(2)
+#define BEND_NOT_IMPLEMENTED spaacis_warpapi_errmod.message_code(3)
+#define BEND_PARAM_NOT_AGREE spaacis_warpapi_errmod.message_code(4)
+#define BEND_COMPRESS spaacis_warpapi_errmod.message_code(5)
+#define BEND_NOT_NEEDED spaacis_warpapi_errmod.message_code(6)
+#define BEND_ADD_REGIONS spaacis_warpapi_errmod.message_code(7)
+#define BEND_ADD_ONE_REGION spaacis_warpapi_errmod.message_code(8)
+#define BEND_NOT_ORTHO spaacis_warpapi_errmod.message_code(9)
+#define BEND_OUTSIDE_ENTITY spaacis_warpapi_errmod.message_code(10)
+#define WARP_BAD_BODY spaacis_warpapi_errmod.message_code(11)
+#define WARP_BAD_IMPRINTS spaacis_warpapi_errmod.message_code(12)
+#define WARP_BAD_IMPRINTS2 spaacis_warpapi_errmod.message_code(13)
+#define WARP_AFFINE_NOT_FOUND spaacis_warpapi_errmod.message_code(14)
+#define WARP_INTERNAL_ERROR spaacis_warpapi_errmod.message_code(15)
+#define REBEND_NOT_POSSIBLE spaacis_warpapi_errmod.message_code(16)
+#define REBEND_SHEET spaacis_warpapi_errmod.message_code(17)
+#define REBEND_ANGLE spaacis_warpapi_errmod.message_code(18)
+#define REBEND_CLASSIFY_CB spaacis_warpapi_errmod.message_code(19)
+#define WARP_FUNCTION_NOT_IMPLEMENTED spaacis_warpapi_errmod.message_code(20)
+#define NONPLANAR_WIRE spaacis_warpapi_errmod.message_code(21)
+#define INVALID_INPUTS spaacis_warpapi_errmod.message_code(22)
+#define WRAP_FAILED spaacis_warpapi_errmod.message_code(23)
+#define ELLIPTICAL_CONE_UNHANDLED spaacis_warpapi_errmod.message_code(24)
+#define UNHANDLED_SITUATION spaacis_warpapi_errmod.message_code(25)
+#define WRAP_NONLINEAR_EDGE spaacis_warpapi_errmod.message_code(26)
+#define WRAP_BAD_START_POS spaacis_warpapi_errmod.message_code(27)
+#define WRAP_BAD_DIRECTION spaacis_warpapi_errmod.message_code(28)
+#define WRAP_NO_WIRE_TRANSFORM spaacis_warpapi_errmod.message_code(29)
+#define WRAP_NONDEVELOPABLE_FACE spaacis_warpapi_errmod.message_code(30)
+#define WRAP_BAD_WIRE spaacis_warpapi_errmod.message_code(31)
+#define WRAP_MULTI_LUMP_WIRE spaacis_warpapi_errmod.message_code(32)
+#define BEND_VALID_POSITION spaacis_warpapi_errmod.message_code(33)
+
+#endif /* SPAACIS_WARPAPI_ERRMOD_INCLUDED */

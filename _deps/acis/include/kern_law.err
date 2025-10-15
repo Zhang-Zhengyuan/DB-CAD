@@ -1,0 +1,19 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_KERN_LAW_ERRMOD_INCLUDED
+#define SPAACIS_KERN_LAW_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_kern_law_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_kern_law_errmod;
+
+#endif
+#define LAW_FOR_SPL_SUR_DIM spaacis_kern_law_errmod.message_code(0)
+
+#endif /* SPAACIS_KERN_LAW_ERRMOD_INCLUDED */

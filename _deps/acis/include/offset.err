@@ -1,0 +1,25 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_OFFSET_ERRMOD_INCLUDED
+#define SPAACIS_OFFSET_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_offset_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_offset_errmod;
+
+#endif
+#define SELF_INTERSECTING_OUTPUT spaacis_offset_errmod.message_code(0)
+#define IRREGULAR_OUTPUT spaacis_offset_errmod.message_code(1)
+#define OFST_BAD_EDM_OFFSET spaacis_offset_errmod.message_code(2)
+#define OFST_BAD_EDM_OFFSET_MANUF spaacis_offset_errmod.message_code(3)
+#define OFST_EDM_INVALID_MOTION spaacis_offset_errmod.message_code(4)
+#define OFST_EDM_OUTWARD_OFFSET spaacis_offset_errmod.message_code(5)
+#define OFST_CMPLX_BAD_CURVATURE spaacis_offset_errmod.message_code(6)
+
+#endif /* SPAACIS_OFFSET_ERRMOD_INCLUDED */

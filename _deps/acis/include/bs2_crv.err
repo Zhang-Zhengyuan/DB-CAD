@@ -1,0 +1,22 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_BS2_CRV_ERRMOD_INCLUDED
+#define SPAACIS_BS2_CRV_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_bs2_crv_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_bs2_crv_errmod;
+
+#endif
+#define BS2_NULL_CURVE_EVAL spaacis_bs2_crv_errmod.message_code(0)
+#define NULL_2D_CURVE_ACCESS spaacis_bs2_crv_errmod.message_code(1)
+#define BAD_BS2_REPARAM_INPUTS spaacis_bs2_crv_errmod.message_code(2)
+#define BAD_BS2_REPARAM_BEFORE_INPUT spaacis_bs2_crv_errmod.message_code(3)
+
+#endif /* SPAACIS_BS2_CRV_ERRMOD_INCLUDED */

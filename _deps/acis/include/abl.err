@@ -1,0 +1,70 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_ABL_ERRMOD_INCLUDED
+#define SPAACIS_ABL_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_abl_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_abl_errmod;
+
+#endif
+#define ABL_FIRST_ERR_MSG spaacis_abl_errmod.message_code(0)
+#define ABL_ATTRIB_BAD_PROC spaacis_abl_errmod.message_code(1)
+#define ABL_BAD_EE_START_PT spaacis_abl_errmod.message_code(2)
+#define ABL_BAD_EF_START_PT spaacis_abl_errmod.message_code(3)
+#define ABL_BAD_FF_START_PT spaacis_abl_errmod.message_code(4)
+#define ABL_BAD_VF_START_PT spaacis_abl_errmod.message_code(5)
+#define ABL_BAD_VE_START_PT spaacis_abl_errmod.message_code(6)
+#define ABL_BAD_RAD_FCN spaacis_abl_errmod.message_code(7)
+#define ABL_NO_GEOM spaacis_abl_errmod.message_code(8)
+#define ABL_NO_GEOM_EE spaacis_abl_errmod.message_code(9)
+#define ABL_NO_GEOM_EF spaacis_abl_errmod.message_code(10)
+#define ABL_NO_GEOM_FF spaacis_abl_errmod.message_code(11)
+#define ABL_NO_GEOM_VF spaacis_abl_errmod.message_code(12)
+#define ABL_NO_GEOM_VE spaacis_abl_errmod.message_code(13)
+#define ABL_RADIUS_SMALL spaacis_abl_errmod.message_code(14)
+#define ABL_RADIUS_BIG spaacis_abl_errmod.message_code(15)
+#define ABL_GEOM_NOT_IMPL spaacis_abl_errmod.message_code(16)
+#define ABL_GEOM_NOT_IMPL_VE spaacis_abl_errmod.message_code(17)
+#define ABL_GEOM_NOT_IMPL_VF spaacis_abl_errmod.message_code(18)
+#define ABL_GEOM_NOT_IMPL_VV spaacis_abl_errmod.message_code(19)
+#define ABL_GEOM_SELF_MITRE spaacis_abl_errmod.message_code(20)
+#define ABL_GEOM_EDGE_STAT spaacis_abl_errmod.message_code(21)
+#define ABL_CHG_PT_COMPLEX spaacis_abl_errmod.message_code(22)
+#define ABL_CHG_PT_COMPLEX_EDGE spaacis_abl_errmod.message_code(23)
+#define ABL_CHG_PT_COMPLEX_FACE spaacis_abl_errmod.message_code(24)
+#define ABL_CHG_PT_COMPLEX_VERT spaacis_abl_errmod.message_code(25)
+#define ABL_TRANS_COMPLEX spaacis_abl_errmod.message_code(26)
+#define ABL_TRANS_COMPLEX_EDGE spaacis_abl_errmod.message_code(27)
+#define ABL_TRANS_COMPLEX_FACE spaacis_abl_errmod.message_code(28)
+#define ABL_TRANS_COMPLEX_VERT spaacis_abl_errmod.message_code(29)
+#define ABL_CVXTY_VIOLATION spaacis_abl_errmod.message_code(30)
+#define ABL_INSUFF_GEOM spaacis_abl_errmod.message_code(31)
+#define ABL_EXT_FAIL spaacis_abl_errmod.message_code(32)
+#define ABL_ENDCAP_FAIL spaacis_abl_errmod.message_code(33)
+#define ABL_SIDECAP_FAIL spaacis_abl_errmod.message_code(34)
+#define ABL_CAP_COMPLEX spaacis_abl_errmod.message_code(35)
+#define ABL_ENDCAP_COMPLEX spaacis_abl_errmod.message_code(36)
+#define ABL_SIDECAP_COMPLEX spaacis_abl_errmod.message_code(37)
+#define ABL_OFF_SUPPORT spaacis_abl_errmod.message_code(38)
+#define ABL_UNSUPP_EDGE spaacis_abl_errmod.message_code(39)
+#define ABL_NO_SEGMS spaacis_abl_errmod.message_code(40)
+#define ABL_INCONS_SEGMS spaacis_abl_errmod.message_code(41)
+#define ABL_INTERNAL_ERR spaacis_abl_errmod.message_code(42)
+#define ABL_ENT_WITH_NO_VERTS spaacis_abl_errmod.message_code(43)
+#define ABL_HLP_PT_CALC_FAILED spaacis_abl_errmod.message_code(44)
+#define ABL_CVX_CALC_FAILED spaacis_abl_errmod.message_code(45)
+#define ABL_CAP_COMPLEX_PROP_EDGE spaacis_abl_errmod.message_code(46)
+#define ABL_CAP_NO_REF_TO_IMPL_BLEND spaacis_abl_errmod.message_code(47)
+#define ABL_CAP_END_POINTS_BAD spaacis_abl_errmod.message_code(48)
+#define ABL_CAP_CONVEXITY_AT_ENDS_INCOMPATIBLE spaacis_abl_errmod.message_code(49)
+#define ABL_CAP_ENDS_NO_BLEND_ATT spaacis_abl_errmod.message_code(50)
+#define ABL_LAST_ERR_MSG spaacis_abl_errmod.message_code(51)
+
+#endif /* SPAACIS_ABL_ERRMOD_INCLUDED */

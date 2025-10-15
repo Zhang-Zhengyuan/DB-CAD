@@ -1,0 +1,38 @@
+// Error code definitions for module "vabridge/src"
+
+#ifndef VABRIDGE_VABRIDGE_ERRMOD_INCLUDED
+#define VABRIDGE_VABRIDGE_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __vabridge
+extern EXPORT_SYMBOL message_module vabridge_vabridge_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module vabridge_vabridge_errmod;
+
+#endif
+#define VABRIDGE_NOTIMPL vabridge_vabridge_errmod.message_code(0)
+#define VABRIDGE_NULL_ARG vabridge_vabridge_errmod.message_code(1)
+#define VABRIDGE_CONNECT vabridge_vabridge_errmod.message_code(2)
+#define VABRIDGE_SURFACE_MESH vabridge_vabridge_errmod.message_code(3)
+#define VABRIDGE_TET_MESH vabridge_vabridge_errmod.message_code(4)
+#define VABRIDGE_VOL_MESH vabridge_vabridge_errmod.message_code(5)
+#define VABRIDGE_NODE_RANGE vabridge_vabridge_errmod.message_code(6)
+#define VABRIDGE_ELEMENT_RANGE vabridge_vabridge_errmod.message_code(7)
+#define VABRIDGE_EDGE_RANGE vabridge_vabridge_errmod.message_code(8)
+#define VABRIDGE_FACE_RANGE vabridge_vabridge_errmod.message_code(9)
+#define VABRIDGE_ORDER vabridge_vabridge_errmod.message_code(10)
+#define VABRIDGE_VKI_TOPOLOGY vabridge_vabridge_errmod.message_code(11)
+#define VABRIDGE_VKI_ERROR vabridge_vabridge_errmod.message_code(12)
+#define VABRIDGE_ARRAY_TOO_SMALL vabridge_vabridge_errmod.message_code(13)
+#define VABRIDGE_VKI_EMPTY vabridge_vabridge_errmod.message_code(14)
+#define VABRIDGE_BODY vabridge_vabridge_errmod.message_code(15)
+#define VABRIDGE_TET_FROM_TRI vabridge_vabridge_errmod.message_code(16)
+#define VABRIDGE_REFINE_COUNT vabridge_vabridge_errmod.message_code(17)
+#define VABRIDGE_VKI_EXCEPTION vabridge_vabridge_errmod.message_code(18)
+#define VABRIDGE_CELL vabridge_vabridge_errmod.message_code(19)
+
+#endif /* VABRIDGE_VABRIDGE_ERRMOD_INCLUDED */

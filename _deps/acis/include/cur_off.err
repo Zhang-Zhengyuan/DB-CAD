@@ -1,0 +1,22 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_CUR_OFF_ERRMOD_INCLUDED
+#define SPAACIS_CUR_OFF_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_cur_off_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_cur_off_errmod;
+
+#endif
+#define OFFSET_BRANCHED_WIRE spaacis_cur_off_errmod.message_code(0)
+#define OFFSET_CURVE_FAILED spaacis_cur_off_errmod.message_code(1)
+#define OFFSET_CURVE_TOPO_CHANGED spaacis_cur_off_errmod.message_code(2)
+#define OFFSET_FACE_LOOP_NOEXT spaacis_cur_off_errmod.message_code(3)
+
+#endif /* SPAACIS_CUR_OFF_ERRMOD_INCLUDED */

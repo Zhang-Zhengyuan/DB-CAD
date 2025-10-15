@@ -1,0 +1,20 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SWEEPING_ERRMOD_INCLUDED
+#define SPAACIS_SWEEPING_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_sweeping_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_sweeping_errmod;
+
+#endif
+#define NOT_COINC_PL spaacis_sweeping_errmod.message_code(0)
+#define FACE_NOT_MADE spaacis_sweeping_errmod.message_code(1)
+
+#endif /* SPAACIS_SWEEPING_ERRMOD_INCLUDED */

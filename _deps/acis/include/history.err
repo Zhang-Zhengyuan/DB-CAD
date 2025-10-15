@@ -1,0 +1,31 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_HISTORY_ERRMOD_INCLUDED
+#define SPAACIS_HISTORY_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_history_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_history_errmod;
+
+#endif
+#define HM_DISTRIBUTE_OPEN_BB spaacis_history_errmod.message_code(0)
+#define HM_ENTITY_NOT_IN_STREAM spaacis_history_errmod.message_code(1)
+#define HM_SAVE_ERROR spaacis_history_errmod.message_code(2)
+#define HM_SAVE_EARLY_VERSION spaacis_history_errmod.message_code(3)
+#define HM_RESTORE_ERROR spaacis_history_errmod.message_code(4)
+#define HM_SAVE_DURING_DELETE spaacis_history_errmod.message_code(5)
+#define HM_SAVE_UNLINKED_STREAM spaacis_history_errmod.message_code(6)
+#define HM_ENTITY_IN_TWO_STREAMS spaacis_history_errmod.message_code(7)
+#define HM_BULLETIN_NOT_DISTRIBUTED spaacis_history_errmod.message_code(8)
+#define EXTRA_THINGS_LEFT_IN_HISTORY spaacis_history_errmod.message_code(9)
+#define SAT_FILE_HAS_INVALID_TOPOLOGY spaacis_history_errmod.message_code(10)
+#define UNOWNED_ENT_SCANNED_OWNED_ENT spaacis_history_errmod.message_code(11)
+#define UNRELIABLE_OP_LEAK_TRACKING spaacis_history_errmod.message_code(12)
+
+#endif /* SPAACIS_HISTORY_ERRMOD_INCLUDED */

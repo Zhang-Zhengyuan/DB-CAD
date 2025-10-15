@@ -1,0 +1,41 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_HLC_WIRE_WRAP_ERRMOD_INCLUDED
+#define SPAACIS_HLC_WIRE_WRAP_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_hlc_wire_wrap_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_hlc_wire_wrap_errmod;
+
+#endif
+#define WRAP_FACES_DISCONNECTED spaacis_hlc_wire_wrap_errmod.message_code(0)
+#define WRAP_EDGE_PROBLEM spaacis_hlc_wire_wrap_errmod.message_code(1)
+#define WRAP_WIRE_OFF_FACES spaacis_hlc_wire_wrap_errmod.message_code(2)
+#define WRAP_INTERNAL_ERROR spaacis_hlc_wire_wrap_errmod.message_code(3)
+#define WRAP_SHEET_NOT_PLANAR spaacis_hlc_wire_wrap_errmod.message_code(4)
+#define WRAP_INVALID_TARGET spaacis_hlc_wire_wrap_errmod.message_code(5)
+#define WRAP_INVALID_TOOL spaacis_hlc_wire_wrap_errmod.message_code(6)
+#define WRAP_POS_NOT_ON_TOOL spaacis_hlc_wire_wrap_errmod.message_code(7)
+#define WRAP_POS_NOT_ON_TARGET spaacis_hlc_wire_wrap_errmod.message_code(8)
+#define WRAP_WIRE_NORMAL_NOT_SUPPLIED spaacis_hlc_wire_wrap_errmod.message_code(9)
+#define WRAP_INVALID_TOOL_DIR spaacis_hlc_wire_wrap_errmod.message_code(10)
+#define WRAP_INVALID_TARGET_DIR spaacis_hlc_wire_wrap_errmod.message_code(11)
+#define WRAP_INVALID_TOOL_DIR_NOR spaacis_hlc_wire_wrap_errmod.message_code(12)
+#define WRAP_TOPOLOGY_COMPLEX spaacis_hlc_wire_wrap_errmod.message_code(13)
+#define WRAP_SHARP_EDGE spaacis_hlc_wire_wrap_errmod.message_code(14)
+#define WRAP_ENGULFS_TARGET spaacis_hlc_wire_wrap_errmod.message_code(15)
+#define WRAP_DIFFICULT_GEOMETRY spaacis_hlc_wire_wrap_errmod.message_code(16)
+#define WRAP_EXPLORATION_FAILED spaacis_hlc_wire_wrap_errmod.message_code(17)
+#define WRAP_CANNOT_WRAP_AS_SHEET spaacis_hlc_wire_wrap_errmod.message_code(18)
+#define WRAP_MESH_SURFACE_FAILURE spaacis_hlc_wire_wrap_errmod.message_code(19)
+#define WRAP_SINGULARITY_FREE_FAILURE spaacis_hlc_wire_wrap_errmod.message_code(20)
+#define WRAP_PARAMETRIZATION_FAILURE spaacis_hlc_wire_wrap_errmod.message_code(21)
+#define WRAP_INTERSECTION_FAILURE spaacis_hlc_wire_wrap_errmod.message_code(22)
+
+#endif /* SPAACIS_HLC_WIRE_WRAP_ERRMOD_INCLUDED */

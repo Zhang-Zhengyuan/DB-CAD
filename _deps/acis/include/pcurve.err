@@ -1,0 +1,21 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_PCURVE_ERRMOD_INCLUDED
+#define SPAACIS_PCURVE_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_pcurve_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_pcurve_errmod;
+
+#endif
+#define MAKE_APPROX_PCURVE_FAILED spaacis_pcurve_errmod.message_code(0)
+#define PAR_CUR_SAVE_AS_APPROX spaacis_pcurve_errmod.message_code(1)
+#define ZERO_FIT_PCURVE spaacis_pcurve_errmod.message_code(2)
+
+#endif /* SPAACIS_PCURVE_ERRMOD_INCLUDED */

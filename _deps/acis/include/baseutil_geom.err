@@ -1,0 +1,20 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_BASEUTIL_GEOM_ERRMOD_INCLUDED
+#define SPAACIS_BASEUTIL_GEOM_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_baseutil_geom_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_baseutil_geom_errmod;
+
+#endif
+#define BASEUTIL_GEOM_INTERNAL_ERROR spaacis_baseutil_geom_errmod.message_code(0)
+#define WRAP_NON_DISK spaacis_baseutil_geom_errmod.message_code(1)
+
+#endif /* SPAACIS_BASEUTIL_GEOM_ERRMOD_INCLUDED */

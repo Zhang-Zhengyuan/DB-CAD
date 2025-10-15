@@ -1,0 +1,31 @@
+// Error code definitions for module "kern_scm_dev/src"
+
+#ifndef KERN_SCM_DEV_SPASCMEXTDEV_KERN_ERRMOD_INCLUDED
+#define KERN_SCM_DEV_SPASCMEXTDEV_KERN_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+extern message_module kern_scm_dev_spascmextdev_kern_errmod;
+
+#define EXPECTED_ONE_ENTITY kern_scm_dev_spascmextdev_kern_errmod.message_code(0)
+#define ATTRIB_BEHAVIOR_PERSISTENCE_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(1)
+#define ATTRIB_COPY_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(2)
+#define ATTRIB_MERGE_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(3)
+#define ATTRIB_SPLIT_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(4)
+#define ATTRIB_TRANS_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(5)
+#define ATTRIB_TO_TOLERANT_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(6)
+#define ATTRIB_FROM_TOLERANT_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(7)
+#define ATTRIB_REPLACE_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(8)
+#define ATTRIB_LOP_CHANGE_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(9)
+#define ATTRIB_REPLACE_GEOMETRY_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(10)
+#define ATTRIB_REVERSE_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(11)
+#define ATTRIB_WARP_ACTION_TEST_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(12)
+#define ATTRIB_BEHAVIOR_RANGE_CHECKING_FAILED kern_scm_dev_spascmextdev_kern_errmod.message_code(13)
+#define CANNOT_BACKSAVE_ATTRIB_ACTIONS_PRIOR_TO_R16 kern_scm_dev_spascmextdev_kern_errmod.message_code(14)
+#define FAILED_TO_COPY_ATTRIB_BEHAVIOR kern_scm_dev_spascmextdev_kern_errmod.message_code(15)
+#define FAILED_TO_REPLACE_EOF_CHAR_DURING_SAT_SAVE kern_scm_dev_spascmextdev_kern_errmod.message_code(16)
+#define NO_ENTITIES_SPECIFIED kern_scm_dev_spascmextdev_kern_errmod.message_code(17)
+#define INTENTIONAL_ATTRIB_THROW_ERROR kern_scm_dev_spascmextdev_kern_errmod.message_code(18)
+
+#endif /* KERN_SCM_DEV_SPASCMEXTDEV_KERN_ERRMOD_INCLUDED */

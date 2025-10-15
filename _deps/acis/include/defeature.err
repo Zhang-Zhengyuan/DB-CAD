@@ -1,0 +1,26 @@
+// Error code definitions for module "spadefeature/src"
+
+#ifndef SPADEFEATURE_DEFEATURE_ERRMOD_INCLUDED
+#define SPADEFEATURE_DEFEATURE_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SPADefeature
+extern EXPORT_SYMBOL message_module spadefeature_defeature_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spadefeature_defeature_errmod;
+
+#endif
+#define ENTITY_IS_NOT_BODY spadefeature_defeature_errmod.message_code(0)
+#define RECOGNITION_AND_REMOVAL_ALREADY_DONE spadefeature_defeature_errmod.message_code(1)
+#define REMOVAL_ALREADY_DONE spadefeature_defeature_errmod.message_code(2)
+#define RECOGNITION_IS_NOT_DONE spadefeature_defeature_errmod.message_code(3)
+#define REMOVAL_IS_NOT_DONE spadefeature_defeature_errmod.message_code(4)
+#define VALUE_CAN_NOT_BE_SET_AFTER_RECOGNITION spadefeature_defeature_errmod.message_code(5)
+#define FEATURES_DATA_IS_NULL_BAD_OPTIONS_OBJECT spadefeature_defeature_errmod.message_code(6)
+#define DEFEATURING_FAILED spadefeature_defeature_errmod.message_code(7)
+
+#endif /* SPADEFEATURE_DEFEATURE_ERRMOD_INCLUDED */

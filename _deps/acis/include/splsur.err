@@ -1,0 +1,32 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SPLSUR_ERRMOD_INCLUDED
+#define SPAACIS_SPLSUR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_splsur_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_splsur_errmod;
+
+#endif
+#define NO_QUADRATIC_ROOTS spaacis_splsur_errmod.message_code(0)
+#define OLD_PIPE_SPLSUR spaacis_splsur_errmod.message_code(1)
+#define OLD_ROT_SPLSUR spaacis_splsur_errmod.message_code(2)
+#define OLD_SUM_SPLSUR spaacis_splsur_errmod.message_code(3)
+#define OLD_TUBE_SPLSUR spaacis_splsur_errmod.message_code(4)
+#define SPLINE_SAVE_AS_EXACT spaacis_splsur_errmod.message_code(5)
+#define SPLINE_SAVE_FAILURE spaacis_splsur_errmod.message_code(6)
+#define SHEAR_TUBE spaacis_splsur_errmod.message_code(7)
+#define SWEEP_UNBOUNDED spaacis_splsur_errmod.message_code(8)
+#define NO_SPLINE_APPROX spaacis_splsur_errmod.message_code(9)
+#define ILLEGAL_SURFACE spaacis_splsur_errmod.message_code(10)
+#define BL_UNEXP_FAILURE spaacis_splsur_errmod.message_code(11)
+#define BAD_EDM_OFFSET_SURFACE spaacis_splsur_errmod.message_code(12)
+#define RESULT_NON_G0 spaacis_splsur_errmod.message_code(13)
+
+#endif /* SPAACIS_SPLSUR_ERRMOD_INCLUDED */

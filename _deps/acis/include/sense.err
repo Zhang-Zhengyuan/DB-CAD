@@ -1,0 +1,19 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SENSE_ERRMOD_INCLUDED
+#define SPAACIS_SENSE_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_sense_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_sense_errmod;
+
+#endif
+#define ONLY_DOUBLE_USES spaacis_sense_errmod.message_code(0)
+
+#endif /* SPAACIS_SENSE_ERRMOD_INCLUDED */

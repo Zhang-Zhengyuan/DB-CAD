@@ -1,0 +1,48 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SAVRES_ERRMOD_INCLUDED
+#define SPAACIS_SAVRES_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_savres_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_savres_errmod;
+
+#endif
+#define BAD_ENTITY_ID spaacis_savres_errmod.message_code(0)
+#define BAD_RESTORE_FILE spaacis_savres_errmod.message_code(1)
+#define BAD_SAVE_FILE spaacis_savres_errmod.message_code(2)
+#define BAD_SAVE_VERSION spaacis_savres_errmod.message_code(3)
+#define EARLIER_VERSION spaacis_savres_errmod.message_code(4)
+#define LATER_VERSION spaacis_savres_errmod.message_code(5)
+#define MULTIPLE_ENT spaacis_savres_errmod.message_code(6)
+#define NOT_BODY_RESTORE spaacis_savres_errmod.message_code(7)
+#define TOO_MANY_ENTS spaacis_savres_errmod.message_code(8)
+#define UNKNOWN_ENTITY spaacis_savres_errmod.message_code(9)
+#define UNKNOWN_SUBTYPE spaacis_savres_errmod.message_code(10)
+#define UNKNOWN_TOP_ENTITY spaacis_savres_errmod.message_code(11)
+#define HISTORY_SYNC spaacis_savres_errmod.message_code(12)
+#define TOLERANCE_MISMATCH spaacis_savres_errmod.message_code(13)
+#define BAD_RESTORE_LOCALE spaacis_savres_errmod.message_code(14)
+#define BAD_PRODUCT_ID spaacis_savres_errmod.message_code(15)
+#define BAD_UNITS spaacis_savres_errmod.message_code(16)
+#define UNITS_NOT_EQUAL spaacis_savres_errmod.message_code(17)
+#define COEDGES_OUT_OF_ORDER spaacis_savres_errmod.message_code(18)
+#define DEEP_COPY_UNSUPPORTED spaacis_savres_errmod.message_code(19)
+#define DEEP_COPY_TEST_NON_DEBUG spaacis_savres_errmod.message_code(20)
+#define DEEP_COPY_PATTERN_FILLED_PTR spaacis_savres_errmod.message_code(21)
+#define SAVE_EARLIER_VERSION spaacis_savres_errmod.message_code(22)
+#define LOOP_WITHOUT_COEDGE spaacis_savres_errmod.message_code(23)
+#define BAD_FACE_NEXT_LOOP spaacis_savres_errmod.message_code(24)
+#define DEEP_COPY_DOWN_NOT_SUPPORTED spaacis_savres_errmod.message_code(25)
+#define UNKNOWN_ORIGIN spaacis_savres_errmod.message_code(26)
+#define ZERO_LENGTH_EDGES_PRESENT spaacis_savres_errmod.message_code(27)
+#define ZERO_LENGTH_EDGES_NOT_REMOVED spaacis_savres_errmod.message_code(28)
+#define SOME_ZERO_LENGTH_EDGES_NOT_REMOVED spaacis_savres_errmod.message_code(29)
+
+#endif /* SPAACIS_SAVRES_ERRMOD_INCLUDED */

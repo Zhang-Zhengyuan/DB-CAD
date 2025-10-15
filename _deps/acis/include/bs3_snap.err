@@ -1,0 +1,21 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_BS3_SNAP_ERRMOD_INCLUDED
+#define SPAACIS_BS3_SNAP_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_bs3_snap_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_bs3_snap_errmod;
+
+#endif
+#define PERP_SNAP spaacis_bs3_snap_errmod.message_code(0)
+#define INTERNAL_SNAP_ERROR spaacis_bs3_snap_errmod.message_code(1)
+#define ACOVR_SNAP_OVER_CONSTRAINED spaacis_bs3_snap_errmod.message_code(2)
+
+#endif /* SPAACIS_BS3_SNAP_ERRMOD_INCLUDED */

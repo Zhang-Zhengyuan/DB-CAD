@@ -1,0 +1,36 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_MMGR_ERRMOD_INCLUDED
+#define SPAACIS_MMGR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_mmgr_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_mmgr_errmod;
+
+#endif
+#define UNINITIALIZED_FREELIST spaacis_mmgr_errmod.message_code(0)
+#define BAD_REALLOC spaacis_mmgr_errmod.message_code(1)
+#define BAD_REQUEST spaacis_mmgr_errmod.message_code(2)
+#define BAD_ARRAY spaacis_mmgr_errmod.message_code(3)
+#define BAD_ARRAY_ITEM spaacis_mmgr_errmod.message_code(4)
+#define BAD_ARRAY_LENGTH spaacis_mmgr_errmod.message_code(5)
+#define BAD_DISCARD_SIZE spaacis_mmgr_errmod.message_code(6)
+#define DOUBLE_ALLOC spaacis_mmgr_errmod.message_code(7)
+#define FREE_STORE_OVERFLOW spaacis_mmgr_errmod.message_code(8)
+#define NULL_FREE spaacis_mmgr_errmod.message_code(9)
+#define TABLE_OVERFLOW spaacis_mmgr_errmod.message_code(10)
+#define WATCH_POINT spaacis_mmgr_errmod.message_code(11)
+#define FREELIST_IN_USE spaacis_mmgr_errmod.message_code(12)
+#define EXCEPTION_DELETE_LEAK spaacis_mmgr_errmod.message_code(13)
+#define MISMATCHED_DEALLOCATION spaacis_mmgr_errmod.message_code(14)
+#define DOUBLE_DELETE spaacis_mmgr_errmod.message_code(15)
+#define UNEXPECTED_NEW_HANDLER spaacis_mmgr_errmod.message_code(16)
+#define INACTIVE_PAGE_SYSTEM spaacis_mmgr_errmod.message_code(17)
+
+#endif /* SPAACIS_MMGR_ERRMOD_INCLUDED */

@@ -1,0 +1,29 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_TOP_ERRMOD_INCLUDED
+#define SPAACIS_TOP_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_top_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_top_errmod;
+
+#endif
+#define OLD_DOUBLE_SIDE spaacis_top_errmod.message_code(0)
+#define OLD_EDGE_PARAM spaacis_top_errmod.message_code(1)
+#define OLD_INSIDE_WIRE spaacis_top_errmod.message_code(2)
+#define OLD_MULTI_LUMP spaacis_top_errmod.message_code(3)
+#define OLD_SHELL_WIRE spaacis_top_errmod.message_code(4)
+#define EDGE_NO_VERT spaacis_top_errmod.message_code(5)
+#define COEDGE_NO_EDGE spaacis_top_errmod.message_code(6)
+#define TCOEDGE_NO_PCURVE spaacis_top_errmod.message_code(7)
+#define OLD_WIRE_FORMAT spaacis_top_errmod.message_code(8)
+#define COEDGE_PARTNERS_NOT_CONNECTED spaacis_top_errmod.message_code(9)
+#define EDGE_NO_CURVE spaacis_top_errmod.message_code(10)
+
+#endif /* SPAACIS_TOP_ERRMOD_INCLUDED */

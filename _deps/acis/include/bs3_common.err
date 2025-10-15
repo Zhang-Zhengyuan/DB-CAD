@@ -1,0 +1,26 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_BS3_COMMON_ERRMOD_INCLUDED
+#define SPAACIS_BS3_COMMON_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_bs3_common_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_bs3_common_errmod;
+
+#endif
+#define BAD_BS_LENGTH spaacis_bs3_common_errmod.message_code(0)
+#define BAD_DIMENSION spaacis_bs3_common_errmod.message_code(1)
+#define PT_OFF_SPLINE spaacis_bs3_common_errmod.message_code(2)
+#define BAD_SPLINE_P_CP3 spaacis_bs3_common_errmod.message_code(3)
+#define BAD_SPLINE_P_KN spaacis_bs3_common_errmod.message_code(4)
+#define BAD_SPLINE_P_CP spaacis_bs3_common_errmod.message_code(5)
+#define BAD_SPLINE_P_FORM spaacis_bs3_common_errmod.message_code(6)
+#define BAD_SPLINE_NUM_KNOTS spaacis_bs3_common_errmod.message_code(7)
+
+#endif /* SPAACIS_BS3_COMMON_ERRMOD_INCLUDED */

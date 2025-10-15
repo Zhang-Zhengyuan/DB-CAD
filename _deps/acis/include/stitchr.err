@@ -1,0 +1,50 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_STITCHR_ERRMOD_INCLUDED
+#define SPAACIS_STITCHR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_stitchr_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_stitchr_errmod;
+
+#endif
+#define STITCHING_FAILED spaacis_stitchr_errmod.message_code(0)
+#define INPUT_NOT_AN_EDGE spaacis_stitchr_errmod.message_code(1)
+#define EDGE_ALREADY_STITCHED spaacis_stitchr_errmod.message_code(2)
+#define EDGE_HAS_NO_FACE spaacis_stitchr_errmod.message_code(3)
+#define EDGES_ALREADY_HAVE_ATTRIBS spaacis_stitchr_errmod.message_code(4)
+#define COINCIDENT_FACES spaacis_stitchr_errmod.message_code(5)
+#define INVALID_STITCH_MAX_TOL spaacis_stitchr_errmod.message_code(6)
+#define NON_MANIFOLD_EDGES spaacis_stitchr_errmod.message_code(7)
+#define INVALID_TOPOLOGY spaacis_stitchr_errmod.message_code(8)
+#define TOPOLOGY_UNSUPPORTED spaacis_stitchr_errmod.message_code(9)
+#define NOTHING_TO_STITCH spaacis_stitchr_errmod.message_code(10)
+#define UNACCEPTABLE_ENTITY spaacis_stitchr_errmod.message_code(11)
+#define IMPROPER_STITCH_OPTION spaacis_stitchr_errmod.message_code(12)
+#define FACE_WITH_OWNER spaacis_stitchr_errmod.message_code(13)
+#define EDGE_HAS_FACE_WITH_NO_BODY spaacis_stitchr_errmod.message_code(14)
+#define COULD_NOT_STITCH spaacis_stitchr_errmod.message_code(15)
+#define COULD_NOT_REVERSE_FACE spaacis_stitchr_errmod.message_code(16)
+#define CURR_STEP_COULD_NOT_REPAIR_TEDGE spaacis_stitchr_errmod.message_code(17)
+#define SHELL_NOT_PERIPHERAL spaacis_stitchr_errmod.message_code(18)
+#define SHELL_REVERSAL_FAILED spaacis_stitchr_errmod.message_code(19)
+#define SHELL_CONTAINMENT_CHECK_FAILED spaacis_stitchr_errmod.message_code(20)
+#define SHELL_ORIENTATION_CHECK_FAILED spaacis_stitchr_errmod.message_code(21)
+#define NEAR_COINCIDENT_FACES spaacis_stitchr_errmod.message_code(22)
+#define DUPLICATE_VERTEX_REMOVER_ERROR spaacis_stitchr_errmod.message_code(23)
+#define FACE_LOCATION_MAP_ERROR spaacis_stitchr_errmod.message_code(24)
+#define MEMORY_ALLOCATION_TO_LOCATION_MAP_FAILED spaacis_stitchr_errmod.message_code(25)
+#define FREE_FACE_NOT_SINGLE spaacis_stitchr_errmod.message_code(26)
+#define PARTING_FACE_LIST_EMPTY spaacis_stitchr_errmod.message_code(27)
+#define PRIMARY_BODY_LIST_EMPTY spaacis_stitchr_errmod.message_code(28)
+#define NM_PROCESSING_MODE_IGNORED spaacis_stitchr_errmod.message_code(29)
+#define INVALID_STITCH_HANDLE spaacis_stitchr_errmod.message_code(30)
+#define EDGE_CANNOT_BE_KILLED spaacis_stitchr_errmod.message_code(31)
+
+#endif /* SPAACIS_STITCHR_ERRMOD_INCLUDED */

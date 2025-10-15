@@ -1,0 +1,20 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_SG_BOOL_ERRMOD_INCLUDED
+#define SPAACIS_SG_BOOL_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_sg_bool_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_sg_bool_errmod;
+
+#endif
+#define NO_INTSCT spaacis_sg_bool_errmod.message_code(0)
+#define IMPROPER_SPLIT spaacis_sg_bool_errmod.message_code(1)
+
+#endif /* SPAACIS_SG_BOOL_ERRMOD_INCLUDED */

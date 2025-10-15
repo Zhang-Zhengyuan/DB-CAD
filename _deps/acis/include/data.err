@@ -1,0 +1,42 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_DATA_ERRMOD_INCLUDED
+#define SPAACIS_DATA_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_data_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_data_errmod;
+
+#endif
+#define ALREADY_FREE spaacis_data_errmod.message_code(0)
+#define ALREADY_LOST spaacis_data_errmod.message_code(1)
+#define BAD_ENTITY spaacis_data_errmod.message_code(2)
+#define BAD_CURVE spaacis_data_errmod.message_code(3)
+#define BAD_PCURVE spaacis_data_errmod.message_code(4)
+#define BAD_SURFACE spaacis_data_errmod.message_code(5)
+#define BAD_ATTRIB spaacis_data_errmod.message_code(6)
+#define BAD_ALLOC spaacis_data_errmod.message_code(7)
+#define CHANGE_LOST_ENT spaacis_data_errmod.message_code(8)
+#define ILLEGAL_DELETE spaacis_data_errmod.message_code(9)
+#define NULL_ASSIGN spaacis_data_errmod.message_code(10)
+#define NO_ROLLBACK spaacis_data_errmod.message_code(11)
+#define RECORD_TYPE spaacis_data_errmod.message_code(12)
+#define UNTAGGED_INPUT spaacis_data_errmod.message_code(13)
+#define BAD_ATTRIB_TAG spaacis_data_errmod.message_code(14)
+#define BAD_TAG_CREATE spaacis_data_errmod.message_code(15)
+#define ADD_NO_USECOUNT spaacis_data_errmod.message_code(16)
+#define REMOVE_NO_USECOUNT spaacis_data_errmod.message_code(17)
+#define UNKNOWN_SCAN_TYPE spaacis_data_errmod.message_code(18)
+#define ILLEGAL_ENTITY_MODIFICATION spaacis_data_errmod.message_code(19)
+#define ILLEGAL_ENTITY_DATA_ACCESS spaacis_data_errmod.message_code(20)
+#define OWNED_TRANSFORM spaacis_data_errmod.message_code(21)
+#define SAVE_LOST_ENT spaacis_data_errmod.message_code(22)
+#define ATTRIB_LOSE_ERROR spaacis_data_errmod.message_code(23)
+
+#endif /* SPAACIS_DATA_ERRMOD_INCLUDED */

@@ -1,0 +1,39 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_ACOVR_ERRMOD_INCLUDED
+#define SPAACIS_ACOVR_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_acovr_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_acovr_errmod;
+
+#endif
+#define EXCEED_MAX_CIRCUITS spaacis_acovr_errmod.message_code(0)
+#define ACOVR_INTERNAL spaacis_acovr_errmod.message_code(1)
+#define NO_SURFACE spaacis_acovr_errmod.message_code(2)
+#define NO_CIRCUIT spaacis_acovr_errmod.message_code(3)
+#define MULTIPLE_CIRCUITS spaacis_acovr_errmod.message_code(4)
+#define BAD_OWNER spaacis_acovr_errmod.message_code(5)
+#define BAD_GUIDE_OWNER spaacis_acovr_errmod.message_code(6)
+#define INVALID_CIRCUITS spaacis_acovr_errmod.message_code(7)
+#define SURFACE_NOT_A_SPLINE spaacis_acovr_errmod.message_code(8)
+#define RESULT_FACE_NOT_NULL spaacis_acovr_errmod.message_code(9)
+#define CIRCUIT_PROJECTION_FAILURE spaacis_acovr_errmod.message_code(10)
+#define GUIDE_PROJECTION_FAILURE spaacis_acovr_errmod.message_code(11)
+#define ACOVR_PROJECTION_FAILURE spaacis_acovr_errmod.message_code(12)
+#define EMPTY_EDGE_LIST spaacis_acovr_errmod.message_code(13)
+#define EDGE_WITH_MULTIPLE_COEDGES spaacis_acovr_errmod.message_code(14)
+#define CIRCUITS_NOT_CLOSED spaacis_acovr_errmod.message_code(15)
+#define BAD_G1_REQUEST spaacis_acovr_errmod.message_code(16)
+#define BAD_G1_REQUEST_RECOVER spaacis_acovr_errmod.message_code(17)
+#define G1_EDGE_NOT_IN_CIRCUIT spaacis_acovr_errmod.message_code(18)
+#define CIRCUIT_DATA_MAKES_BAD_SURFACE spaacis_acovr_errmod.message_code(19)
+#define CANT_MAKE_FIXED_FACE_CONSTRAINT spaacis_acovr_errmod.message_code(20)
+
+#endif /* SPAACIS_ACOVR_ERRMOD_INCLUDED */

@@ -1,0 +1,26 @@
+// Error code definitions for module "spaacis/src"
+
+#ifndef SPAACIS_KERN_QUERY_ERRMOD_INCLUDED
+#define SPAACIS_KERN_QUERY_ERRMOD_INCLUDED
+
+#include "errorbase.hxx"
+#include "errmsg.hxx"
+
+#include "importexport.h"
+#ifdef __SpaACIS
+extern EXPORT_SYMBOL message_module spaacis_kern_query_errmod;
+
+#else
+extern IMPORT_SYMBOL message_module spaacis_kern_query_errmod;
+
+#endif
+#define DISCONNECTED_EDGES spaacis_kern_query_errmod.message_code(0)
+#define CANT_COMPUTE_EDGE_ARC_LEN spaacis_kern_query_errmod.message_code(1)
+#define NOT_ENOUGH_SAMPLES_REQUESTED spaacis_kern_query_errmod.message_code(2)
+#define NULL_POSITION_ARRAY spaacis_kern_query_errmod.message_code(3)
+#define NON_G1_DISC_NOT_ALLOWED spaacis_kern_query_errmod.message_code(4)
+#define NO_EQUAL_TURNING_ON_FLAT spaacis_kern_query_errmod.message_code(5)
+#define INTERNAL_SAMPLING_EDGES spaacis_kern_query_errmod.message_code(6)
+#define MAX_SAMPLING_LENGTH_EXCEEDED spaacis_kern_query_errmod.message_code(7)
+
+#endif /* SPAACIS_KERN_QUERY_ERRMOD_INCLUDED */
