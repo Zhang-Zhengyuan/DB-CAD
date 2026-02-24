@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <QMainWindow>
 #include <QSessionManager>
@@ -105,9 +105,6 @@ private slots:
     bool saveAs();
     void about();
     void runTest();
-    void runTest_memgraph();
-    void runTest_memgraph_neo4j();
-    void runTest_postgresql_neo4j();
     void incrementalTest();
     void setNEO4JConnectInfo();
     void setMEMGRAPHConnectInfo();

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "neo4j.hxx"
 #include <acis/include/lists.hxx>
 #include <unordered_map>
@@ -14,14 +14,6 @@ void api_restore_neo4j(const Neo4jPart& conn, int generation_id);
 void api_save_entity_list_neo4j_part(const Neo4jPart& conn, const ENTITY_LIST& entity_list);
 void api_restore_entity_list_neo4j_part(const Neo4jPart& conn, ENTITY_LIST& entity_list);
 
-void api_save_entity_list_memgraph(const Neo4jPart& conn, const ENTITY_LIST& entity_list, std::unordered_map<void*, int64_t>& ptr2id);
-void api_save_entity_list_memgraph_part(const Neo4jPart& conn, const ENTITY_LIST& entity_list);
-void api_restore_entity_list_memgraph(const Neo4jPart& conn, const std::vector<int64_t>& id_list, ENTITY_LIST& entity_list, std::unordered_map<int64_t, void*>& id2ptr);
-void api_restore_entity_list_memgraph_part(const Neo4jPart& conn, ENTITY_LIST& entity_list);
-
-void api_save_entity_list_postgresql(pqxx::connection& conn, const ENTITY_LIST& entity_list, std::unordered_map<void*, int64_t>& ptr2id);
-void api_restore_entity_list_postgresql(pqxx::connection& conn, const std::vector<int64_t>& id_list, ENTITY_LIST& entity_list, std::unordered_map<int64_t, void*>& id2ptr);
-
 int64_t count_partnode(const Neo4jPart& conn);
 
 void acis_save_entity_list(const ENTITY_LIST& elist, const char* file_name, int major_version, int minor_version, int text_mode);
@@ -32,7 +24,4 @@ void acis_restore_entity_list(ENTITY_LIST& elist, const char* file_name, int maj
 namespace AccessTest {
     std::string read_file_to_string(std::string filename);
     std::tuple<bool, double, double, double, double> CheckTestCase(const Neo4jPart& conn, std::string testcase_name, const ENTITY_LIST& el);
-    std::tuple<bool, double, double, double, double> CheckTestCase_memgraph(const Neo4jPart& conn, std::string testcase_name, const ENTITY_LIST& el);
-    std::tuple<bool, bool, double, double, double, double, double, double> CheckTestCase_memgraph_neo4j(const Neo4jPart& conn_memgraph, const Neo4jPart& conn_neo4j, std::string testcase_name, const ENTITY_LIST& el);
-    std::tuple<bool, bool, double, double, double, double, double, double> CheckTestCase_postgresql_neo4j(pqxx::connection& conn_postgresql, const Neo4jPart& conn_neo4j, std::string testcase_name, const ENTITY_LIST& el);
 }

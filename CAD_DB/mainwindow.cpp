@@ -1,4 +1,4 @@
-﻿#include "mainwindow.h"
+#include "mainwindow.h"
 
 
 #include <QActionGroup>
@@ -435,15 +435,6 @@ void MainWindow::displayInfo() {
 }
 
 void MainWindow::about() {
-    {
-        ENTITY_LIST el;
-        BODY* ptrBody = nullptr;
-        api_solid_sphere(SPAposition(1.3, 2.5, -3.4), 5.2, ptrBody);
-        el.add(ptrBody);
-        std::unordered_map<void*, int64_t> ptr2elemid;
-        api_save_entity_list_postgresql(*postgresqldb_conn, el, ptr2elemid);
-        api_del_entity_list(el);
-    }
 
     QMessageBox::about(this, tr("关于DBCAD"), tr("用于测试和演示DBCAD功能与用法。"));
 }
@@ -473,158 +464,6 @@ void MainWindow::runTest() {
     }
 
     QMessageBox::information(this, tr("DBCAD"), tr("neo4j测试运行结束，请打开./testlog.txt文件查看测试报告。"));
-}
-
-void MainWindow::runTest_memgraph() {
-    Neo4jPart conn(memgraphdb_host.c_str(), memgraphdb_port_bolt, memgraphdb_username.c_str(), memgraphdb_password.c_str(), "");
-
-    for (const auto& entry : std::filesystem::directory_iterator(".\\testcases")) {
-        if (entry.is_regular_file()) {
-            std::string filepath = entry.path().string();
-            std::string extname = std::filesystem::path(filepath).extension().string();
-            std::transform(extname.begin(), extname.end(), extname.begin(), tolower); //忽略大小写
-            if (extname == ".sat") {
-                std::string TestCaseName = std::filesystem::path(filepath).stem().string();
-                ENTITY_LIST el;
-                acis_restore_entity_list(el, filepath.c_str(), 2, 0, true);
-
-                auto [testresult, neo4j_save_duration, acis_save_duration, neo4j_restore_duration, acis_restore_duration] = AccessTest::CheckTestCase_memgraph(conn, TestCaseName, el);
-                api_del_entity_list(el);
-
-                std::ofstream logfs("testlog_memgraph.txt", std::ios::app);
-                logfs << std::format("=======Test: {}=======", filepath) << std::endl;
-                logfs << (testresult ? "PASS" : "FAIL") << "\t数据库存:" << neo4j_save_duration << "ms\t文件存:" << acis_save_duration << "ms\t数据库存/文件存:" << neo4j_save_duration / acis_save_duration << "\t数据库取:" << neo4j_restore_duration << "ms\t文件取:" << acis_restore_duration << "ms\t数据库取/文件取:" << neo4j_restore_duration / acis_restore_duration << std::endl;
-                logfs.close();
-            }
-        }
-    }
-
-    QMessageBox::information(this, tr("DBCAD"), tr("memgraph测试运行结束，请打开./testlog_memgraph.txt文件查看测试报告。"));
-}
-
-void MainWindow::runTest_memgraph_neo4j() {
-    Neo4jPart conn_memgraph(memgraphdb_host.c_str(), memgraphdb_port_bolt, memgraphdb_username.c_str(), memgraphdb_password.c_str(), "");
-    Neo4jPart conn_neo4j(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), "");
-
-    for (const auto& entry : std::filesystem::directory_iterator(".\\testcases")) {
-        if (entry.is_regular_file()) {
-            std::string filepath = entry.path().string();
-            std::string extname = std::filesystem::path(filepath).extension().string();
-            std::transform(extname.begin(), extname.end(), extname.begin(), tolower); //忽略大小写
-            if (extname == ".sat") {
-                qDebug() << std::format("=======Test: {}=======", filepath);
-                std::string TestCaseName = std::filesystem::path(filepath).stem().string();
-                ENTITY_LIST el;
-                acis_restore_entity_list(el, filepath.c_str(), 2, 0, true);
-                auto [testresult_memgraph, testresult_neo4j, memgraph_save_duration, neo4j_save_duration, acis_save_duration, memgraph_restore_duration, neo4j_restore_duration, acis_restore_duration] = AccessTest::CheckTestCase_memgraph_neo4j(conn_memgraph, conn_neo4j, TestCaseName, el);
-                api_del_entity_list(el);
-
-                std::ofstream logfs("testlog_memgraph_neo4j.txt", std::ios::app);
-                logfs << std::format("=======Test: {}=======", filepath) << std::endl;
-                logfs << "\tmemgraph存:" << memgraph_save_duration << "ms\tneo4j存:" << neo4j_save_duration << "ms\t文件存:" << acis_save_duration
-                    << "ms\tmemgraph存/文件存:" << memgraph_save_duration / acis_save_duration << "\tneo4j存/文件存:" << neo4j_save_duration / acis_save_duration
-                    << "\tmemgraph取:" << memgraph_restore_duration << "ms\tneo4j取:" << neo4j_restore_duration << "ms\t文件取:" << acis_restore_duration
-                    << "ms\tmemgraph取/文件取:" << memgraph_restore_duration / acis_restore_duration << "\tneo4j取/文件取:" << neo4j_restore_duration / acis_restore_duration
-                    << std::endl;
-
-                int measurecnt = 1;
-                for (; measurecnt < 10; measurecnt++) {
-                    ENTITY_LIST el;
-                    acis_restore_entity_list(el, filepath.c_str(), 2, 0, true);
-                    auto [i_testresult_memgraph, i_testresult_neo4j, i_memgraph_save_duration, i_neo4j_save_duration, i_acis_save_duration, i_memgraph_restore_duration, i_neo4j_restore_duration, i_acis_restore_duration] = AccessTest::CheckTestCase_memgraph_neo4j(conn_memgraph, conn_neo4j, TestCaseName, el);
-                    api_del_entity_list(el);
-
-                    logfs << "\tmemgraph存:" << i_memgraph_save_duration << "ms\tneo4j存:" << i_neo4j_save_duration << "ms\t文件存:" << i_acis_save_duration
-                        << "ms\tmemgraph存/文件存:" << i_memgraph_save_duration / i_acis_save_duration << "\tneo4j存/文件存:" << i_neo4j_save_duration / i_acis_save_duration
-                        << "\tmemgraph取:" << i_memgraph_restore_duration << "ms\tneo4j取:" << i_neo4j_restore_duration << "ms\t文件取:" << i_acis_restore_duration
-                        << "ms\tmemgraph取/文件取:" << i_memgraph_restore_duration / i_acis_restore_duration << "\tneo4j取/文件取:" << i_neo4j_restore_duration / i_acis_restore_duration
-                        << std::endl;
-
-                    assert(i_testresult_memgraph == testresult_memgraph);
-                    assert(i_testresult_neo4j == testresult_neo4j);
-                    memgraph_save_duration = (memgraph_save_duration * measurecnt + i_memgraph_save_duration) / (measurecnt + 1.0);
-                    neo4j_save_duration = (neo4j_save_duration * measurecnt + i_neo4j_save_duration) / (measurecnt + 1.0);
-                    acis_save_duration = (acis_save_duration * measurecnt + i_acis_save_duration) / (measurecnt + 1.0);
-                    memgraph_restore_duration = (memgraph_restore_duration * measurecnt + i_memgraph_restore_duration) / (measurecnt + 1.0);
-                    neo4j_restore_duration = (neo4j_restore_duration * measurecnt + i_neo4j_restore_duration) / (measurecnt + 1.0);
-                    acis_restore_duration = (acis_restore_duration * measurecnt + i_acis_restore_duration) / (measurecnt + 1.0);
-                }
-
-
-                logfs << (testresult_memgraph ? "memgraphPASS" : "memgraphFAIL") << "\t" << (testresult_neo4j ? "neo4jPASS" : "neo4jFAIL")
-                    << "\tmemgraph存:" << memgraph_save_duration << "ms\tneo4j存:" << neo4j_save_duration << "ms\t文件存:" << acis_save_duration
-                    << "ms\tmemgraph存/文件存:" << memgraph_save_duration / acis_save_duration << "\tneo4j存/文件存:" << neo4j_save_duration / acis_save_duration
-                    << "\tmemgraph取:" << memgraph_restore_duration << "ms\tneo4j取:" << neo4j_restore_duration << "ms\t文件取:" << acis_restore_duration
-                    << "ms\tmemgraph取/文件取:" << memgraph_restore_duration / acis_restore_duration << "\tneo4j取/文件取:" << neo4j_restore_duration / acis_restore_duration
-                    << std::endl;
-                logfs.close();
-            }
-        }
-    }
-
-    QMessageBox::information(this, tr("DBCAD"), tr("memgraph_neo4j测试运行结束，请打开./testlog_memgraph_neo4j.txt文件查看测试报告。"));
-}
-
-void MainWindow::runTest_postgresql_neo4j() {
-    Neo4jPart conn_neo4j(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), "");
-
-    for (const auto& entry : std::filesystem::directory_iterator(".\\testcases_postgresql")) {
-        if (entry.is_regular_file()) {
-            std::string filepath = entry.path().string();
-            std::string extname = std::filesystem::path(filepath).extension().string();
-            std::transform(extname.begin(), extname.end(), extname.begin(), tolower); //忽略大小写
-            if (extname == ".sat") {
-                qDebug() << std::format("=======Test: {}=======", filepath);
-                std::string TestCaseName = std::filesystem::path(filepath).stem().string();
-                ENTITY_LIST el;
-                acis_restore_entity_list(el, filepath.c_str(), 2, 0, true);
-                auto [testresult_postgresql, testresult_neo4j, postgresql_save_duration, neo4j_save_duration, acis_save_duration, postgresql_restore_duration, neo4j_restore_duration, acis_restore_duration] = AccessTest::CheckTestCase_postgresql_neo4j(*postgresqldb_conn, conn_neo4j, TestCaseName, el);
-                api_del_entity_list(el);
-
-                std::ofstream logfs("testlog_postgresql_neo4j.txt", std::ios::app);
-                logfs << std::format("=======Test: {}=======", filepath) << std::endl;
-                logfs << "\tpostgresql存:" << postgresql_save_duration << "ms\tneo4j存:" << neo4j_save_duration << "ms\t文件存:" << acis_save_duration
-                    << "ms\tpostgresql存/文件存:" << postgresql_save_duration / acis_save_duration << "\tneo4j存/文件存:" << neo4j_save_duration / acis_save_duration
-                    << "\tpostgresql取:" << postgresql_restore_duration << "ms\tneo4j取:" << neo4j_restore_duration << "ms\t文件取:" << acis_restore_duration
-                    << "ms\tpostgresql取/文件取:" << postgresql_restore_duration / acis_restore_duration << "\tneo4j取/文件取:" << neo4j_restore_duration / acis_restore_duration
-                    << std::endl;
-
-                int measurecnt = 1;
-                for (; measurecnt < 10; measurecnt++) {
-                    ENTITY_LIST el;
-                    acis_restore_entity_list(el, filepath.c_str(), 2, 0, true);
-                    auto [i_testresult_postgresql, i_testresult_neo4j, i_postgresql_save_duration, i_neo4j_save_duration, i_acis_save_duration, i_postgresql_restore_duration, i_neo4j_restore_duration, i_acis_restore_duration] = AccessTest::CheckTestCase_postgresql_neo4j(*postgresqldb_conn, conn_neo4j, TestCaseName, el);
-                    api_del_entity_list(el);
-
-                    logfs << "\tpostgresql存:" << i_postgresql_save_duration << "ms\tneo4j存:" << i_neo4j_save_duration << "ms\t文件存:" << i_acis_save_duration
-                        << "ms\tpostgresql存/文件存:" << i_postgresql_save_duration / i_acis_save_duration << "\tneo4j存/文件存:" << i_neo4j_save_duration / i_acis_save_duration
-                        << "\tpostgresql取:" << i_postgresql_restore_duration << "ms\tneo4j取:" << i_neo4j_restore_duration << "ms\t文件取:" << i_acis_restore_duration
-                        << "ms\tpostgresql取/文件取:" << i_postgresql_restore_duration / i_acis_restore_duration << "\tneo4j取/文件取:" << i_neo4j_restore_duration / i_acis_restore_duration
-                        << std::endl;
-
-                    assert(i_testresult_postgresql == testresult_postgresql);
-                    assert(i_testresult_neo4j == testresult_neo4j);
-                    postgresql_save_duration = (postgresql_save_duration * measurecnt + i_postgresql_save_duration) / (measurecnt + 1.0);
-                    neo4j_save_duration = (neo4j_save_duration * measurecnt + i_neo4j_save_duration) / (measurecnt + 1.0);
-                    acis_save_duration = (acis_save_duration * measurecnt + i_acis_save_duration) / (measurecnt + 1.0);
-                    postgresql_restore_duration = (postgresql_restore_duration * measurecnt + i_postgresql_restore_duration) / (measurecnt + 1.0);
-                    neo4j_restore_duration = (neo4j_restore_duration * measurecnt + i_neo4j_restore_duration) / (measurecnt + 1.0);
-                    acis_restore_duration = (acis_restore_duration * measurecnt + i_acis_restore_duration) / (measurecnt + 1.0);
-                }
-
-
-                logfs << (testresult_postgresql ? "postgresqlPASS" : "postgresqlFAIL") << "\t" << (testresult_neo4j ? "neo4jPASS" : "neo4jFAIL")
-                    << "\tpostgresql存:" << postgresql_save_duration << "ms\tneo4j存:" << neo4j_save_duration << "ms\t文件存:" << acis_save_duration
-                    << "ms\tpostgresql存/文件存:" << postgresql_save_duration / acis_save_duration << "\tneo4j存/文件存:" << neo4j_save_duration / acis_save_duration
-                    << "\tpostgresql取:" << postgresql_restore_duration << "ms\tneo4j取:" << neo4j_restore_duration << "ms\t文件取:" << acis_restore_duration
-                    << "ms\tpostgresql取/文件取:" << postgresql_restore_duration / acis_restore_duration << "\tneo4j取/文件取:" << neo4j_restore_duration / acis_restore_duration
-                    << std::endl;
-                logfs.close();
-            }
-        }
-    }
-
-    QMessageBox::information(this, tr("DBCAD"), tr("postgresql_neo4j测试运行结束，请打开./testlog_postgresql_neo4j.txt文件查看测试报告。"));
 }
 
 void MainWindow::incrementalTest() {
@@ -821,12 +660,6 @@ void MainWindow::createActions() {
     aboutAct->setStatusTip(tr("显示系统说明"));
     QAction* runTestAct = helpMenu->addAction(tr("运行测试neo4j(&T)"), this, &MainWindow::runTest);
     runTestAct->setStatusTip(tr("使用./testcases目录下的SAT文件（2.0版本，不含attrib类实体）作为测试用例，对基于neo4j数据库的几何模型存取接口进行功能和性能测试，测试报告以追加方式输出至./testlog.txt文件"));
-    QAction* runTestAct_memgraph = helpMenu->addAction(tr("运行测试memgraph(&T)"), this, &MainWindow::runTest_memgraph);
-    runTestAct_memgraph->setStatusTip(tr("使用./testcases目录下的SAT文件（2.0版本，不含attrib类实体）作为测试用例，对基于memgraph数据库的几何模型存取接口进行功能和性能测试，测试报告以追加方式输出至./testlog_memgraph.txt文件"));
-    QAction* runTestAct_memgraph_neo4j = helpMenu->addAction(tr("运行测试memgraph_neo4j(&T)"), this, &MainWindow::runTest_memgraph_neo4j);
-    runTestAct_memgraph_neo4j->setStatusTip(tr("使用./testcases目录下的SAT文件（2.0版本，不含attrib类实体）作为测试用例，对基于memgraph和neo4j数据库的几何模型存取接口进行功能和性能测试，测试报告以追加方式输出至./testlog_memgraph_neo4j.txt文件"));
-    QAction* runTestAct_postgresql_neo4j = helpMenu->addAction(tr("运行测试postgresql_neo4j(&T)"), this, &MainWindow::runTest_postgresql_neo4j);
-    runTestAct_postgresql_neo4j->setStatusTip(tr("使用./testcases目录下的SAT文件（2.0版本，不含attrib类实体）作为测试用例，对基于postgresql和neo4j数据库的几何模型存取接口进行功能和性能测试，测试报告以追加方式输出至./testlog_postgresql_neo4j.txt文件"));
     QAction* incrementalTestAct = helpMenu->addAction(tr("增量存取测试"), this, &MainWindow::incrementalTest);
     incrementalTestAct->setStatusTip(tr("增量存取测试"));
 
@@ -1130,7 +963,7 @@ void MainWindow::loadFile(const QString& fileName) {
         if (countn == 1) {
             ENTITY_LIST el;
             API_BEGIN;
-            api_restore_entity_list_memgraph_part(f, el);
+            //api_restore_entity_list_memgraph_part(f, el);
             API_END;
             for (int i = 0; i < el.count(); i++) curWindow->addEntity(el[i], tr("导入(memgraph)实体%1").arg(i).toStdString(), -1);
             isRead = true;
@@ -1239,7 +1072,7 @@ bool MainWindow::saveFile(const QString& fileName) {
         Neo4jPart f(memgraphdb_host.c_str(), memgraphdb_port_bolt, memgraphdb_username.c_str(), memgraphdb_password.c_str(), fileName.toStdString());
         ENTITY_LIST el;
         acis_get_noattrib_toplevel_active_entities(el);
-        api_save_entity_list_memgraph_part(f, el);
+        //api_save_entity_list_memgraph_part(f, el);
     }
 
     QGuiApplication::restoreOverrideCursor();
