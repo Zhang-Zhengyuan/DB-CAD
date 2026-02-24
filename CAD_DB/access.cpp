@@ -40,13 +40,6 @@ public:
     std::unordered_map<char, mg_value*> properties;
     Node() {}
 };
-class Node_postgresql {
-public:
-    int id;
-    std::string type;
-    std::optional<std::string> properties;
-    Node_postgresql() {}
-};
 class Relationship {
 public:
     Node* u;
@@ -54,13 +47,6 @@ public:
     mg_value* label;
     std::unordered_map<char, mg_value*> properties;
     Relationship(Node* u1, Node* v1) : u(u1), v(v1) {}
-};
-class Relationship_postgresql {
-public:
-    Node_postgresql* u;
-    Node_postgresql* v;
-    std::string type;
-    Relationship_postgresql(Node_postgresql* u1, Node_postgresql* v1) : u(u1), v(v1) {}
 };
 class Relationship2 {
 public:
@@ -198,37 +184,6 @@ struct glz_transform {
             }                                                                                                                                                  \
         }                                                                                                                                                      \
     }
-
-// 更新实体指针记录的迭代宏(postgresql)
-#define _API_PUSH_PTR_POSTGRESQL_1(ptr, entity_label, _1) _API_PUSH_PTR_POSTGRESQL(ptr, entity_label, _1)
-#define _API_PUSH_PTR_POSTGRESQL_2(ptr, entity_label, _1, _2) _API_PUSH_PTR_POSTGRESQL_1(ptr, entity_label, _1) _API_PUSH_PTR_POSTGRESQL(ptr, entity_label, _2)
-#define _API_PUSH_PTR_POSTGRESQL_3(ptr, entity_label, _1, _2, _3) _API_PUSH_PTR_POSTGRESQL_2(ptr, entity_label, _1, _2) _API_PUSH_PTR_POSTGRESQL(ptr, entity_label, _3)
-#define _API_PUSH_PTR_POSTGRESQL_4(ptr, entity_label, _1, _2, _3, _4) _API_PUSH_PTR_POSTGRESQL_3(ptr, entity_label, _1, _2, _3) _API_PUSH_PTR_POSTGRESQL(ptr, entity_label, _4)
-#define _API_PUSH_PTR_POSTGRESQL_5(ptr, entity_label, _1, _2, _3, _4, _5) _API_PUSH_PTR_POSTGRESQL_4(ptr, entity_label, _1, _2, _3, _4) _API_PUSH_PTR_POSTGRESQL(ptr, entity_label, _5)
-#define _API_PUSH_PTR_POSTGRESQL_6(ptr, entity_label, _1, _2, _3, _4, _5, _6) _API_PUSH_PTR_POSTGRESQL_5(ptr, entity_label, _1, _2, _3, _4, _5) _API_PUSH_PTR_POSTGRESQL(ptr, entity_label, _6)
-#define _API_PUSH_PTR_POSTGRESQL_7(ptr, entity_label, _1, _2, _3, _4, _5, _6, _7) _API_PUSH_PTR_POSTGRESQL_6(ptr, entity_label, _1, _2, _3, _4, _5, _6) _API_PUSH_PTR_POSTGRESQL(ptr, entity_label, _7)
-#define _API_PUSH_PTR_POSTGRESQL_8(ptr, entity_label, _1, _2, _3, _4, _5, _6, _7, _8) _API_PUSH_PTR_POSTGRESQL_7(ptr, entity_label, _1, _2, _3, _4, _5, _6, _7) _API_PUSH_PTR_POSTGRESQL(ptr, entity_label, _8)
-#define _API_PUSH_PTR_POSTGRESQL(__ptr, __entity_label, __member_func_name)                                                                                         \
-    {                                                                                                                                                          \
-        ENTITY* __tmp_ptr = __ptr->__member_func_name();                                                                                                       \
-        if(__tmp_ptr != nullptr) {                                                                                                                             \
-            if(ptr2node.find(__tmp_ptr) == ptr2node.end()) {                                                                                           \
-                Node_postgresql* a = ptr2node.at(__ptr); \
-                ptr2node[__tmp_ptr] = new Node_postgresql(); \
-                Relationship_postgresql* r = new Relationship_postgresql(a, ptr2node[__tmp_ptr]); \
-                r->type = STR(CAT(__entity_label##_, __member_func_name##_ptr));\
-                relationship_list.push_back(r);\
-                que.push_back(__tmp_ptr);\
-            } else {                                                                                                                                           \
-                Node_postgresql* a = ptr2node.at(__ptr); \
-                Node_postgresql* b = ptr2node.at(__tmp_ptr); \
-                Relationship_postgresql* r = new Relationship_postgresql(a, b); \
-                r->type = STR(CAT(__entity_label##_, __member_func_name##_ptr));\
-                relationship_list.push_back(r);\
-            }                                                                                                                                                  \
-        }                                                                                                                                                      \
-    }
-
 
 
 // -------------------------------------------------------------------------------------------------------

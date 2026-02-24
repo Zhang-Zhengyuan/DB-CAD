@@ -1,10 +1,8 @@
-﻿#include <iostream>
+#include <iostream>
 #include <string>
 #include <chrono>
 #include <QtWidgets/QApplication>
 #include "common.hxx"
-
-pqxx::connection* postgresqldb_conn;
 
 void myerror(std::string_view errmsg) {
     qCritical() << "*** Error: " << QString::fromUtf8(errmsg) << Qt::endl;

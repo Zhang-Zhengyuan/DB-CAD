@@ -131,8 +131,6 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
     set_default_stream(new_hs);
 
     setNEO4JConnectInfo();
-    setMEMGRAPHConnectInfo();
-    setPOSTGRESQLConnectInfo();
     mg_init();
 }
 
@@ -699,12 +697,6 @@ void MainWindow::createActions() {
     QAction* setNEO4JConnectInfoAct = settingsMenu->addAction(tr("设置neo4j连接信息"), this, &MainWindow::setNEO4JConnectInfo);
     setNEO4JConnectInfoAct->setStatusTip(tr("读取与程序相同目录下的neo4j_connect_info.conf文件，设置neo4j图数据库连接信息。该文件第1行是IP地址，第2行是Bolt协议端口号，第3行是用户名，第4行是密码，不能包含空格和多余的换行符，编码须为UTF-8（无BOM）。"));
     settingsMenu->addAction(setNEO4JConnectInfoAct);
-    QAction* setMEMGRAPHConnectInfoAct = settingsMenu->addAction(tr("设置memgraph连接信息"), this, &MainWindow::setMEMGRAPHConnectInfo);
-    setMEMGRAPHConnectInfoAct->setStatusTip(tr("读取与程序相同目录下的memgraph_connect_info.conf文件，设置memgraph内存图数据库连接信息。该文件第1行是IP地址，第2行是Bolt协议端口号，第3行是用户名，第4行是密码，不能包含空格和多余的换行符，编码须为UTF-8（无BOM）。"));
-    settingsMenu->addAction(setMEMGRAPHConnectInfoAct);
-    QAction* setPOSTGRESQLConnectInfoAct = settingsMenu->addAction(tr("设置postgresql连接信息"), this, &MainWindow::setPOSTGRESQLConnectInfo);
-    setPOSTGRESQLConnectInfoAct->setStatusTip(tr("读取与程序相同目录下的postgresql_connect_info.conf文件，设置postgresql关系数据库连接信息。该文件第1行是PostgreSQL Keyword/Value Connection String，不能包含空格和多余的换行符，编码须为UTF-8（无BOM）。"));
-    settingsMenu->addAction(setPOSTGRESQLConnectInfoAct);
 }
 
 void MainWindow::setNEO4JConnectInfo() {
@@ -738,63 +730,6 @@ void MainWindow::setNEO4JConnectInfo() {
         statusBar()->showMessage(tr("neo4j连接信息已设置"), 2000);
     } else {
         statusBar()->showMessage(tr("neo4j_connect_info.conf文件打开失败！"), 2000);
-    }
-}
-
-void MainWindow::setMEMGRAPHConnectInfo() {
-    std::ifstream fs;
-    fs.open("memgraph_connect_info.conf", std::ios_base::in);
-    if (fs.is_open()) {
-        // 判断序号是否在begin和end之间
-        std::string str, str_trim;
-        int i = 0;
-        while (std::getline(fs, str)) {
-            size_t first = str.find_first_not_of(' ');
-            if (first == std::string::npos) {
-                str_trim = str;
-            } else {
-                size_t last = str.find_last_not_of(' ');
-                str_trim = str.substr(first, (last - first + 1));
-            }
-            // if(str_trim.size() == 0) continue;
-            if (i == 0) {  // IP地址
-                memgraphdb_host = str_trim;
-            } else if (i == 1) {  // Bolt端口号
-                memgraphdb_port_bolt = std::stoi(str_trim);
-            } else if (i == 2) {  // 用户名(第4行是空行说明用户名为"")
-                memgraphdb_username = str_trim;
-            } else if (i == 3) {  // 密码(第5行是空行说明密码为"")
-                memgraphdb_password = str_trim;
-                break;
-            }
-            i++;
-        }
-        statusBar()->showMessage(tr("memgraph连接信息已设置"), 2000);
-    } else {
-        statusBar()->showMessage(tr("memgraph_connect_info.conf文件打开失败！"), 2000);
-    }
-}
-
-void MainWindow::setPOSTGRESQLConnectInfo() {
-    std::ifstream fs;
-    fs.open("postgresql_connect_info.conf", std::ios_base::in);
-    if (fs.is_open()) {
-        std::string str;
-        std::getline(fs, str);
-        size_t first = str.find_first_not_of(' ');
-        if (first == std::string::npos) {
-            postgresqldb_connection_string = str;
-        } else {
-            size_t last = str.find_last_not_of(' ');
-            postgresqldb_connection_string = str.substr(first, (last - first + 1));
-        }
-        if (postgresqldb_conn != nullptr) {
-            delete postgresqldb_conn;
-        }
-        postgresqldb_conn = new pqxx::connection(postgresqldb_connection_string);
-        statusBar()->showMessage(tr("postgresql连接信息已设置"), 2000);
-    } else {
-        statusBar()->showMessage(tr("postgresql_connect_info.conf文件打开失败！"), 2000);
     }
 }
 
@@ -957,22 +892,22 @@ void MainWindow::loadFile(const QString& fileName) {
             QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不唯一。").arg(QString(fileName)));
         }
     } else {
-        assert(checkedAct == setMEMGRAPHModeAct);
-        Neo4jPart f(memgraphdb_host.c_str(), memgraphdb_port_bolt, memgraphdb_username.c_str(), memgraphdb_password.c_str(), fileName.toStdString());
-        int64_t countn = count_partnode(f);
-        if (countn == 1) {
-            ENTITY_LIST el;
-            API_BEGIN;
-            //api_restore_entity_list_memgraph_part(f, el);
-            API_END;
-            for (int i = 0; i < el.count(); i++) curWindow->addEntity(el[i], tr("导入(memgraph)实体%1").arg(i).toStdString(), -1);
-            isRead = true;
-        } else if (countn == 0) {
-            QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(memgraph)不存在。").arg(QString(fileName)));
-        } else {
-            assert(countn > 1);
-            QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(memgraph)不唯一。").arg(QString(fileName)));
-        }
+        //assert(checkedAct == setMEMGRAPHModeAct);
+        //Neo4jPart f(memgraphdb_host.c_str(), memgraphdb_port_bolt, memgraphdb_username.c_str(), memgraphdb_password.c_str(), fileName.toStdString());
+        //int64_t countn = count_partnode(f);
+        //if (countn == 1) {
+        //    ENTITY_LIST el;
+        //    API_BEGIN;
+        //    //api_restore_entity_list_memgraph_part(f, el);
+        //    API_END;
+        //    for (int i = 0; i < el.count(); i++) curWindow->addEntity(el[i], tr("导入(memgraph)实体%1").arg(i).toStdString(), -1);
+        //    isRead = true;
+        //} else if (countn == 0) {
+        //    QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(memgraph)不存在。").arg(QString(fileName)));
+        //} else {
+        //    assert(countn > 1);
+        //    QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(memgraph)不唯一。").arg(QString(fileName)));
+        //}
     }
 
 #ifndef QT_NO_CURSOR
@@ -1068,11 +1003,12 @@ bool MainWindow::saveFile(const QString& fileName) {
         Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), fileName.toStdString());
         api_save_neo4j(f);
     } else {
-        assert(checkedAct == setMEMGRAPHModeAct);
-        Neo4jPart f(memgraphdb_host.c_str(), memgraphdb_port_bolt, memgraphdb_username.c_str(), memgraphdb_password.c_str(), fileName.toStdString());
-        ENTITY_LIST el;
-        acis_get_noattrib_toplevel_active_entities(el);
-        //api_save_entity_list_memgraph_part(f, el);
+        throw std::runtime_error("Cannot find the enum");
+        //assert(checkedAct == setMEMGRAPHModeAct);
+        //Neo4jPart f(memgraphdb_host.c_str(), memgraphdb_port_bolt, memgraphdb_username.c_str(), memgraphdb_password.c_str(), fileName.toStdString());
+        //ENTITY_LIST el;
+        //acis_get_noattrib_toplevel_active_entities(el);
+        ////api_save_entity_list_memgraph_part(f, el);
     }
 
     QGuiApplication::restoreOverrideCursor();

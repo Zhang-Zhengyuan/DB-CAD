@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <string>
 #include <chrono>
@@ -15,6 +15,3 @@ namespace Timer {
     std::chrono::steady_clock::time_point now();
     double duration(std::chrono::steady_clock::time_point time_start, std::chrono::steady_clock::time_point time_end);
 }
-
-
-extern pqxx::connection* postgresqldb_conn;

@@ -107,8 +107,6 @@ private slots:
     void runTest();
     void incrementalTest();
     void setNEO4JConnectInfo();
-    void setMEMGRAPHConnectInfo();
-    void setPOSTGRESQLConnectInfo();
     void visiablility();
     void displayInfo();
 #ifndef QT_NO_SESSIONMANAGER
@@ -136,9 +134,4 @@ private:
     int neo4jdb_port_bolt;
     std::string neo4jdb_username;
     std::string neo4jdb_password;
-    std::string memgraphdb_host;
-    int memgraphdb_port_bolt;
-    std::string memgraphdb_username;
-    std::string memgraphdb_password;
-    std::string postgresqldb_connection_string;
 };
