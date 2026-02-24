@@ -1,4 +1,4 @@
-﻿#include "gme_dump_object.hxx"
+#include "gme_dump_object.hxx"
 
 std::string indent_mapping(int indents) {
     std::string ind;

@@ -1,4 +1,4 @@
-﻿#include <QtWidgets/QApplication>
+#include <QtWidgets/QApplication>
 #include <QtCore/QCommandLineParser>
 #include <QtGui/QScreen>
 #include <QtCore/QTranslator>
@@ -7,6 +7,10 @@
 #include "mainwindow.h"
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+
     qputenv("QT_ENABLE_HIGHDPI_SCALING", "0");
 
     QApplication app(argc, argv);
