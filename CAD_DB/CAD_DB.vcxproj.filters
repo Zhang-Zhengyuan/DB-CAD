@@ -23,26 +23,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <QtRcc Include="mainwindow.qrc">
-      <Filter>Resource Files</Filter>
-    </QtRcc>
-    <QtMoc Include="mainwindow.h">
-      <Filter>Header Files</Filter>
-    </QtMoc>
-    <ClCompile Include="mainwindow.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="main.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="window.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="glwidget.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="gme_mesh.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -61,26 +41,15 @@
     <ClCompile Include="acis.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <QtMoc Include="window.h">
-      <Filter>Header Files</Filter>
-    </QtMoc>
-    <QtMoc Include="glwidget.h">
-      <Filter>Header Files</Filter>
-    </QtMoc>
+    <ClCompile Include="DbcadAPI.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="gme_mesh.hxx">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="resource.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="neo4j.hxx">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="gme_user_data.hxx">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="gme_dump_object.hxx">
@@ -93,6 +62,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="acis.hxx">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DbcadAPI.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

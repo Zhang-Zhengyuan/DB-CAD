@@ -26,11 +26,11 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
-    <ConfigurationType>Application</ConfigurationType>
+    <ConfigurationType>StaticLibrary</ConfigurationType>
     <PlatformToolset>v145</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="Configuration">
-    <ConfigurationType>Application</ConfigurationType>
+    <ConfigurationType>StaticLibrary</ConfigurationType>
     <PlatformToolset>v145</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -117,32 +117,20 @@
   <ItemGroup>
     <ClCompile Include="acis.cpp" />
     <ClCompile Include="common.cpp" />
-    <ClCompile Include="glwidget.cpp" />
     <ClCompile Include="access.cpp" />
+    <ClCompile Include="DbcadAPI.cpp" />
     <ClCompile Include="gme_dump_object.cpp" />
     <ClCompile Include="gme_mesh.cpp" />
     <ClCompile Include="neo4j.cpp" />
-    <ClCompile Include="window.cpp" />
-    <QtRcc Include="mainwindow.qrc" />
-    <QtMoc Include="mainwindow.h" />
-    <ClCompile Include="mainwindow.cpp" />
-    <ClCompile Include="main.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <QtMoc Include="window.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <QtMoc Include="glwidget.h" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="acis.hxx" />
     <ClInclude Include="common.hxx" />
     <ClInclude Include="access.hxx" />
+    <ClInclude Include="DbcadAPI.h" />
     <ClInclude Include="gme_dump_object.hxx" />
     <ClInclude Include="gme_mesh.hxx" />
-    <ClInclude Include="gme_user_data.hxx" />
     <ClInclude Include="neo4j.hxx" />
-    <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="images\DBCAD.rc" />
