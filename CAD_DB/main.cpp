@@ -7,6 +7,10 @@
 #include <QtGui/QScreen>
 #include <QtCore/QTranslator>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "glwidget.h"
 #include "mainwindow.h"
 #include "storage_bridge_service.h"
@@ -23,12 +27,30 @@ bool hasArg(int argc, char** argv, const char* arg) {
 }
 
 void configureQtPluginPath(const char* argv0) {
-    const QString appDir = QFileInfo(QString::fromLocal8Bit(argv0)).absolutePath();
-    const QString localPlatforms = QDir(appDir).filePath("platforms");
-    if (QDir(localPlatforms).exists()) {
-        qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", localPlatforms.toUtf8());
-        QCoreApplication::addLibraryPath(appDir);
-        return;
+    QString appDir = QFileInfo(QString::fromLocal8Bit(argv0)).absolutePath();
+
+#ifdef _WIN32
+    wchar_t modulePath[MAX_PATH] = {};
+    const DWORD moduleLen = GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+    if (moduleLen > 0) {
+        appDir = QFileInfo(QString::fromWCharArray(modulePath, static_cast<int>(moduleLen))).absolutePath();
+    }
+#endif
+
+    const QStringList candidateAppDirs = {
+        appDir,
+        QDir(appDir).filePath("."),
+        QDir(appDir).filePath(".."),
+        QDir(appDir).filePath("..\\..")
+    };
+
+    for (const QString& dir : candidateAppDirs) {
+        const QString localPlatforms = QDir(dir).filePath("platforms");
+        if (QDir(localPlatforms).exists()) {
+            qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", localPlatforms.toUtf8());
+            QCoreApplication::addLibraryPath(dir);
+            return;
+        }
     }
 
     const QString qtPlugins = QLibraryInfo::path(QLibraryInfo::PluginsPath);

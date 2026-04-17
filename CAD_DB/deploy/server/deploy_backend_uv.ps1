@@ -49,6 +49,9 @@ if ($null -eq $backendRoot) {
     throw "Cannot locate backend root. Expected app/main.py and pyproject.toml near script."
 }
 
+Write-Host "[INFO] Backend root: $backendRoot"
+Write-Host "[INFO] Backend app entry: $(Join-Path $backendRoot 'app\main.py')"
+
 Ensure-Uv
 
 Set-Location $backendRoot

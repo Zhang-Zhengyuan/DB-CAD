@@ -167,6 +167,7 @@
     <None Include="backend\pytest.ini" />
     <None Include="backend\README.md" />
     <None Include="backend\tests\test_api.py" />
+    <None Include="backend\tests\test_integration_client_perspective_live.py" />
     <None Include="DEPLOYMENT.md" />
     <None Include="deploy\client\package_client.ps1" />
     <None Include="deploy\server\check_backend.ps1" />

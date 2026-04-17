@@ -286,6 +286,9 @@ void StorageBridgeService::onNewConnection() {
             }
 
             processRequest(socket, request);
+            if (socket->bytesToWrite() > 0) {
+                socket->waitForBytesWritten(30000);
+            }
             socket->disconnectFromHost();
         });
 
@@ -437,6 +440,9 @@ void StorageBridgeService::sendJson(QTcpSocket* socket, int statusCode, const QB
 
     socket->write(response);
     socket->flush();
+    if (socket->bytesToWrite() > 0) {
+        socket->waitForBytesWritten(30000);
+    }
 }
 
 void StorageBridgeService::sendError(QTcpSocket* socket, int statusCode, const QString& detail) {

@@ -51,6 +51,7 @@ class HISTORY_STREAM;
 class DELTA_STATE;
 class BULLETIN_BOARD;
 class QWebSocket;
+class QProcess;
 
 typedef outcome(*GME_fp)(ENTITY_LIST&, AcisOptions*);
 
@@ -109,6 +110,8 @@ private slots:
     void incrementalTest();
     void setNEO4JConnectInfo();
     void setFastAPIConnectInfo();
+    void setBridgeConnectInfo();
+    void toggleBridgeMode(bool checked);
     void visiablility();
     void displayInfo();
 #ifndef QT_NO_SESSIONMANAGER
@@ -135,7 +138,12 @@ private:
     QAction* setNEO4JModeAct;
     QAction* setNEO4JIncrementalModeAct;
     QAction* setFASTAPIModeAct;
+    QAction* toggleBridgeModeAct = nullptr;
     QActionGroup* setModeActGroup;
+    QProcess* bridgeProcess = nullptr;
+    bool bridgeStopRequested = false;
+    std::string bridge_bind_host;
+    int bridge_bind_port = 8100;
     std::string neo4jdb_host;
     int neo4jdb_port_bolt;
     std::string neo4jdb_username;

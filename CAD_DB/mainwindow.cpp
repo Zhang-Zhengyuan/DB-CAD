@@ -11,7 +11,9 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QProcess>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QStatusBar>
 #include <QTemporaryFile>
 #include <QToolBar>
@@ -212,6 +214,27 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
             fastapi_author = fastapiValues[1];
             fastapi_password = fastapiValues[2];
         }
+
+        auto bridgeValues = read_config_lines("storage_bridge_connect_info.conf", 2);
+        if (!bridgeValues.empty()) {
+            if (!bridgeValues[0].empty()) {
+                bridge_bind_host = bridgeValues[0];
+            }
+            if (!bridgeValues[1].empty()) {
+                try {
+                    bridge_bind_port = std::stoi(bridgeValues[1]);
+                } catch (...) {
+                    bridge_bind_port = 8100;
+                }
+            }
+        }
+
+        if (bridge_bind_host.empty()) {
+            bridge_bind_host = "127.0.0.1";
+        }
+        if (bridge_bind_port <= 0) {
+            bridge_bind_port = 8100;
+        }
     }
 
     mg_init();
@@ -220,6 +243,16 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (maybeSave()) {
         event->accept();
+        if (bridgeProcess != nullptr) {
+            bridgeStopRequested = true;
+            if (bridgeProcess->state() != QProcess::NotRunning) {
+                bridgeProcess->terminate();
+                if (!bridgeProcess->waitForFinished(3000)) {
+                    bridgeProcess->kill();
+                    bridgeProcess->waitForFinished(3000);
+                }
+            }
+        }
         disconnectFastAPISync();
         if (curWindow) {
             curWindow->close();
@@ -314,6 +347,163 @@ void MainWindow::setFastAPIConnectInfo() {
     }
 
     statusBar()->showMessage(tr("FastAPI连接信息已更新"), 2000);
+}
+
+void MainWindow::setBridgeConnectInfo() {
+    auto values = read_config_lines("storage_bridge_connect_info.conf", 2);
+    if (!values.empty()) {
+        if (!values[0].empty()) {
+            bridge_bind_host = values[0];
+        }
+        if (!values[1].empty()) {
+            try {
+                bridge_bind_port = std::stoi(values[1]);
+            } catch (...) {
+                bridge_bind_port = 8100;
+            }
+        }
+    } else {
+        if (bridge_bind_host.empty()) {
+            bridge_bind_host = "127.0.0.1";
+        }
+        if (bridge_bind_port <= 0) {
+            bridge_bind_port = 8100;
+        }
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Bridge模式配置"));
+    dialog.setMinimumSize(420, 180);
+    QFormLayout form(&dialog);
+
+    QLineEdit hostEdit(&dialog);
+    hostEdit.setText(QString::fromStdString(bridge_bind_host));
+    form.addRow(tr("Bridge监听地址:"), &hostEdit);
+
+    QSpinBox portEdit(&dialog);
+    portEdit.setMinimum(1);
+    portEdit.setMaximum(65535);
+    portEdit.setValue(bridge_bind_port <= 0 ? 8100 : bridge_bind_port);
+    form.addRow(tr("Bridge监听端口:"), &portEdit);
+
+    QDialogButtonBox buttonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dialog);
+    form.addRow(&buttonBox);
+    QObject::connect(&buttonBox, SIGNAL(accepted()), &dialog, SLOT(accept()));
+    QObject::connect(&buttonBox, SIGNAL(rejected()), &dialog, SLOT(reject()));
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString host = hostEdit.text().trimmed();
+    if (host.isEmpty()) {
+        QMessageBox::warning(this, tr("Bridge模式配置"), tr("Bridge监听地址不能为空"));
+        return;
+    }
+
+    bridge_bind_host = host.toStdString();
+    bridge_bind_port = portEdit.value();
+
+    QString writeError;
+    if (!write_config_lines(
+            "storage_bridge_connect_info.conf",
+            { bridge_bind_host, std::to_string(bridge_bind_port) },
+            &writeError)) {
+        QMessageBox::warning(this, tr("Bridge模式配置"), writeError);
+        return;
+    }
+
+    statusBar()->showMessage(tr("Bridge模式配置已更新"), 2000);
+}
+
+void MainWindow::toggleBridgeMode(bool checked) {
+    if (checked) {
+        if (bridgeProcess != nullptr && bridgeProcess->state() != QProcess::NotRunning) {
+            statusBar()->showMessage(tr("Bridge模式已在运行"), 2000);
+            return;
+        }
+
+        if (neo4jdb_host.empty()) {
+            QMessageBox::warning(this, tr("Bridge模式"), tr("请先配置neo4j连接信息。"));
+            if (toggleBridgeModeAct != nullptr) {
+                QSignalBlocker blocker(toggleBridgeModeAct);
+                toggleBridgeModeAct->setChecked(false);
+            }
+            return;
+        }
+
+        QString program = QCoreApplication::applicationFilePath();
+        QStringList args;
+        args << "--storage-bridge"
+             << "--bridge-host" << QString::fromStdString(bridge_bind_host)
+             << "--bridge-port" << QString::number(bridge_bind_port)
+             << "--neo4j-host" << QString::fromStdString(neo4jdb_host)
+             << "--neo4j-port" << QString::number(neo4jdb_port_bolt)
+             << "--neo4j-user" << QString::fromStdString(neo4jdb_username)
+             << "--neo4j-password" << QString::fromStdString(neo4jdb_password);
+
+        bridgeProcess = new QProcess(this);
+        bridgeProcess->setWorkingDirectory(QCoreApplication::applicationDirPath());
+        bridgeProcess->setProcessChannelMode(QProcess::SeparateChannels);
+
+        connect(bridgeProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+                const bool expectedStop = bridgeStopRequested;
+                bridgeStopRequested = false;
+
+                QString stderrText;
+                if (bridgeProcess != nullptr) {
+                    stderrText = QString::fromLocal8Bit(bridgeProcess->readAllStandardError()).trimmed();
+                    bridgeProcess->deleteLater();
+                    bridgeProcess = nullptr;
+                }
+
+                if (toggleBridgeModeAct != nullptr) {
+                    QSignalBlocker blocker(toggleBridgeModeAct);
+                    toggleBridgeModeAct->setChecked(false);
+                }
+
+                if (!expectedStop) {
+                    QString msg = tr("Bridge进程已退出（exit=%1）。").arg(exitCode);
+                    if (exitStatus == QProcess::CrashExit) {
+                        msg += tr(" 进程发生崩溃。");
+                    }
+                    if (!stderrText.isEmpty()) {
+                        msg += tr("\n错误输出：%1").arg(stderrText);
+                    }
+                    QMessageBox::warning(this, tr("Bridge模式"), msg);
+                } else {
+                    statusBar()->showMessage(tr("Bridge模式已停止"), 2000);
+                }
+            });
+
+        bridgeStopRequested = false;
+        bridgeProcess->start(program, args);
+        if (!bridgeProcess->waitForStarted(5000)) {
+            const QString error = bridgeProcess->errorString();
+            bridgeProcess->deleteLater();
+            bridgeProcess = nullptr;
+            if (toggleBridgeModeAct != nullptr) {
+                QSignalBlocker blocker(toggleBridgeModeAct);
+                toggleBridgeModeAct->setChecked(false);
+            }
+            QMessageBox::warning(this, tr("Bridge模式"), tr("启动Bridge进程失败：%1").arg(error));
+            return;
+        }
+
+        statusBar()->showMessage(tr("Bridge模式已启动，PID=%1").arg(bridgeProcess->processId()), 3000);
+    } else {
+        if (bridgeProcess == nullptr) {
+            return;
+        }
+        bridgeStopRequested = true;
+        if (bridgeProcess->state() != QProcess::NotRunning) {
+            bridgeProcess->terminate();
+            if (!bridgeProcess->waitForFinished(3000)) {
+                bridgeProcess->kill();
+            }
+        }
+    }
 }
 
 bool MainWindow::restoreFastAPIModelFromSat(const QString& satContent) {
@@ -1043,6 +1233,15 @@ void MainWindow::createActions() {
     QAction* setFastAPIConnectInfoAct = settingsMenu->addAction(tr("设置FastAPI连接信息"), this, &MainWindow::setFastAPIConnectInfo);
     setFastAPIConnectInfoAct->setStatusTip(tr("配置FastAPI地址、作者名与连接密码，并保存到fastapi_connect_info.conf（前三行）。"));
     settingsMenu->addAction(setFastAPIConnectInfoAct);
+
+    QAction* setBridgeConnectInfoAct = settingsMenu->addAction(tr("设置Bridge模式信息"), this, &MainWindow::setBridgeConnectInfo);
+    setBridgeConnectInfoAct->setStatusTip(tr("配置Bridge监听地址与端口，并保存到storage_bridge_connect_info.conf（前两行）。"));
+    settingsMenu->addAction(setBridgeConnectInfoAct);
+
+    toggleBridgeModeAct = settingsMenu->addAction(tr("启动Bridge模式"), this, &MainWindow::toggleBridgeMode);
+    toggleBridgeModeAct->setCheckable(true);
+    toggleBridgeModeAct->setStatusTip(tr("以独立CAD进程启动/停止C++ Bridge服务，便于手动联调FastAPI与客户端。"));
+    settingsMenu->addAction(toggleBridgeModeAct);
 }
 
 void MainWindow::setNEO4JConnectInfo() {

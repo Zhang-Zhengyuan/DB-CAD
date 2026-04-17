@@ -3,13 +3,72 @@
 #include <QEventLoop>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFile>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QDateTime>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 
 #include <utility>
+
+namespace {
+QString extractErrorDetail(const QByteArray& body) {
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+        const QString detail = doc.object().value("detail").toString().trimmed();
+        if (!detail.isEmpty()) {
+            return detail;
+        }
+    }
+    return {};
+}
+
+void appendFastApiErrorLog(
+    const QString& method,
+    const QString& url,
+    int statusCode,
+    const QString& networkError,
+    const QByteArray& body) {
+    QFile file("fastapi_error.log");
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        return;
+    }
+
+    QTextStream stream(&file);
+    stream.setEncoding(QStringConverter::Utf8);
+    stream << "[" << QDateTime::currentDateTime().toString(Qt::ISODateWithMs) << "] "
+           << method << " " << url << " status=" << statusCode;
+    if (!networkError.trimmed().isEmpty()) {
+        stream << " network_error=" << networkError;
+    }
+
+    const QString detail = extractErrorDetail(body);
+    if (!detail.isEmpty()) {
+        stream << " detail=" << detail;
+    } else {
+        QString raw = QString::fromUtf8(body).trimmed();
+        if (raw.size() > 800) {
+            raw = raw.left(800) + "...";
+        }
+        if (!raw.isEmpty()) {
+            stream << " body=" << raw;
+        }
+    }
+    stream << "\n";
+}
+
+QString formatHttpErrorMessage(const QString& prefix, int statusCode, const QByteArray& body) {
+    const QString detail = extractErrorDetail(body);
+    if (!detail.isEmpty()) {
+        return QString::fromUtf8("%1，HTTP状态码：%2，详情：%3").arg(prefix).arg(statusCode).arg(detail);
+    }
+    return QString::fromUtf8("%1，HTTP状态码：%2").arg(prefix).arg(statusCode);
+}
+}
 
 BackendApiClient::BackendApiClient(QString baseUrl, QString author, QString apiPassword)
     : baseUrl(std::move(baseUrl)), author(std::move(author)), apiPassword(std::move(apiPassword)) {
@@ -83,6 +142,10 @@ BackendApiClient::HttpResult BackendApiClient::sendJsonRequest(const QString& me
         }
     }
 
+    if (result.statusCode >= 400 || !result.error.isEmpty()) {
+        appendFastApiErrorLog(method, url.toString(), result.statusCode, result.error, result.body);
+    }
+
     reply->deleteLater();
     return result;
 }
@@ -102,7 +165,7 @@ std::optional<BackendApiClient::ProjectInfo> BackendApiClient::getProjectByName(
     }
 
     if (response.statusCode != 200) {
-        errorMessage = QString::fromUtf8("查询项目失败，HTTP状态码：%1").arg(response.statusCode);
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("查询项目失败"), response.statusCode, response.body);
         return std::nullopt;
     }
 
@@ -142,7 +205,7 @@ std::optional<BackendApiClient::ProjectInfo> BackendApiClient::createProject(con
     }
 
     if (response.statusCode != 201) {
-        errorMessage = QString::fromUtf8("创建项目失败，HTTP状态码：%1").arg(response.statusCode);
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("创建项目失败"), response.statusCode, response.body);
         return std::nullopt;
     }
 
@@ -218,7 +281,7 @@ std::optional<int> BackendApiClient::saveModel(const QString& projectId, const Q
     }
 
     if (response.statusCode != 201) {
-        errorMessage = QString::fromUtf8("保存模型失败，HTTP状态码：%1").arg(response.statusCode);
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("保存模型失败"), response.statusCode, response.body);
         return std::nullopt;
     }
 
@@ -247,7 +310,7 @@ std::optional<BackendApiClient::ModelPayload> BackendApiClient::getLatestModel(c
     }
 
     if (response.statusCode != 200) {
-        errorMessage = QString::fromUtf8("获取最新模型失败，HTTP状态码：%1").arg(response.statusCode);
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("获取最新模型失败"), response.statusCode, response.body);
         return std::nullopt;
     }
 
@@ -284,7 +347,7 @@ std::optional<BackendApiClient::ModelPayload> BackendApiClient::getModelVersion(
     }
 
     if (response.statusCode != 200) {
-        errorMessage = QString::fromUtf8("获取指定版本模型失败，HTTP状态码：%1").arg(response.statusCode);
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("获取指定版本模型失败"), response.statusCode, response.body);
         return std::nullopt;
     }
 
