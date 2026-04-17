@@ -43,8 +43,8 @@
     <QtBuildConfig>debug</QtBuildConfig>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
-    <QtInstall>6.6.1_msvc2019_64</QtInstall>
-    <QtModules>core;gui;widgets;network;websockets</QtModules>
+    <QtInstall>6.9.0_msvc2022_64</QtInstall>
+    <QtModules>core;gui;widgets;opengl;openglwidgets;network;websockets</QtModules>
     <QtBuildConfig>release</QtBuildConfig>
   </PropertyGroup>
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
@@ -86,7 +86,7 @@
       <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SpaACIS.lib;C:\Qt\6.6.1\msvc2019_64\lib\Qt6OpenGLWidgets.lib;C:\Qt\6.6.1\msvc2019_64\lib\Qt6OpenGL.lib;C:\Qt\6.6.1\msvc2019_64\lib\Qt6Widgets.lib;C:\Qt\6.6.1\msvc2019_64\lib\Qt6Gui.lib;C:\Qt\6.6.1\msvc2019_64\lib\Qt6Core.lib;ws2_32.lib;openssl\lib\libssl64MD.lib;openssl\lib\libcrypto64MD.lib;libpqxx-7.10.1\lib\pqxx.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SpaACIS.lib;ws2_32.lib;openssl\lib\libssl64MD.lib;openssl\lib\libcrypto64MD.lib;libpqxx-7.10.1\lib\pqxx.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>../_deps</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
@@ -168,6 +168,9 @@
     <None Include="deploy\client\package_client.ps1" />
     <None Include="deploy\server\check_backend.ps1" />
     <None Include="deploy\server\deploy_backend_uv.ps1" />
+    <None Include="deploy\server\package_backend.ps1" />
+    <None Include="deploy\server\start_backend_oneclick.cmd" />
+    <None Include="deploy\server\start_backend_oneclick.ps1" />
     <None Include="fastapi_connect_info.conf" />
     <None Include="项目计划.md" />
   </ItemGroup>

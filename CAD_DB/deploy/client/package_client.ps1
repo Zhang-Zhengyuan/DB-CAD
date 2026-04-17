@@ -1,9 +1,10 @@
 param(
-    [string]$Configuration = "Debug",
+    [string]$Configuration = "Release",
     [string]$Platform = "x64",
     [string]$ServerBaseUrl = "http://127.0.0.1:8000",
     [string]$Author = "dbcad-exe",
-    [string]$WinDeployQtPath = ""
+    [string]$WinDeployQtPath = "",
+    [string]$QtInstall = "6.9.0_msvc2022_64"
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +29,7 @@ $solutionPath = Join-Path $repoRoot "CAD_DB.sln"
 $projectRoot = Join-Path $repoRoot "CAD_DB"
 
 Write-Host "[INFO] Building client $Configuration|$Platform ..."
-msbuild $solutionPath /t:Build /p:Configuration=$Configuration /p:Platform=$Platform /m
+msbuild $solutionPath /t:Build /p:Configuration=$Configuration /p:Platform=$Platform /p:QtInstall=$QtInstall /m
 
 $candidateDirs = @(
     (Join-Path $projectRoot "$Platform\$Configuration"),
@@ -53,7 +54,7 @@ if ($null -eq $exe) {
     throw "No executable found in: $($existingDirs -join ', ')"
 }
 
-$packageDir = Join-Path $repoRoot "dist\client"
+$packageDir = Join-Path $repoRoot "dist\client-$Configuration"
 if (Test-Path $packageDir) {
     Remove-Item $packageDir -Recurse -Force
 }
@@ -64,8 +65,12 @@ Copy-Item $exe.FullName $packageDir -Force
 $acisBin = Join-Path $repoRoot "_deps\acis\bin"
 if (Test-Path $acisBin) {
     Write-Host "[INFO] Copying ACIS runtime DLLs ..."
-    Get-ChildItem $acisBin -Filter *.dll | ForEach-Object {
-        Copy-Item $_.FullName (Join-Path $packageDir $_.Name) -Force
+    $acisDllPatterns = if ($Configuration -ieq "Debug") { @("SpaACISd.dll", "SpaACIS.dll") } else { @("SpaACIS.dll") }
+    foreach ($pattern in $acisDllPatterns) {
+        $dll = Join-Path $acisBin $pattern
+        if (Test-Path $dll) {
+            Copy-Item $dll (Join-Path $packageDir ([System.IO.Path]::GetFileName($dll))) -Force
+        }
     }
 }
 

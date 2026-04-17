@@ -34,6 +34,19 @@
 - `http://服务器IP:8000/health`
 - `http://服务器IP:8000/docs`
 
+### 4. 重新打开（重启后端）
+如果你已经部署过并关闭了进程，直接一键重启：
+
+```powershell
+.\CAD_DB\deploy\server\start_backend_oneclick.ps1
+```
+
+也可双击：
+
+```text
+CAD_DB\deploy\server\start_backend_oneclick.cmd
+```
+
 ---
 
 ## 二、客户机部署（Qt EXE 打包）
@@ -46,11 +59,33 @@
   -Configuration Release \
   -Platform x64 \
   -ServerBaseUrl http://服务器IP:8000 \
-  -Author customer-user
+  -Author customer-user \
+  -QtInstall 6.9.0_msvc2022_64 \
+  -WinDeployQtPath D:\Qt\6.9.0\msvc2022_64\bin\windeployqt.exe
 ```
 
 输出：
 - `dist/DBCAD-client-Release.zip`
+
+### 1.1 若客户机提示缺少 DLL
+当前打包脚本已包含：
+- Qt 运行时（windeployqt）
+- ACIS 运行时（SpaACIS.dll）
+
+若仍有遗漏，反馈缺失 DLL 名称后可继续补充到脚本。
+
+---
+
+## 二点五、服务端离线交付包
+
+可先生成服务端部署包：
+
+```powershell
+.\CAD_DB\deploy\server\package_backend.ps1 -OutDir dist -StorageBackend neo4j
+```
+
+输出：
+- `dist/DBCAD-backend-package.zip`
 
 ### 2. 客户机安装
 - 解压 zip 到任意目录
