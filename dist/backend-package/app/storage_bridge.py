@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import logging
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException, status
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -33,7 +37,7 @@ class StorageBridgeClient:
         if not trimmed:
             raise RuntimeError("CAD_DB_STORAGE_BRIDGE_URL is required when storage_backend=neo4j")
 
-        self._client = httpx.Client(base_url=trimmed, timeout=timeout_seconds)
+        self._client = httpx.Client(base_url=trimmed, timeout=timeout_seconds, trust_env=False)
 
     def close(self) -> None:
         self._client.close()
@@ -63,6 +67,45 @@ class StorageBridgeClient:
         )
 
     @staticmethod
+    def _parse_saved_version_fallback(
+        data: dict[str, Any],
+        *,
+        project_id: str,
+        author: str,
+        content: dict[str, Any],
+    ) -> VersionRecord | None:
+        version_value = data.get("version")
+        created_at_value = data.get("created_at")
+        if version_value is None or created_at_value is None:
+            return None
+
+        try:
+            version = int(version_value)
+            created_at = StorageBridgeClient._parse_datetime(str(created_at_value))
+        except Exception:
+            return None
+
+        id_value = data.get("id", 0)
+        try:
+            version_id = int(id_value)
+        except Exception:
+            version_id = 0
+
+        project_value = str(data.get("project_id") or project_id)
+        author_value = str(data.get("author") or author)
+        content_value_raw = data.get("content", content)
+        content_value = dict(content_value_raw) if isinstance(content_value_raw, dict) else dict(content)
+
+        return VersionRecord(
+            id=version_id,
+            project_id=project_value,
+            version=version,
+            author=author_value,
+            content=content_value,
+            created_at=created_at,
+        )
+
+    @staticmethod
     def _extract_detail(response: httpx.Response) -> str:
         try:
             body = response.json()
@@ -82,7 +125,15 @@ class StorageBridgeClient:
             ) from ex
 
         if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail=self._extract_detail(response))
+            detail = self._extract_detail(response)
+            logger.error(
+                "Storage bridge request failed: method=%s path=%s status=%s detail=%s",
+                method,
+                path,
+                response.status_code,
+                detail,
+            )
+            raise HTTPException(status_code=response.status_code, detail=detail)
 
         return response
 
@@ -130,18 +181,41 @@ class StorageBridgeClient:
                 "base_version": base_version,
             },
         )
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception as ex:
+            body_preview = (response.text or "").strip()
+            if len(body_preview) > 300:
+                body_preview = body_preview[:300] + "..."
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Storage bridge returned non-JSON save response: {ex}; body={body_preview!r}",
+            ) from ex
 
-        if "content" not in data:
-            latest = self.get_version_or_none(project_id, int(data["version"]))
-            if latest is None:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Storage bridge returned incomplete save response",
-                )
+        if not isinstance(data, dict):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Storage bridge returned invalid save response",
+            )
+
+        full = self._parse_saved_version_fallback(data, project_id=project_id, author=author, content=content)
+        if full is not None:
+            return full
+
+        version_value = data.get("version")
+        if isinstance(version_value, int):
+            latest = self.get_version_or_none(project_id, version_value)
+            if latest is not None:
+                return latest
+
+        latest = self.get_latest_version_or_none(project_id)
+        if latest is not None:
             return latest
 
-        return self._parse_version(data)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Storage bridge returned incomplete save response",
+        )
 
     def get_latest_version_or_none(self, project_id: str) -> VersionRecord | None:
         encoded = quote(project_id, safe="")

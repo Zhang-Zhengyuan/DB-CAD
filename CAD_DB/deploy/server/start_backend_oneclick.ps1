@@ -1,7 +1,11 @@
 param(
     [string]$HostAddress = "0.0.0.0",
     [int]$Port = 8000,
-    [switch]$BackendOnly = $false
+    [string]$StorageBridgeUrl = "",
+    [double]$StorageBridgeTimeoutSeconds = 15,
+    [string]$ApiPassword = "",
+    [switch]$SkipDependencySync = $false,
+    [switch]$SkipBridgeHealthCheck = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,7 +29,20 @@ function Validate-BackendConfig {
 
     $bridgeUrl = [Environment]::GetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL")
     if ([string]::IsNullOrWhiteSpace($bridgeUrl)) {
-        throw "Missing CAD_DB_STORAGE_BRIDGE_URL in .env"
+        throw "Missing CAD_DB_STORAGE_BRIDGE_URL. Set it in .env or pass -StorageBridgeUrl."
+    }
+}
+
+function Wait-BridgeHealth([string]$bridgeUrl) {
+    if ([string]::IsNullOrWhiteSpace($bridgeUrl)) {
+        return $false
+    }
+
+    try {
+        $response = Invoke-RestMethod -Uri "$bridgeUrl/health" -Method Get -TimeoutSec 5
+        return $response.status -eq "ok"
+    } catch {
+        return $false
     }
 }
 
@@ -45,12 +62,6 @@ function Load-EnvFile([string]$EnvFilePath) {
 }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-
-if (-not $BackendOnly -and (Test-Path (Join-Path $scriptRoot "start_fullstack_oneclick.ps1"))) {
-    Write-Host "[INFO] Fullstack mode detected. Delegating to start_fullstack_oneclick.ps1 ..."
-    & (Join-Path $scriptRoot "start_fullstack_oneclick.ps1") -FastApiHost $HostAddress -FastApiPort $Port
-    exit $LASTEXITCODE
-}
 
 $candidateRoots = @(
     $scriptRoot,
@@ -72,11 +83,39 @@ if ($null -eq $backendRoot) {
 Ensure-Uv
 Set-Location $backendRoot
 
+Load-EnvFile (Join-Path $scriptRoot ".env")
 Load-EnvFile (Join-Path $backendRoot ".env")
+
+if (-not [string]::IsNullOrWhiteSpace($StorageBridgeUrl)) {
+    [Environment]::SetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL", $StorageBridgeUrl)
+}
+if ($StorageBridgeTimeoutSeconds -gt 0) {
+    [Environment]::SetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_TIMEOUT_SECONDS", [string]$StorageBridgeTimeoutSeconds)
+}
+if (-not [string]::IsNullOrWhiteSpace($ApiPassword)) {
+    [Environment]::SetEnvironmentVariable("CAD_DB_API_PASSWORD", $ApiPassword)
+}
+
 Validate-BackendConfig
 
-Write-Host "[INFO] Syncing dependencies with uv..."
-uv sync
+if (-not $SkipDependencySync) {
+    Write-Host "[INFO] Syncing dependencies with uv..."
+    uv sync
+} else {
+    Write-Host "[INFO] Skip dependency sync (-SkipDependencySync)."
+}
+
+$resolvedBridgeUrl = [Environment]::GetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL")
+Write-Host "[INFO] Storage bridge URL: $resolvedBridgeUrl"
+if (-not $SkipBridgeHealthCheck) {
+    if (Wait-BridgeHealth -bridgeUrl $resolvedBridgeUrl) {
+        Write-Host "[OK] Bridge health check passed: $resolvedBridgeUrl/health"
+    } else {
+        Write-Warning "Bridge health check failed: $resolvedBridgeUrl/health"
+        Write-Warning "FastAPI will still start, but storage APIs may return 502 until bridge is healthy."
+    }
+}
 
 Write-Host "[INFO] Starting backend: http://${HostAddress}:${Port}"
+Write-Host "[INFO] Swagger docs: http://127.0.0.1:${Port}/docs"
 uv run uvicorn app.main:app --host $HostAddress --port $Port

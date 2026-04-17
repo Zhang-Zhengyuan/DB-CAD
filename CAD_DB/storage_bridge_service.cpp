@@ -8,12 +8,11 @@
 #include <QJsonObject>
 #include <QTcpServer>
 #include <QTcpSocket>
-#include <QTemporaryFile>
 #include <QUrl>
 #include <QUrlQuery>
-#include <QUuid>
 
 #include <algorithm>
+#include <cstdio>
 #include <stdexcept>
 
 #include <acis/include/alltop.hxx>
@@ -134,23 +133,43 @@ bool saveSatToPart(
     const QString& partName,
     const QString& sat,
     QString& error) {
-    QTemporaryFile tempFile;
-    tempFile.setAutoRemove(true);
-    if (!tempFile.open()) {
-        error = QString::fromUtf8("Failed to create temporary SAT file");
+    FILE* satStream = nullptr;
+#ifdef _WIN32
+    if (tmpfile_s(&satStream) != 0 || satStream == nullptr) {
+        error = QString::fromUtf8("Failed to create temporary SAT stream");
         return false;
     }
+#else
+    satStream = tmpfile();
+    if (satStream == nullptr) {
+        error = QString::fromUtf8("Failed to create temporary SAT stream");
+        return false;
+    }
+#endif
+
+    const auto closeSatStream = [&]() {
+        if (satStream != nullptr) {
+            fclose(satStream);
+            satStream = nullptr;
+        }
+    };
 
     const QByteArray satBytes = sat.toUtf8();
-    if (tempFile.write(satBytes) != satBytes.size()) {
-        error = QString::fromUtf8("Failed to write SAT content");
+    if (satBytes.isEmpty() || fwrite(satBytes.constData(), 1, static_cast<size_t>(satBytes.size()), satStream) != static_cast<size_t>(satBytes.size())) {
+        error = QString::fromUtf8("Failed to write SAT content to temporary stream");
+        closeSatStream();
         return false;
     }
-    tempFile.flush();
+    if (fflush(satStream) != 0 || fseek(satStream, 0, SEEK_SET) != 0) {
+        error = QString::fromUtf8("Failed to rewind temporary SAT stream");
+        closeSatStream();
+        return false;
+    }
 
     ENTITY_LIST entityList;
+
     try {
-        acis_restore_entity_list(entityList, tempFile.fileName().toStdString().c_str(), 2, 0, true);
+        acis_restore_entity_list(entityList, satStream, 2, 0, true);
         Neo4jPart conn(
             host.toStdString().c_str(),
             port,
@@ -160,9 +179,11 @@ bool saveSatToPart(
         api_save_entity_list_neo4j_part(conn, entityList);
     } catch (const std::exception& ex) {
         error = QString::fromUtf8(ex.what());
+        closeSatStream();
         return false;
     }
 
+    closeSatStream();
     return true;
 }
 
@@ -174,12 +195,26 @@ bool loadSatFromPart(
     const QString& partName,
     QString& sat,
     QString& error) {
-    QTemporaryFile tempFile;
-    tempFile.setAutoRemove(true);
-    if (!tempFile.open()) {
-        error = QString::fromUtf8("Failed to create temporary SAT file");
+    FILE* satStream = nullptr;
+#ifdef _WIN32
+    if (tmpfile_s(&satStream) != 0 || satStream == nullptr) {
+        error = QString::fromUtf8("Failed to create temporary SAT stream");
         return false;
     }
+#else
+    satStream = tmpfile();
+    if (satStream == nullptr) {
+        error = QString::fromUtf8("Failed to create temporary SAT stream");
+        return false;
+    }
+#endif
+
+    const auto closeSatStream = [&]() {
+        if (satStream != nullptr) {
+            fclose(satStream);
+            satStream = nullptr;
+        }
+    };
 
     try {
         Neo4jPart conn(
@@ -196,19 +231,40 @@ bool loadSatFromPart(
 
         ENTITY_LIST entityList;
         api_restore_entity_list_neo4j_part(conn, entityList);
-        acis_save_entity_list(entityList, tempFile.fileName().toStdString().c_str(), 2, 0, true);
+        acis_save_entity_list(satStream, entityList, 2, 0, true);
     } catch (const std::exception& ex) {
         error = QString::fromUtf8(ex.what());
+        closeSatStream();
         return false;
     }
 
-    QFile satFile(tempFile.fileName());
-    if (!satFile.open(QIODevice::ReadOnly)) {
-        error = QString::fromUtf8("Failed to read generated SAT content");
+    if (fflush(satStream) != 0 || fseek(satStream, 0, SEEK_SET) != 0) {
+        error = QString::fromUtf8("Failed to rewind generated SAT stream");
+        closeSatStream();
         return false;
     }
 
-    sat = QString::fromUtf8(satFile.readAll());
+    QByteArray satBytes;
+    char buffer[8192];
+    while (true) {
+        const size_t n = fread(buffer, 1, sizeof(buffer), satStream);
+        if (n > 0) {
+            satBytes.append(buffer, static_cast<int>(n));
+        }
+        if (n < sizeof(buffer)) {
+            if (feof(satStream)) {
+                break;
+            }
+            if (ferror(satStream)) {
+                error = QString::fromUtf8("Failed to read generated SAT stream");
+                closeSatStream();
+                return false;
+            }
+        }
+    }
+
+    sat = QString::fromUtf8(satBytes);
+    closeSatStream();
     return true;
 }
 
