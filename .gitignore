@@ -4,3 +4,15 @@ x86/
 DBCAD/x64/
 DBCAD/x86/
 *.sat
+
+# Packaging artifacts and legacy outputs
+dist/
+dist_fixed/
+backend-package/
+
+# Runtime noise
+**/__pycache__/
+*.pyc
+**/logs/
+fastapi_error.log
+
