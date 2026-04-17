@@ -18,7 +18,11 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QDialogButtonBox>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSpinBox>
+#include <QUrl>
+#include <QtWebSockets/QWebSocket>
 #include <fstream>
 #include <sstream>
 
@@ -143,6 +147,7 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (maybeSave()) {
         event->accept();
+        disconnectFastAPISync();
         if (curWindow) {
             curWindow->close();
         }
@@ -187,6 +192,146 @@ void MainWindow::setFastAPIConnectInfo() {
     }
 }
 
+bool MainWindow::restoreFastAPIModelFromSat(const QString& satContent) {
+    if (curWindow == nullptr) {
+        addWindow();
+    }
+
+    QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_load_XXXXXX.sat");
+    tempFile.setAutoRemove(true);
+    if (!tempFile.open()) {
+        QMessageBox::warning(this, tr("DBCAD"), tr("无法创建临时文件用于恢复FastAPI模型"));
+        return false;
+    }
+
+    QByteArray satBytes = satContent.toUtf8();
+    if (tempFile.write(satBytes) != satBytes.size()) {
+        QMessageBox::warning(this, tr("DBCAD"), tr("写入临时SAT文件失败"));
+        return false;
+    }
+
+    tempFile.flush();
+    std::string tempPath = tempFile.fileName().toStdString();
+    FILE* f = fopen(tempPath.c_str(), "r");
+    if (!f) {
+        QMessageBox::warning(this, tr("DBCAD"), tr("无法读取临时SAT文件"));
+        return false;
+    }
+
+    ENTITY_LIST el;
+    API_BEGIN;
+    api_save_version(2, 0);
+    result = api_restore_entity_list(f, true, el);
+    API_END;
+    fclose(f);
+
+    for (int i = 0; i < el.count(); i++) {
+        curWindow->addEntity(el[i], tr("导入(FastAPI)实体%1").arg(i).toStdString(), -1);
+    }
+    return true;
+}
+
+void MainWindow::disconnectFastAPISync() {
+    if (fastapiSyncSocket != nullptr) {
+        fastapiSyncSocket->close();
+        fastapiSyncSocket->deleteLater();
+        fastapiSyncSocket = nullptr;
+    }
+}
+
+void MainWindow::reconnectFastAPISync() {
+    disconnectFastAPISync();
+
+    if (fastapi_project_id.isEmpty() || fastapi_base_url.empty()) {
+        return;
+    }
+
+    QString wsBaseUrl = QString::fromStdString(fastapi_base_url).trimmed();
+    while (wsBaseUrl.endsWith('/')) {
+        wsBaseUrl.chop(1);
+    }
+    if (wsBaseUrl.startsWith("https://")) {
+        wsBaseUrl.replace(0, 5, "wss");
+    } else if (wsBaseUrl.startsWith("http://")) {
+        wsBaseUrl.replace(0, 4, "ws");
+    } else if (!wsBaseUrl.startsWith("ws://") && !wsBaseUrl.startsWith("wss://")) {
+        wsBaseUrl = "ws://" + wsBaseUrl;
+    }
+
+    const QUrl wsUrl(wsBaseUrl + "/ws/projects/" + fastapi_project_id);
+    fastapiSyncSocket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+
+    connect(fastapiSyncSocket, &QWebSocket::textMessageReceived, this, &MainWindow::handleFastAPISyncMessage);
+    connect(fastapiSyncSocket, &QWebSocket::connected, this, [this]() {
+        statusBar()->showMessage(tr("FastAPI实时同步已连接"), 2000);
+    });
+    connect(fastapiSyncSocket, &QWebSocket::disconnected, this, [this]() {
+        if (!fastapi_project_id.isEmpty()) {
+            statusBar()->showMessage(tr("FastAPI实时同步已断开"), 2000);
+        }
+    });
+
+    fastapiSyncSocket->open(wsUrl);
+}
+
+void MainWindow::handleFastAPISyncMessage(const QString& message) {
+    if (fastapi_project_id.isEmpty()) {
+        return;
+    }
+
+    QAction* checkedAct = setModeActGroup ? setModeActGroup->checkedAction() : nullptr;
+    if (checkedAct != setFASTAPIModeAct) {
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(message.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        return;
+    }
+
+    const QJsonObject root = document.object();
+    if (root.value("type").toString() != "model_saved") {
+        return;
+    }
+
+    const QString projectId = root.value("project_id").toString();
+    if (projectId != fastapi_project_id) {
+        return;
+    }
+
+    const int remoteVersion = root.value("version").toInt(0);
+    if (remoteVersion <= fastapi_model_version) {
+        return;
+    }
+
+    if (curWindow == nullptr) {
+        return;
+    }
+
+    if (curWindow->getIsModified()) {
+        statusBar()->showMessage(tr("检测到远程新版本%1，当前有未保存修改，暂不自动更新").arg(remoteVersion), 4000);
+        return;
+    }
+
+    BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author));
+    auto model = client.getModelVersion(projectId, remoteVersion);
+    if (!model.has_value()) {
+        statusBar()->showMessage(tr("远程同步失败：%1").arg(client.lastError()), 4000);
+        return;
+    }
+
+    curWindow->clear();
+    if (!restoreFastAPIModelFromSat(model->sat)) {
+        return;
+    }
+
+    fastapi_model_version = model->version;
+    setCurrentPartName(fastapi_project_name);
+    curWindow->setIsModified(false);
+    statusBar()->showMessage(tr("已同步远程最新版本：%1").arg(fastapi_model_version), 4000);
+}
+
 void MainWindow::addWindow() {
     if (!centralWidget()) {
         curWindow = new Window(this);
@@ -206,14 +351,6 @@ void MainWindow::open() {
             QDateTime curDateTime = QDateTime::currentDateTime();
             QString curDateTime_qstr = QString("part") + curDateTime.toString("yyyyMMddhhmmss");  // 保存零件对话框的默认零件名是part+当前年月日时分秒
             QString partnametext = QInputDialog::getText(this, tr("打开零件(neo4j)"), tr("请输入打开的零件名:"), QLineEdit::Normal, curDateTime_qstr, &ok, this->windowFlags() | Qt::MSWindowsFixedSizeDialogHint);
-            if (ok && !partnametext.isEmpty()) {
-                loadFile(partnametext);
-            }
-        } else if (checkedAct == setMEMGRAPHModeAct) {
-            bool ok;
-            QDateTime curDateTime = QDateTime::currentDateTime();
-            QString curDateTime_qstr = QString("part") + curDateTime.toString("yyyyMMddhhmmss");  // 保存零件对话框的默认零件名是part+当前年月日时分秒
-            QString partnametext = QInputDialog::getText(this, tr("打开零件(memgraph)"), tr("请输入打开的零件名:"), QLineEdit::Normal, curDateTime_qstr, &ok, this->windowFlags() | Qt::MSWindowsFixedSizeDialogHint);
             if (ok && !partnametext.isEmpty()) {
                 loadFile(partnametext);
             }
@@ -381,7 +518,7 @@ bool MainWindow::save() {
             return saveFile(curWindow->getCurFile());
         }
     } else {
-        assert(checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct || checkedAct == setMEMGRAPHModeAct || checkedAct == setFASTAPIModeAct);
+        assert(checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct || checkedAct == setFASTAPIModeAct);
         if (curWindow->getCurPartName().isEmpty()) {
             return saveAs();
         } else {
@@ -485,7 +622,7 @@ bool MainWindow::saveAs() {
         if (dialog.exec() != QDialog::Accepted) return false;
         return saveFile(dialog.selectedFiles().first());
     } else {
-        assert(checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct || checkedAct == setMEMGRAPHModeAct || checkedAct == setFASTAPIModeAct);
+        assert(checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct || checkedAct == setFASTAPIModeAct);
         bool ok;
         QDateTime curDateTime = QDateTime::currentDateTime();
         QString curDateTime_qstr = QString("part") + curDateTime.toString("yyyyMMddhhmmss");  // 保存零件对话框的默认零件名是part+当前年月日时分秒
@@ -755,11 +892,6 @@ void MainWindow::createActions() {
     setNEO4JIncrementalModeAct->setCheckable(true);
     settingsMenu->addAction(setNEO4JIncrementalModeAct);
 
-    setMEMGRAPHModeAct = new QAction(tr("memgraph内存图数据全量存取(&M)"), this);
-    setMEMGRAPHModeAct->setStatusTip(tr("全量存取为memgraph内存图数据，通过Bolt协议连接到memgraph内存图数据库"));
-    setMEMGRAPHModeAct->setCheckable(true);
-    settingsMenu->addAction(setMEMGRAPHModeAct);
-
     setFASTAPIModeAct = new QAction(tr("FastAPI远程版本存取(&F)"), this);
     setFASTAPIModeAct->setStatusTip(tr("通过HTTP连接FastAPI后端，进行模型版本化远程存取"));
     setFASTAPIModeAct->setCheckable(true);
@@ -770,7 +902,6 @@ void MainWindow::createActions() {
     setModeActGroup->addAction(setACISModeAct);
     setModeActGroup->addAction(setNEO4JModeAct);
     setModeActGroup->addAction(setNEO4JIncrementalModeAct);
-    setModeActGroup->addAction(setMEMGRAPHModeAct);
     setModeActGroup->addAction(setFASTAPIModeAct);
     setACISModeAct->setChecked(true);
 
@@ -992,59 +1123,17 @@ void MainWindow::loadFile(const QString& fileName) {
                 auto model = client.getLatestModel(project->id);
                 if (!model.has_value()) {
                     QMessageBox::warning(this, tr("DBCAD"), client.lastError());
-                } else {
-                    QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_load_XXXXXX.sat");
-                    tempFile.setAutoRemove(true);
-                    if (!tempFile.open()) {
-                        QMessageBox::warning(this, tr("DBCAD"), tr("无法创建临时文件用于恢复FastAPI模型"));
-                    } else {
-                        QByteArray satBytes = model->sat.toUtf8();
-                        if (tempFile.write(satBytes) != satBytes.size()) {
-                            QMessageBox::warning(this, tr("DBCAD"), tr("写入临时SAT文件失败"));
-                        } else {
-                            tempFile.flush();
-                            std::string tempPath = tempFile.fileName().toStdString();
-                            FILE* f = fopen(tempPath.c_str(), "r");
-                            if (!f) {
-                                QMessageBox::warning(this, tr("DBCAD"), tr("无法读取临时SAT文件"));
-                            } else {
-                                ENTITY_LIST el;
-                                API_BEGIN;
-                                api_save_version(2, 0);
-                                result = api_restore_entity_list(f, true, el);
-                                API_END;
-                                fclose(f);
-
-                                for (int i = 0; i < el.count(); i++) {
-                                    curWindow->addEntity(el[i], tr("导入(FastAPI)实体%1").arg(i).toStdString(), -1);
-                                }
-
-                                fastapi_project_id = project->id;
-                                fastapi_model_version = model->version;
-                                isRead = true;
-                            }
-                        }
-                    }
+                } else if (restoreFastAPIModelFromSat(model->sat)) {
+                    fastapi_project_id = project->id;
+                    fastapi_project_name = fileName;
+                    fastapi_model_version = model->version;
+                    reconnectFastAPISync();
+                    isRead = true;
                 }
             }
         }
     } else {
-        //assert(checkedAct == setMEMGRAPHModeAct);
-        //Neo4jPart f(memgraphdb_host.c_str(), memgraphdb_port_bolt, memgraphdb_username.c_str(), memgraphdb_password.c_str(), fileName.toStdString());
-        //int64_t countn = count_partnode(f);
-        //if (countn == 1) {
-        //    ENTITY_LIST el;
-        //    API_BEGIN;
-        //    //api_restore_entity_list_memgraph_part(f, el);
-        //    API_END;
-        //    for (int i = 0; i < el.count(); i++) curWindow->addEntity(el[i], tr("导入(memgraph)实体%1").arg(i).toStdString(), -1);
-        //    isRead = true;
-        //} else if (countn == 0) {
-        //    QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(memgraph)不存在。").arg(QString(fileName)));
-        //} else {
-        //    assert(countn > 1);
-        //    QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(memgraph)不唯一。").arg(QString(fileName)));
-        //}
+        throw std::runtime_error("不支持的加载模式");
     }
 
 #ifndef QT_NO_CURSOR
@@ -1052,18 +1141,24 @@ void MainWindow::loadFile(const QString& fileName) {
 #endif
     if (isRead) {
         if (checkedAct == setACISModeAct) {
+            disconnectFastAPISync();
+            fastapi_project_id.clear();
+            fastapi_project_name.clear();
+            fastapi_model_version = 0;
             setCurrentFile(fileName);
             statusBar()->showMessage(tr("文件已导入"), 2000);
         } else if (checkedAct == setNEO4JModeAct) {
+            disconnectFastAPISync();
+            fastapi_project_id.clear();
+            fastapi_project_name.clear();
+            fastapi_model_version = 0;
             setCurrentPartName(fileName);
             statusBar()->showMessage(tr("零件已导入(neo4j)"), 2000);
         } else if (checkedAct == setFASTAPIModeAct) {
             setCurrentPartName(fileName);
             statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(fastapi_model_version), 3000);
         } else {
-            assert(checkedAct == setMEMGRAPHModeAct);
-            setCurrentPartName(fileName);
-            statusBar()->showMessage(tr("零件已导入(memgraph)"), 2000);
+            throw std::runtime_error("不支持的加载模式");
         }
     }
 }
@@ -1113,39 +1208,12 @@ void MainWindow::loadFile(const QString& partName, const int generation) {
                 auto model = client.getModelVersion(project->id, generation);
                 if (!model.has_value()) {
                     QMessageBox::warning(this, tr("DBCAD"), client.lastError());
-                } else {
-                    QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_load_XXXXXX.sat");
-                    tempFile.setAutoRemove(true);
-                    if (!tempFile.open()) {
-                        QMessageBox::warning(this, tr("DBCAD"), tr("无法创建临时文件用于恢复FastAPI模型"));
-                    } else {
-                        QByteArray satBytes = model->sat.toUtf8();
-                        if (tempFile.write(satBytes) != satBytes.size()) {
-                            QMessageBox::warning(this, tr("DBCAD"), tr("写入临时SAT文件失败"));
-                        } else {
-                            tempFile.flush();
-                            std::string tempPath = tempFile.fileName().toStdString();
-                            FILE* f = fopen(tempPath.c_str(), "r");
-                            if (!f) {
-                                QMessageBox::warning(this, tr("DBCAD"), tr("无法读取临时SAT文件"));
-                            } else {
-                                ENTITY_LIST el;
-                                API_BEGIN;
-                                api_save_version(2, 0);
-                                result = api_restore_entity_list(f, true, el);
-                                API_END;
-                                fclose(f);
-
-                                for (int i = 0; i < el.count(); i++) {
-                                    curWindow->addEntity(el[i], tr("导入(FastAPI)实体%1").arg(i).toStdString(), -1);
-                                }
-
-                                fastapi_project_id = project->id;
-                                fastapi_model_version = model->version;
-                                isRead = true;
-                            }
-                        }
-                    }
+                } else if (restoreFastAPIModelFromSat(model->sat)) {
+                    fastapi_project_id = project->id;
+                    fastapi_project_name = partName;
+                    fastapi_model_version = model->version;
+                    reconnectFastAPISync();
+                    isRead = true;
                 }
             }
         }
@@ -1161,6 +1229,10 @@ void MainWindow::loadFile(const QString& partName, const int generation) {
         if (checkedAct == setFASTAPIModeAct) {
             statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(fastapi_model_version), 3000);
         } else {
+            disconnectFastAPISync();
+            fastapi_project_id.clear();
+            fastapi_project_name.clear();
+            fastapi_model_version = 0;
             statusBar()->showMessage(tr("零件已导入(neo4j)"), 2000);
         }
     }
@@ -1253,7 +1325,9 @@ bool MainWindow::saveFile(const QString& fileName) {
                                 errorMessage = client.lastError();
                             } else {
                                 fastapi_project_id = project->id;
+                                fastapi_project_name = fileName;
                                 fastapi_model_version = *newVersion;
+                                reconnectFastAPISync();
                             }
                         }
                     }
@@ -1262,11 +1336,6 @@ bool MainWindow::saveFile(const QString& fileName) {
         }
     } else {
         throw std::runtime_error("Cannot find the enum");
-        //assert(checkedAct == setMEMGRAPHModeAct);
-        //Neo4jPart f(memgraphdb_host.c_str(), memgraphdb_port_bolt, memgraphdb_username.c_str(), memgraphdb_password.c_str(), fileName.toStdString());
-        //ENTITY_LIST el;
-        //acis_get_noattrib_toplevel_active_entities(el);
-        ////api_save_entity_list_memgraph_part(f, el);
     }
 
     QGuiApplication::restoreOverrideCursor();
@@ -1278,18 +1347,24 @@ bool MainWindow::saveFile(const QString& fileName) {
         curWindow->setIsModified(false);
 
     if (checkedAct == setACISModeAct) {
+        disconnectFastAPISync();
+        fastapi_project_id.clear();
+        fastapi_project_name.clear();
+        fastapi_model_version = 0;
         setCurrentFile(fileName);
         statusBar()->showMessage(tr("文件已保存"), 2000);
     } else if (checkedAct == setFASTAPIModeAct) {
         setCurrentPartName(fileName);
         statusBar()->showMessage(tr("零件已保存(FastAPI)，版本%1").arg(fastapi_model_version), 3000);
     } else if (checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct) {
+        disconnectFastAPISync();
+        fastapi_project_id.clear();
+        fastapi_project_name.clear();
+        fastapi_model_version = 0;
         setCurrentPartName(fileName);
         statusBar()->showMessage(tr("零件已保存(neo4j)"), 2000);
     } else {
-        assert(checkedAct == setMEMGRAPHModeAct);
-        setCurrentPartName(fileName);
-        statusBar()->showMessage(tr("零件已保存(memgraph)"), 2000);
+        throw std::runtime_error("不支持的保存模式");
     }
     return true;
 }

@@ -50,6 +50,7 @@ class Window;
 class HISTORY_STREAM;
 class DELTA_STATE;
 class BULLETIN_BOARD;
+class QWebSocket;
 
 typedef outcome(*GME_fp)(ENTITY_LIST&, AcisOptions*);
 
@@ -122,6 +123,10 @@ private:
     void createStatusBar();
     bool maybeSave();
     bool saveFile(const QString& fileName);
+    bool restoreFastAPIModelFromSat(const QString& satContent);
+    void reconnectFastAPISync();
+    void disconnectFastAPISync();
+    void handleFastAPISyncMessage(const QString& message);
     void setCurrentFile(const QString& fileName);
     void setCurrentPartName(const QString& partName);
 
@@ -129,7 +134,6 @@ private:
     QAction* setACISModeAct;
     QAction* setNEO4JModeAct;
     QAction* setNEO4JIncrementalModeAct;
-    QAction* setMEMGRAPHModeAct;
     QAction* setFASTAPIModeAct;
     QActionGroup* setModeActGroup;
     std::string neo4jdb_host;
@@ -139,5 +143,7 @@ private:
     std::string fastapi_base_url;
     std::string fastapi_author;
     QString fastapi_project_id;
+    QString fastapi_project_name;
     int fastapi_model_version = 0;
+    QWebSocket* fastapiSyncSocket = nullptr;
 };

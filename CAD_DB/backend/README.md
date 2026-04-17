@@ -24,6 +24,15 @@
 3. 打开文档
    - Swagger: `http://localhost:8000/docs`
 
+## 跨电脑部署
+- 后端机器启动：
+  - `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+- 前端机器 `fastapi_connect_info.conf` 填后端地址，例如：
+  - `http://192.168.1.100:8000`
+- 需放通网络策略：
+  - HTTP 端口（默认 8000）
+  - WebSocket 路径：`/ws/projects/{project_id}`（与 HTTP 同端口）
+
 ## 核心 API
 - `POST /projects` 创建项目
 - `GET /projects/{project_id}` 查询项目
