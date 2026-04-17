@@ -13,20 +13,34 @@ $ErrorActionPreference = "Stop"
 function Ensure-Uv {
     $uvCmd = Get-Command uv -ErrorAction SilentlyContinue
     if ($null -eq $uvCmd) {
-        Write-Host "[INFO] uv 未安装，正在安装..."
+        Write-Host "[INFO] uv is not installed. Installing..."
         powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
         $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
     }
 }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$backendRoot = Resolve-Path (Join-Path $scriptRoot "..\..\backend")
+$candidateRoots = @(
+    $scriptRoot,
+    (Join-Path $scriptRoot "..\..\backend")
+)
+
+$backendRoot = $null
+foreach ($candidate in $candidateRoots) {
+    if ((Test-Path (Join-Path $candidate "app\main.py")) -and (Test-Path (Join-Path $candidate "pyproject.toml"))) {
+        $backendRoot = (Resolve-Path $candidate).Path
+        break
+    }
+}
+if ($null -eq $backendRoot) {
+    throw "Cannot locate backend root. Expected app/main.py and pyproject.toml near script."
+}
 
 Ensure-Uv
 
 Set-Location $backendRoot
 
-Write-Host "[INFO] 使用 uv 创建并同步环境..."
+Write-Host "[INFO] Syncing environment with uv..."
 uv sync
 
 $env:CAD_DB_STORAGE_BACKEND = $StorageBackend
@@ -37,5 +51,5 @@ if ($StorageBackend -eq "neo4j") {
     $env:CAD_DB_NEO4J_DATABASE = $Neo4jDatabase
 }
 
-Write-Host "[INFO] 启动后端服务: http://${HostAddress}:${Port}"
+Write-Host "[INFO] Starting backend: http://${HostAddress}:${Port}"
 uv run uvicorn app.main:app --host $HostAddress --port $Port

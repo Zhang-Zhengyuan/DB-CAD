@@ -169,6 +169,7 @@
     <None Include="deploy\server\check_backend.ps1" />
     <None Include="deploy\server\deploy_backend_uv.ps1" />
     <None Include="deploy\server\package_backend.ps1" />
+    <None Include="deploy\server\set_neo4j_password.ps1" />
     <None Include="deploy\server\start_backend_oneclick.cmd" />
     <None Include="deploy\server\start_backend_oneclick.ps1" />
     <None Include="fastapi_connect_info.conf" />

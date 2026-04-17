@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
 $envFile = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".env"
 if (!(Test-Path $envFile)) {
     throw ".env file not found: $envFile"

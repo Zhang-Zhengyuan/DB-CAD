@@ -5,6 +5,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+
 function Ensure-Uv {
     $uvCmd = Get-Command uv -ErrorAction SilentlyContinue
     if ($null -eq $uvCmd) {
@@ -31,14 +33,16 @@ function Validate-BackendConfig {
 
     if ($storage.ToLower() -eq "neo4j") {
         $pwd = [Environment]::GetEnvironmentVariable("CAD_DB_NEO4J_PASSWORD")
-        if ([string]::IsNullOrWhiteSpace($pwd) -or $pwd -eq "change_me") {
-            throw "Invalid Neo4j password in .env. Please edit CAD_DB_NEO4J_PASSWORD before start."
+        $placeholders = @("change_me", "your_password", "password", "neo4j")
+        if ([string]::IsNullOrWhiteSpace($pwd) -or ($placeholders -contains $pwd.ToLower())) {
+            throw "Invalid Neo4j password in .env. Please set CAD_DB_NEO4J_PASSWORD to the real password before start."
         }
     }
 }
 
 Ensure-Uv
-Load-EnvFile (Join-Path (Get-Location) ".env")
+Set-Location $scriptRoot
+Load-EnvFile (Join-Path $scriptRoot ".env")
 Validate-BackendConfig
 uv sync
 uv run uvicorn app.main:app --host $HostAddress --port $Port

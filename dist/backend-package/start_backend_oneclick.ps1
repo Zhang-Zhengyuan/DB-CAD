@@ -8,10 +8,11 @@ $ErrorActionPreference = "Stop"
 function Ensure-Uv {
     $uvCmd = Get-Command uv -ErrorAction SilentlyContinue
     if ($null -eq $uvCmd) {
-        Write-Host "[INFO] uv 未安装，正在安装..."
+        Write-Host "[INFO] uv is not installed. Installing..."
         powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
         $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
     }
+}
 
 function Validate-BackendConfig {
     $storage = [Environment]::GetEnvironmentVariable("CAD_DB_STORAGE_BACKEND")
@@ -19,11 +20,11 @@ function Validate-BackendConfig {
 
     if ($storage.ToLower() -eq "neo4j") {
         $pwd = [Environment]::GetEnvironmentVariable("CAD_DB_NEO4J_PASSWORD")
-        if ([string]::IsNullOrWhiteSpace($pwd) -or $pwd -eq "change_me") {
-            throw "Invalid Neo4j password in .env. Please edit CAD_DB_NEO4J_PASSWORD before start."
+        $placeholders = @("change_me", "your_password", "password", "neo4j")
+        if ([string]::IsNullOrWhiteSpace($pwd) -or ($placeholders -contains $pwd.ToLower())) {
+            throw "Invalid Neo4j password in .env. Please set CAD_DB_NEO4J_PASSWORD to the real password before start."
         }
     }
-}
 }
 
 function Load-EnvFile([string]$EnvFilePath) {
@@ -42,8 +43,8 @@ function Load-EnvFile([string]$EnvFilePath) {
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $candidateRoots = @(
-    (Join-Path $scriptRoot "..\..\backend"),
-    $scriptRoot
+    $scriptRoot,
+    (Join-Path $scriptRoot "..\..\backend")
 )
 
 $backendRoot = $null
@@ -64,8 +65,8 @@ Set-Location $backendRoot
 Load-EnvFile (Join-Path $backendRoot ".env")
 Validate-BackendConfig
 
-Write-Host "[INFO] 使用 uv 同步依赖..."
+Write-Host "[INFO] Syncing dependencies with uv..."
 uv sync
 
-Write-Host "[INFO] 后端启动: http://${HostAddress}:${Port}"
+Write-Host "[INFO] Starting backend: http://${HostAddress}:${Port}"
 uv run uvicorn app.main:app --host $HostAddress --port $Port
