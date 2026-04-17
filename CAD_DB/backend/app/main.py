@@ -1,6 +1,7 @@
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
@@ -133,6 +134,26 @@ async def save_model(
     return schemas.SaveResult(version=version.version, created_at=version.created_at)
 
 
+async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, trigger: str) -> None:
+    try:
+        latest = crud.get_latest_version_or_404(project_id)
+    except HTTPException as ex:
+        if ex.status_code == status.HTTP_404_NOT_FOUND:
+            return
+        raise
+
+    await websocket.send_json(
+        {
+            "type": "model_saved",
+            "project_id": project_id,
+            "version": latest.version,
+            "author": latest.author,
+            "created_at": latest.created_at.isoformat(),
+            "trigger": trigger,
+        }
+    )
+
+
 @app.get("/projects/{project_id}/models/latest", response_model=schemas.ModelVersionRead)
 def get_latest_model(
     project_id: str,
@@ -169,9 +190,48 @@ async def ws_project_sync(websocket: WebSocket, project_id: str) -> None:
         await websocket.close(code=1008)
         return
 
-    await sync_manager.connect(project_id, websocket)
+    client_id = websocket.query_params.get("client_id") or uuid4().hex
+    author = (websocket.query_params.get("author") or "anonymous").strip() or "anonymous"
+
+    await sync_manager.connect(project_id, websocket, client_id=client_id, author=author)
     try:
+        members = await sync_manager.list_members(project_id)
+        await websocket.send_json(
+            {
+                "type": "presence_snapshot",
+                "project_id": project_id,
+                "self": {"client_id": client_id, "author": author},
+                "members": members,
+            }
+        )
+        await sync_manager.broadcast(
+            project_id,
+            {
+                "type": "collaborator_joined",
+                "project_id": project_id,
+                "client_id": client_id,
+                "author": author,
+            },
+            exclude_client_id=client_id,
+        )
+
+        await _send_latest_model_saved_event(project_id, websocket, trigger="snapshot")
         while True:
-            await websocket.receive_text()
+            message = await websocket.receive_text()
+            normalized = message.strip().lower()
+            if normalized == "sync_now":
+                await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now")
+            elif normalized == "ping":
+                await websocket.send_json({"type": "pong", "project_id": project_id})
     except WebSocketDisconnect:
-        await sync_manager.disconnect(project_id, websocket)
+        disconnected = await sync_manager.disconnect(project_id, websocket)
+        if disconnected is not None:
+            await sync_manager.broadcast(
+                project_id,
+                {
+                    "type": "collaborator_left",
+                    "project_id": project_id,
+                    "client_id": disconnected["client_id"],
+                    "author": disconnected["author"],
+                },
+            )

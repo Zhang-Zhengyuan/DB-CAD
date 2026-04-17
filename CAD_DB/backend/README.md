@@ -6,6 +6,7 @@
 - 版本冲突检测（`base_version`）
 - 最新版本与历史版本查询
 - WebSocket 同步通知（模型保存后广播）
+- WebSocket 多客户端协作：在线成员快照、成员加入/离开事件、按需同步（`sync_now`）
 - Python 仅作为服务层，底层存储由 C++ Storage Bridge + Neo4j 实现
 
 ## 快速启动（推荐 uv）
@@ -47,6 +48,9 @@
 - `GET /projects/{project_id}/models/versions` 分页列出版本
 - `GET /health` 健康检查
 - `WS /ws/projects/{project_id}` 订阅项目更新
+  - 查询参数支持：`client_id`、`author`、`password`
+  - 客户端消息：`sync_now`（请求最新版本事件）、`ping`（心跳）
+  - 服务端事件：`presence_snapshot`、`collaborator_joined`、`collaborator_left`、`model_saved`、`pong`
 
 ## 存储架构（关键）
 FastAPI 不直接操作 Neo4j 几何存储，必须通过 C++ Storage Bridge。后端只支持 Neo4j 路径。

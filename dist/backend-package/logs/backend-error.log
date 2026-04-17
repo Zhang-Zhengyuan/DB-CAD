@@ -8,3 +8,23 @@
 2026-04-17 18:01:53,737 INFO [httpx] HTTP Request: POST http://127.0.0.1:8100/projects/63297a22-2bbe-4128-a5c9-59f49d01063b/models "HTTP/1.1 201 Created"
 2026-04-17 18:01:53,813 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/projects/63297a22-2bbe-4128-a5c9-59f49d01063b "HTTP/1.1 200 OK"
 2026-04-17 18:01:54,073 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/projects/63297a22-2bbe-4128-a5c9-59f49d01063b/models/3 "HTTP/1.1 200 OK"
+2026-04-17 18:03:55,164 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/health "HTTP/1.1 200 OK"
+2026-04-17 18:03:55,165 INFO [app.main] Backend startup completed, log file: C:\Users\17126\source\repos\cad-db-store-develop\dist\backend-package\logs\backend-error.log
+2026-04-17 18:04:02,387 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/projects/by-name/part20260417180401 "HTTP/1.1 404 Not Found"
+2026-04-17 18:04:02,388 ERROR [app.storage_bridge] Storage bridge request failed: method=GET path=/projects/by-name/part20260417180401 status=404 detail=Project not found
+2026-04-17 18:04:02,422 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/projects/by-name/part20260417180401 "HTTP/1.1 404 Not Found"
+2026-04-17 18:04:02,422 ERROR [app.storage_bridge] Storage bridge request failed: method=GET path=/projects/by-name/part20260417180401 status=404 detail=Project not found
+2026-04-17 18:04:02,462 INFO [httpx] HTTP Request: POST http://127.0.0.1:8100/projects "HTTP/1.1 201 Created"
+2026-04-17 18:04:02,579 INFO [httpx] HTTP Request: POST http://127.0.0.1:8100/projects/9b4004dc-09ee-4af2-91de-47f1918c3ae1/models "HTTP/1.1 201 Created"
+2026-04-17 18:04:11,145 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/projects/by-name/part20260417180401 "HTTP/1.1 200 OK"
+2026-04-17 18:04:11,266 INFO [httpx] HTTP Request: POST http://127.0.0.1:8100/projects/9b4004dc-09ee-4af2-91de-47f1918c3ae1/models "HTTP/1.1 201 Created"
+2026-04-17 18:09:04,093 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/health "HTTP/1.1 200 OK"
+2026-04-17 18:09:04,094 INFO [app.main] Backend startup completed, log file: C:\Users\17126\source\repos\cad-db-store-develop\dist\backend-package\logs\backend-error.log
+2026-04-17 18:09:07,524 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/projects/by-name/part20260417180401 "HTTP/1.1 200 OK"
+2026-04-17 18:09:07,706 INFO [httpx] HTTP Request: POST http://127.0.0.1:8100/projects/9b4004dc-09ee-4af2-91de-47f1918c3ae1/models "HTTP/1.1 201 Created"
+2026-04-17 18:09:27,098 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/projects/by-name/part20260417180926 "HTTP/1.1 404 Not Found"
+2026-04-17 18:09:27,098 ERROR [app.storage_bridge] Storage bridge request failed: method=GET path=/projects/by-name/part20260417180926 status=404 detail=Project not found
+2026-04-17 18:09:27,144 INFO [httpx] HTTP Request: GET http://127.0.0.1:8100/projects/by-name/part20260417180926 "HTTP/1.1 404 Not Found"
+2026-04-17 18:09:27,144 ERROR [app.storage_bridge] Storage bridge request failed: method=GET path=/projects/by-name/part20260417180926 status=404 detail=Project not found
+2026-04-17 18:09:27,175 INFO [httpx] HTTP Request: POST http://127.0.0.1:8100/projects "HTTP/1.1 201 Created"
+2026-04-17 18:09:27,286 INFO [httpx] HTTP Request: POST http://127.0.0.1:8100/projects/bf915089-64b2-474a-8f4f-0d48c2079637/models "HTTP/1.1 201 Created"

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QHash>
 #include <QSessionManager>
 
 enum OPERATOR_TYPES { OPERATOR_IMPORT = 0, OPERATOR_CONSTRUCTOR, OPERATOR_INTERSECTOR, OPERATOR_BOOLEAN, OPERATOR_DEFEATURE, OPERATOR_UNKNOWN, OPERATOR_SPERATOR = 999 };
@@ -52,6 +53,7 @@ class DELTA_STATE;
 class BULLETIN_BOARD;
 class QWebSocket;
 class QProcess;
+class QTimer;
 
 typedef outcome(*GME_fp)(ENTITY_LIST&, AcisOptions*);
 
@@ -127,9 +129,12 @@ private:
     bool maybeSave();
     bool saveFile(const QString& fileName);
     bool restoreFastAPIModelFromSat(const QString& satContent);
+    bool syncFastAPIRemoteVersion(int remoteVersion, const QString& reason);
     void reconnectFastAPISync();
     void disconnectFastAPISync();
     void handleFastAPISyncMessage(const QString& message);
+    void requestFastAPISyncNow();
+    void updateFastAPICollaboratorsStatus();
     void setCurrentFile(const QString& fileName);
     void setCurrentPartName(const QString& partName);
 
@@ -153,6 +158,11 @@ private:
     std::string fastapi_password;
     QString fastapi_project_id;
     QString fastapi_project_name;
+    QString fastapi_client_id;
     int fastapi_model_version = 0;
+    int fastapi_pending_remote_version = 0;
+    QHash<QString, QString> fastapi_collaborators;
     QWebSocket* fastapiSyncSocket = nullptr;
+    QTimer* fastapiSyncTimer = nullptr;
+    QTimer* fastapiHeartbeatTimer = nullptr;
 };

@@ -21,12 +21,16 @@
 #include <QLabel>
 #include <QDialogButtonBox>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QTimer>
+#include <QUuid>
 #include <QUrl>
 #include <QtWebSockets/QWebSocket>
 #include <fstream>
+#include <algorithm>
 #include <sstream>
 
 #include "gme_dump_object.hxx"
@@ -167,6 +171,19 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
     setObjectName("MainWindow");
     setWindowTitle("DBCAD");
     curWindow = nullptr;
+    fastapi_client_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    fastapiSyncTimer = new QTimer(this);
+    fastapiSyncTimer->setInterval(15000);
+    connect(fastapiSyncTimer, &QTimer::timeout, this, &MainWindow::requestFastAPISyncNow);
+
+    fastapiHeartbeatTimer = new QTimer(this);
+    fastapiHeartbeatTimer->setInterval(10000);
+    connect(fastapiHeartbeatTimer, &QTimer::timeout, this, [this]() {
+        if (fastapiSyncSocket != nullptr && fastapiSyncSocket->isValid()) {
+            fastapiSyncSocket->sendTextMessage("ping");
+        }
+    });
 
     if (0 == initialize_acis()) {
         QMessageBox::warning(this, tr("异常"), tr("ACIS初始化失败"));
@@ -546,11 +563,60 @@ bool MainWindow::restoreFastAPIModelFromSat(const QString& satContent) {
 }
 
 void MainWindow::disconnectFastAPISync() {
+    if (fastapiSyncTimer != nullptr) {
+        fastapiSyncTimer->stop();
+    }
+    if (fastapiHeartbeatTimer != nullptr) {
+        fastapiHeartbeatTimer->stop();
+    }
+    fastapi_collaborators.clear();
+    fastapi_pending_remote_version = 0;
+
     if (fastapiSyncSocket != nullptr) {
         fastapiSyncSocket->close();
         fastapiSyncSocket->deleteLater();
         fastapiSyncSocket = nullptr;
     }
+}
+
+void MainWindow::requestFastAPISyncNow() {
+    if (fastapiSyncSocket != nullptr && fastapiSyncSocket->isValid()) {
+        fastapiSyncSocket->sendTextMessage("sync_now");
+    }
+}
+
+void MainWindow::updateFastAPICollaboratorsStatus() {
+    if (!fastapi_project_id.isEmpty()) {
+        statusBar()->showMessage(tr("当前在线协作者：%1").arg(fastapi_collaborators.size()), 2500);
+    }
+}
+
+bool MainWindow::syncFastAPIRemoteVersion(int remoteVersion, const QString& reason) {
+    if (curWindow == nullptr || remoteVersion <= 0 || fastapi_project_id.isEmpty()) {
+        return false;
+    }
+
+    BackendApiClient client(
+        QString::fromStdString(fastapi_base_url),
+        QString::fromStdString(fastapi_author),
+        QString::fromStdString(fastapi_password));
+    auto model = client.getModelVersion(fastapi_project_id, remoteVersion);
+    if (!model.has_value()) {
+        statusBar()->showMessage(tr("远程同步失败：%1").arg(client.lastError()), 5000);
+        return false;
+    }
+
+    curWindow->clear();
+    if (!restoreFastAPIModelFromSat(model->sat)) {
+        return false;
+    }
+
+    fastapi_model_version = model->version;
+    fastapi_pending_remote_version = 0;
+    setCurrentPartName(fastapi_project_name);
+    curWindow->setIsModified(false);
+    statusBar()->showMessage(tr("已同步远程版本%1（%2）").arg(fastapi_model_version).arg(reason), 4000);
+    return true;
 }
 
 void MainWindow::reconnectFastAPISync() {
@@ -573,17 +639,34 @@ void MainWindow::reconnectFastAPISync() {
     }
 
     QString wsPath = "/ws/projects/" + fastapi_project_id;
+    QStringList queryItems;
+    queryItems << "client_id=" + QString::fromUtf8(QUrl::toPercentEncoding(fastapi_client_id));
+    queryItems << "author=" + QString::fromUtf8(QUrl::toPercentEncoding(QString::fromStdString(fastapi_author)));
     if (!fastapi_password.empty()) {
-        wsPath += "?password=" + QString::fromUtf8(QUrl::toPercentEncoding(QString::fromStdString(fastapi_password)));
+        queryItems << "password=" + QString::fromUtf8(QUrl::toPercentEncoding(QString::fromStdString(fastapi_password)));
     }
+    wsPath += "?" + queryItems.join("&");
     const QUrl wsUrl(wsBaseUrl + wsPath);
     fastapiSyncSocket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
 
     connect(fastapiSyncSocket, &QWebSocket::textMessageReceived, this, &MainWindow::handleFastAPISyncMessage);
     connect(fastapiSyncSocket, &QWebSocket::connected, this, [this]() {
         statusBar()->showMessage(tr("FastAPI实时同步已连接"), 2000);
+        requestFastAPISyncNow();
+        if (fastapiSyncTimer != nullptr) {
+            fastapiSyncTimer->start();
+        }
+        if (fastapiHeartbeatTimer != nullptr) {
+            fastapiHeartbeatTimer->start();
+        }
     });
     connect(fastapiSyncSocket, &QWebSocket::disconnected, this, [this]() {
+        if (fastapiSyncTimer != nullptr) {
+            fastapiSyncTimer->stop();
+        }
+        if (fastapiHeartbeatTimer != nullptr) {
+            fastapiHeartbeatTimer->stop();
+        }
         if (!fastapi_project_id.isEmpty()) {
             statusBar()->showMessage(tr("FastAPI实时同步已断开"), 2000);
         }
@@ -609,7 +692,48 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
     }
 
     const QJsonObject root = document.object();
-    if (root.value("type").toString() != "model_saved") {
+    const QString messageType = root.value("type").toString();
+    if (messageType == "presence_snapshot") {
+        fastapi_collaborators.clear();
+        const QJsonArray members = root.value("members").toArray();
+        for (const auto& memberValue : members) {
+            if (!memberValue.isObject()) {
+                continue;
+            }
+            const QJsonObject member = memberValue.toObject();
+            const QString memberClientId = member.value("client_id").toString();
+            if (memberClientId.isEmpty()) {
+                continue;
+            }
+            fastapi_collaborators.insert(memberClientId, member.value("author").toString());
+        }
+        updateFastAPICollaboratorsStatus();
+        return;
+    }
+
+    if (messageType == "collaborator_joined") {
+        const QString memberClientId = root.value("client_id").toString();
+        if (!memberClientId.isEmpty()) {
+            fastapi_collaborators.insert(memberClientId, root.value("author").toString());
+            updateFastAPICollaboratorsStatus();
+        }
+        return;
+    }
+
+    if (messageType == "collaborator_left") {
+        const QString memberClientId = root.value("client_id").toString();
+        if (!memberClientId.isEmpty()) {
+            fastapi_collaborators.remove(memberClientId);
+            updateFastAPICollaboratorsStatus();
+        }
+        return;
+    }
+
+    if (messageType == "pong") {
+        return;
+    }
+
+    if (messageType != "model_saved") {
         return;
     }
 
@@ -628,29 +752,15 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
     }
 
     if (curWindow->getIsModified()) {
-        statusBar()->showMessage(tr("检测到远程新版本%1，当前有未保存修改，暂不自动更新").arg(remoteVersion), 4000);
+        fastapi_pending_remote_version =
+            fastapi_pending_remote_version > remoteVersion ? fastapi_pending_remote_version : remoteVersion;
+        statusBar()->showMessage(
+            tr("检测到远程新版本%1，当前有未保存修改，已进入待同步队列").arg(fastapi_pending_remote_version),
+            5000);
         return;
     }
 
-    BackendApiClient client(
-        QString::fromStdString(fastapi_base_url),
-        QString::fromStdString(fastapi_author),
-        QString::fromStdString(fastapi_password));
-    auto model = client.getModelVersion(projectId, remoteVersion);
-    if (!model.has_value()) {
-        statusBar()->showMessage(tr("远程同步失败：%1").arg(client.lastError()), 4000);
-        return;
-    }
-
-    curWindow->clear();
-    if (!restoreFastAPIModelFromSat(model->sat)) {
-        return;
-    }
-
-    fastapi_model_version = model->version;
-    setCurrentPartName(fastapi_project_name);
-    curWindow->setIsModified(false);
-    statusBar()->showMessage(tr("已同步远程最新版本：%1").arg(fastapi_model_version), 4000);
+    syncFastAPIRemoteVersion(remoteVersion, root.value("trigger").toString("broadcast"));
 }
 
 void MainWindow::addWindow() {
@@ -1750,6 +1860,7 @@ bool MainWindow::saveFile(const QString& fileName) {
                                 fastapi_project_id = project->id;
                                 fastapi_project_name = fileName;
                                 fastapi_model_version = *newVersion;
+                                fastapi_pending_remote_version = 0;
                                 reconnectFastAPISync();
                             }
                         }
