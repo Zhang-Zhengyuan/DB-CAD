@@ -16,16 +16,15 @@ def verify_api_password(x_api_password: str | None = Header(default=None)) -> No
 
 @app.on_event("startup")
 def on_startup() -> None:
-    if crud.neo4j_store is None:
+    if crud.storage_bridge is None:
         Base.metadata.create_all(bind=engine)
     else:
-        crud.neo4j_store.initialize()
+        crud.initialize_backend()
 
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
-    if crud.neo4j_store is not None:
-        crud.neo4j_store.close()
+    crud.shutdown_backend()
 
 
 @app.get("/health")

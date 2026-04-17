@@ -6,18 +6,28 @@ from sqlalchemy.orm import Session
 
 from . import models, schemas
 from .config import settings
-from .neo4j_store import Neo4jStore, VersionRecord
+from .storage_bridge import ProjectRecord, StorageBridgeClient, VersionRecord
 
 
-neo4j_store = Neo4jStore() if settings.storage_backend.lower() == "neo4j" else None
+storage_bridge = StorageBridgeClient(settings.storage_bridge_url, settings.storage_bridge_timeout_seconds) if settings.storage_backend.lower() == "neo4j" else None
+
+
+def initialize_backend() -> None:
+    if storage_bridge is not None:
+        storage_bridge.healthcheck()
+
+
+def shutdown_backend() -> None:
+    if storage_bridge is not None:
+        storage_bridge.close()
 
 
 def create_project(db: Session, payload: schemas.ProjectCreate) -> models.Project:
-    if neo4j_store is not None:
-        existing = neo4j_store.get_project_by_name_or_none(payload.name)
+    if storage_bridge is not None:
+        existing = storage_bridge.get_project_by_name_or_none(payload.name)
         if existing is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Project name already exists")
-        return neo4j_store.create_project(payload.name)
+        return storage_bridge.create_project(payload.name)
 
     exists_stmt: Select[tuple[models.Project]] = select(models.Project).where(models.Project.name == payload.name)
     if db.execute(exists_stmt).scalar_one_or_none() is not None:
@@ -31,8 +41,8 @@ def create_project(db: Session, payload: schemas.ProjectCreate) -> models.Projec
 
 
 def get_project_or_404(db: Session, project_id: str) -> models.Project:
-    if neo4j_store is not None:
-        project = neo4j_store.get_project_or_none(project_id)
+    if storage_bridge is not None:
+        project = storage_bridge.get_project_or_none(project_id)
         if project is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
         return project
@@ -45,8 +55,8 @@ def get_project_or_404(db: Session, project_id: str) -> models.Project:
 
 
 def get_project_by_name_or_404(db: Session, project_name: str) -> models.Project:
-    if neo4j_store is not None:
-        project = neo4j_store.get_project_by_name_or_none(project_name)
+    if storage_bridge is not None:
+        project = storage_bridge.get_project_by_name_or_none(project_name)
         if project is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
         return project
@@ -59,8 +69,8 @@ def get_project_by_name_or_404(db: Session, project_name: str) -> models.Project
 
 
 def create_model_version(db: Session, project_id: str, payload: schemas.ModelVersionCreate) -> models.ModelVersion:
-    if neo4j_store is not None:
-        return neo4j_store.create_model_version(project_id, payload.author, payload.content, payload.base_version)
+    if storage_bridge is not None:
+        return storage_bridge.create_model_version(project_id, payload.author, payload.content, payload.base_version)
 
     get_project_or_404(db, project_id)
 
@@ -87,9 +97,9 @@ def create_model_version(db: Session, project_id: str, payload: schemas.ModelVer
 
 
 def get_latest_version_or_404(db: Session, project_id: str) -> models.ModelVersion:
-    if neo4j_store is not None:
+    if storage_bridge is not None:
         get_project_or_404(db, project_id)
-        version = neo4j_store.get_latest_version_or_none(project_id)
+        version = storage_bridge.get_latest_version_or_none(project_id)
         if version is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No model version found")
         return version
@@ -109,9 +119,9 @@ def get_latest_version_or_404(db: Session, project_id: str) -> models.ModelVersi
 
 
 def get_version_or_404(db: Session, project_id: str, version_number: int) -> models.ModelVersion:
-    if neo4j_store is not None:
+    if storage_bridge is not None:
         get_project_or_404(db, project_id)
-        version = neo4j_store.get_version_or_none(project_id, version_number)
+        version = storage_bridge.get_version_or_none(project_id, version_number)
         if version is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model version not found")
         return version
@@ -129,9 +139,9 @@ def get_version_or_404(db: Session, project_id: str, version_number: int) -> mod
 
 
 def list_versions(db: Session, project_id: str, limit: int = 50, offset: int = 0) -> list[models.ModelVersion]:
-    if neo4j_store is not None:
+    if storage_bridge is not None:
         get_project_or_404(db, project_id)
-        return neo4j_store.list_versions(project_id, limit=limit, offset=offset)
+        return storage_bridge.list_versions(project_id, limit=limit, offset=offset)
 
     get_project_or_404(db, project_id)
 

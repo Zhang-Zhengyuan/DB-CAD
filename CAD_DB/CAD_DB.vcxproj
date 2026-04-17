@@ -158,6 +158,7 @@
     <None Include="backend\app\models.py" />
     <None Include="backend\app\neo4j_store.py" />
     <None Include="backend\app\schemas.py" />
+    <None Include="backend\app\storage_bridge.py" />
     <None Include="backend\app\sync.py" />
     <None Include="backend\app\__init__.py" />
     <None Include="backend\pyproject.toml" />
