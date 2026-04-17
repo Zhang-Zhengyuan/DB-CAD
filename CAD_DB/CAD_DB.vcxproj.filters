@@ -58,6 +58,9 @@
     <ClCompile Include="common.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="backend_api_client.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="acis.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -92,6 +95,9 @@
     <ClInclude Include="common.hxx">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="backend_api_client.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="acis.hxx">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -102,3 +108,5 @@
     </ResourceCompile>
   </ItemGroup>
 </Project>
+
+

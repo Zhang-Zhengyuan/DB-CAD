@@ -31,6 +31,12 @@ def get_project(project_id: str, db: Session = Depends(get_db)) -> schemas.Proje
     return schemas.ProjectRead.model_validate(entity)
 
 
+@app.get("/projects/by-name/{project_name}", response_model=schemas.ProjectRead)
+def get_project_by_name(project_name: str, db: Session = Depends(get_db)) -> schemas.ProjectRead:
+    entity = crud.get_project_by_name_or_404(db, project_name)
+    return schemas.ProjectRead.model_validate(entity)
+
+
 @app.post("/projects/{project_id}/models", response_model=schemas.SaveResult, status_code=201)
 async def save_model(project_id: str, payload: schemas.ModelVersionCreate, db: Session = Depends(get_db)) -> schemas.SaveResult:
     version = crud.create_model_version(db, project_id, payload)
@@ -51,6 +57,12 @@ async def save_model(project_id: str, payload: schemas.ModelVersionCreate, db: S
 def get_latest_model(project_id: str, db: Session = Depends(get_db)) -> schemas.ModelVersionRead:
     version = crud.get_latest_version_or_404(db, project_id)
     return crud.deserialize_version(version)
+
+
+@app.get("/projects/{project_id}/models/{version}", response_model=schemas.ModelVersionRead)
+def get_model_by_version(project_id: str, version: int, db: Session = Depends(get_db)) -> schemas.ModelVersionRead:
+    entity = crud.get_version_or_404(db, project_id, version)
+    return crud.deserialize_version(entity)
 
 
 @app.get("/projects/{project_id}/models/versions", response_model=list[schemas.ModelVersionRead])

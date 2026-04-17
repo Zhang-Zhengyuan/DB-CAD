@@ -27,6 +27,14 @@ def get_project_or_404(db: Session, project_id: str) -> models.Project:
     return project
 
 
+def get_project_by_name_or_404(db: Session, project_name: str) -> models.Project:
+    stmt: Select[tuple[models.Project]] = select(models.Project).where(models.Project.name == project_name)
+    project = db.execute(stmt).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return project
+
+
 def create_model_version(db: Session, project_id: str, payload: schemas.ModelVersionCreate) -> models.ModelVersion:
     get_project_or_404(db, project_id)
 
@@ -64,6 +72,19 @@ def get_latest_version_or_404(db: Session, project_id: str) -> models.ModelVersi
     version = db.execute(stmt).scalar_one_or_none()
     if version is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No model version found")
+    return version
+
+
+def get_version_or_404(db: Session, project_id: str, version_number: int) -> models.ModelVersion:
+    get_project_or_404(db, project_id)
+
+    stmt = select(models.ModelVersion).where(
+        models.ModelVersion.project_id == project_id,
+        models.ModelVersion.version == version_number,
+    )
+    version = db.execute(stmt).scalar_one_or_none()
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model version not found")
     return version
 
 

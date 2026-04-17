@@ -39,12 +39,12 @@
   </ImportGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
     <QtInstall>6.9.0_msvc2022_64</QtInstall>
-    <QtModules>core;gui;widgets;opengl;openglwidgets</QtModules>
+    <QtModules>core;gui;widgets;opengl;openglwidgets;network</QtModules>
     <QtBuildConfig>debug</QtBuildConfig>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
     <QtInstall>6.6.1_msvc2019_64</QtInstall>
-    <QtModules>core;gui;widgets</QtModules>
+    <QtModules>core;gui;widgets;network</QtModules>
     <QtBuildConfig>release</QtBuildConfig>
   </PropertyGroup>
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
@@ -116,6 +116,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="acis.cpp" />
+    <ClCompile Include="backend_api_client.cpp" />
     <ClCompile Include="common.cpp" />
     <ClCompile Include="glwidget.cpp" />
     <ClCompile Include="access.cpp" />
@@ -136,6 +137,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="acis.hxx" />
+    <ClInclude Include="backend_api_client.h" />
     <ClInclude Include="common.hxx" />
     <ClInclude Include="access.hxx" />
     <ClInclude Include="gme_dump_object.hxx" />
@@ -159,6 +161,7 @@
     <None Include="backend\pytest.ini" />
     <None Include="backend\README.md" />
     <None Include="backend\tests\test_api.py" />
+    <None Include="fastapi_connect_info.conf" />
     <None Include="项目计划.md" />
   </ItemGroup>
   <ItemGroup>

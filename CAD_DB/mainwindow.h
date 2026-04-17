@@ -107,6 +107,7 @@ private slots:
     void runTest();
     void incrementalTest();
     void setNEO4JConnectInfo();
+    void setFastAPIConnectInfo();
     void visiablility();
     void displayInfo();
 #ifndef QT_NO_SESSIONMANAGER
@@ -129,9 +130,14 @@ private:
     QAction* setNEO4JModeAct;
     QAction* setNEO4JIncrementalModeAct;
     QAction* setMEMGRAPHModeAct;
+    QAction* setFASTAPIModeAct;
     QActionGroup* setModeActGroup;
     std::string neo4jdb_host;
     int neo4jdb_port_bolt;
     std::string neo4jdb_username;
     std::string neo4jdb_password;
+    std::string fastapi_base_url;
+    std::string fastapi_author;
+    QString fastapi_project_id;
+    int fastapi_model_version = 0;
 };
