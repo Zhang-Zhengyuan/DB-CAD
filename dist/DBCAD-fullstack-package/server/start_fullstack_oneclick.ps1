@@ -11,7 +11,9 @@ param(
     [string]$ApiPassword = "",
     [int]$RetryCount = 5,
     [int]$RetryDelaySeconds = 3,
-    [string]$BridgeExePath = ""
+    [string]$BridgeExePath = "",
+    [switch]$SkipDependencySync = $false,
+    [switch]$SkipBridgeHealthCheck = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,8 +56,32 @@ function Resolve-BridgeExe([string]$scriptRoot, [string]$explicitPath) {
     throw "Cannot locate CAD_DB.exe for storage bridge mode."
 }
 
-function Wait-Health([string]$url, [int]$maxAttempts, [int]$delaySeconds) {
+function Resolve-LocalHealthHost([string]$HostAddress) {
+    if ([string]::IsNullOrWhiteSpace($HostAddress)) {
+        return "127.0.0.1"
+    }
+
+    $normalized = $HostAddress.Trim().ToLowerInvariant()
+    if ($normalized -in @("0.0.0.0", "::", "[::]", "localhost")) {
+        return "127.0.0.1"
+    }
+
+    return $HostAddress.Trim()
+}
+
+function Wait-Health(
+    [string]$url,
+    [int]$maxAttempts,
+    [int]$delaySeconds,
+    [object]$process,
+    [string]$serviceName
+) {
     for ($i = 1; $i -le $maxAttempts; $i++) {
+        if ($null -ne $process -and $process.HasExited) {
+            Write-Warning "$serviceName exited before passing health check. ExitCode=$($process.ExitCode)"
+            return $false
+        }
+
         try {
             $response = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 5
             if ($response.status -eq "ok") {
@@ -102,7 +128,9 @@ function Start-FastApiProcess(
     [int]$fastApiPort,
     [string]$bridgeUrl,
     [double]$bridgeTimeout,
-    [string]$apiPassword
+    [string]$apiPassword,
+    [switch]$skipDependencySync,
+    [switch]$skipBridgeHealthCheck
 ) {
     $scriptPath = Join-Path $scriptRoot "deploy_backend_uv.ps1"
     if (!(Test-Path $scriptPath)) {
@@ -121,6 +149,12 @@ function Start-FastApiProcess(
 
     if (-not [string]::IsNullOrWhiteSpace($apiPassword)) {
         $fastApiArgs += @("-ApiPassword", $apiPassword)
+    }
+    if ($skipDependencySync) {
+        $fastApiArgs += @("-SkipDependencySync")
+    }
+    if ($skipBridgeHealthCheck) {
+        $fastApiArgs += @("-SkipBridgeHealthCheck")
     }
 
     return Start-Process -FilePath "powershell" -ArgumentList $fastApiArgs -WorkingDirectory $scriptRoot -PassThru
@@ -161,8 +195,11 @@ if ([string]::IsNullOrWhiteSpace($Neo4jPassword)) {
 }
 
 $bridgeExe = Resolve-BridgeExe -scriptRoot $scriptRoot -explicitPath $BridgeExePath
-$bridgeUrl = "http://$BridgeHost`:$BridgePort"
-$fastApiUrl = "http://127.0.0.1:$FastApiPort"
+$bridgeListenUrl = "http://$BridgeHost`:$BridgePort"
+$bridgeProbeHost = Resolve-LocalHealthHost -HostAddress $BridgeHost
+$bridgeProbeUrl = "http://$bridgeProbeHost`:$BridgePort"
+$fastApiProbeHost = Resolve-LocalHealthHost -HostAddress $FastApiHost
+$fastApiUrl = "http://${fastApiProbeHost}:$FastApiPort"
 
 $bridgeProcess = $null
 $fastApiProcess = $null
@@ -175,12 +212,12 @@ try {
         Write-Host "[INFO] Starting C++ bridge (attempt $attempt/$RetryCount)..."
         $bridgeProcess = Start-BridgeProcess -bridgeExe $bridgeExe -bridgeHost $BridgeHost -bridgePort $BridgePort -neo4jHost $Neo4jHost -neo4jPort $Neo4jPort -neo4jUser $Neo4jUser -neo4jPassword $Neo4jPassword
 
-        if (Wait-Health -url "$bridgeUrl/health" -maxAttempts 15 -delaySeconds 1) {
+        if (Wait-Health -url "$bridgeProbeUrl/health" -maxAttempts 15 -delaySeconds 1 -process $bridgeProcess -serviceName "Bridge") {
             $bridgeStarted = $true
             break
         }
 
-        Write-Warning "Bridge health check failed."
+        Write-Warning "Bridge health check failed: $bridgeProbeUrl/health"
         if ($bridgeProcess -and !$bridgeProcess.HasExited) {
             Stop-Process -Id $bridgeProcess.Id -Force -ErrorAction SilentlyContinue
         }
@@ -193,19 +230,19 @@ try {
         throw "Failed to start C++ bridge after retries."
     }
 
-    Write-Host "[OK] Bridge is healthy: $bridgeUrl/health"
+    Write-Host "[OK] Bridge is healthy: $bridgeProbeUrl/health (listen=$bridgeListenUrl)"
 
     $fastApiStarted = $false
     for ($attempt = 1; $attempt -le $RetryCount; $attempt++) {
         Write-Host "[INFO] Starting FastAPI (attempt $attempt/$RetryCount)..."
-        $fastApiProcess = Start-FastApiProcess -scriptRoot $scriptRoot -fastApiHost $FastApiHost -fastApiPort $FastApiPort -bridgeUrl $bridgeUrl -bridgeTimeout $StorageBridgeTimeoutSeconds -apiPassword $ApiPassword
+        $fastApiProcess = Start-FastApiProcess -scriptRoot $scriptRoot -fastApiHost $FastApiHost -fastApiPort $FastApiPort -bridgeUrl $bridgeProbeUrl -bridgeTimeout $StorageBridgeTimeoutSeconds -apiPassword $ApiPassword -skipDependencySync:$SkipDependencySync -skipBridgeHealthCheck:$SkipBridgeHealthCheck
 
-        if (Wait-Health -url "$fastApiUrl/health" -maxAttempts 20 -delaySeconds 1) {
+        if (Wait-Health -url "$fastApiUrl/health" -maxAttempts 20 -delaySeconds 1 -process $fastApiProcess -serviceName "FastAPI") {
             $fastApiStarted = $true
             break
         }
 
-        Write-Warning "FastAPI health check failed."
+        Write-Warning "FastAPI health check failed: $fastApiUrl/health"
         if ($fastApiProcess -and !$fastApiProcess.HasExited) {
             Stop-Process -Id $fastApiProcess.Id -Force -ErrorAction SilentlyContinue
         }
@@ -219,7 +256,7 @@ try {
     }
 
     Write-Host "[OK] Full stack started successfully"
-    Write-Host "[INFO] Bridge health: $bridgeUrl/health"
+    Write-Host "[INFO] Bridge health: $bridgeProbeUrl/health"
     Write-Host "[INFO] FastAPI health: $fastApiUrl/health"
     Write-Host "[INFO] FastAPI docs: $fastApiUrl/docs"
     Write-Host "[INFO] Bridge PID: $($bridgeProcess.Id), FastAPI PID: $($fastApiProcess.Id)"

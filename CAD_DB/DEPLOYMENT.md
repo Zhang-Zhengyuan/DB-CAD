@@ -1,18 +1,23 @@
 # DBCAD 验收部署指南（服务器 + 客户机）
 
 ## 目标
+
 - 服务器：运行 FastAPI 统一后端（可接 Neo4j）。
 - 客户机：运行打包后的 Qt EXE，配置后即可远程访问。
+
+> 详细配置项、参数说明与故障排查请见：`STARTUP_CONFIG.md`
 
 ---
 
 ## 一、服务器部署（推荐 uv）
 
 ### 1. 前置
+
 - Windows Server / Windows 10+
 - 可访问 Neo4j（若使用 `neo4j` 存储后端）
 
 ### 2. 一键启动
+
 在仓库根目录执行：
 
 ```powershell
@@ -26,15 +31,18 @@
 ```
 
 ### 3. 验证
+
 ```powershell
 .\CAD_DB\deploy\server\check_backend.ps1 -BaseUrl http://127.0.0.1:8000
 ```
 
 通过后可访问：
+
 - `http://服务器IP:8000/health`
 - `http://服务器IP:8000/docs`
 
 ### 4. 重新打开（重启后端）
+
 如果你已经部署过并关闭了进程，直接一键重启：
 
 ```powershell
@@ -52,6 +60,7 @@ CAD_DB\deploy\server\start_backend_oneclick.cmd
 ## 二、客户机部署（Qt EXE 打包）
 
 ### 1. 一键打包
+
 在开发机执行：
 
 ```powershell
@@ -65,10 +74,13 @@ CAD_DB\deploy\server\start_backend_oneclick.cmd
 ```
 
 输出：
+
 - `dist/DBCAD-client-Release.zip`
 
 ### 1.1 若客户机提示缺少 DLL
+
 当前打包脚本已包含：
+
 - Qt 运行时（windeployqt）
 - ACIS 运行时（SpaACIS.dll）
 
@@ -85,9 +97,11 @@ CAD_DB\deploy\server\start_backend_oneclick.cmd
 ```
 
 输出：
+
 - `dist/DBCAD-backend-package.zip`
 
 ### 2. 客户机安装
+
 - 解压 zip 到任意目录
 - 双击 EXE 运行
 - 如需本地 neo4j 直连模式，编辑同目录 `neo4j_connect_info.conf`
@@ -95,6 +109,7 @@ CAD_DB\deploy\server\start_backend_oneclick.cmd
 ---
 
 ## 三、验收清单
+
 - [ ] 客户端可打开 FastAPI 模式并加载项目。
 - [ ] 客户端可保存模型，后端版本号递增。
 - [ ] 两台客户机同时打开同一项目，一台保存后另一台收到实时同步。
@@ -103,7 +118,9 @@ CAD_DB\deploy\server\start_backend_oneclick.cmd
 ---
 
 ## 四、通信说明
+
 当前 C++ 与 Python 后端通信方式：
+
 - HTTP REST（保存/加载）
 - WebSocket（实时订阅）
 

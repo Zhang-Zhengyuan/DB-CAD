@@ -17,6 +17,11 @@ function Ensure-Uv {
         powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
         $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
     }
+
+    $uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+    if ($null -eq $uvCmd) {
+        throw "uv is still unavailable after install attempt. Please install uv manually and ensure it is in PATH."
+    }
 }
 
 function Validate-BackendConfig {
@@ -30,6 +35,36 @@ function Validate-BackendConfig {
     $bridgeUrl = [Environment]::GetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL")
     if ([string]::IsNullOrWhiteSpace($bridgeUrl)) {
         throw "Missing CAD_DB_STORAGE_BRIDGE_URL. Set it in .env or pass -StorageBridgeUrl."
+    }
+}
+
+function Resolve-LocalHealthHost([string]$HostAddress) {
+    if ([string]::IsNullOrWhiteSpace($HostAddress)) {
+        return "127.0.0.1"
+    }
+
+    $normalized = $HostAddress.Trim().ToLowerInvariant()
+    if ($normalized -in @("0.0.0.0", "::", "[::]", "localhost")) {
+        return "127.0.0.1"
+    }
+
+    return $HostAddress.Trim()
+}
+
+function Resolve-BridgeProbeUrl([string]$BridgeUrl) {
+    if ([string]::IsNullOrWhiteSpace($BridgeUrl)) {
+        return $BridgeUrl
+    }
+
+    try {
+        $uri = [System.Uri]$BridgeUrl
+        $host = Resolve-LocalHealthHost -HostAddress $uri.Host
+
+        $builder = New-Object System.UriBuilder($uri)
+        $builder.Host = $host
+        return $builder.Uri.GetLeftPart([System.UriPartial]::Path).TrimEnd('/')
+    } catch {
+        return $BridgeUrl
     }
 }
 
@@ -106,16 +141,19 @@ if (-not $SkipDependencySync) {
 }
 
 $resolvedBridgeUrl = [Environment]::GetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL")
-Write-Host "[INFO] Storage bridge URL: $resolvedBridgeUrl"
+$bridgeProbeUrl = Resolve-BridgeProbeUrl -BridgeUrl $resolvedBridgeUrl
+Write-Host "[INFO] Storage bridge URL (configured): $resolvedBridgeUrl"
+Write-Host "[INFO] Storage bridge URL (probe): $bridgeProbeUrl"
 if (-not $SkipBridgeHealthCheck) {
-    if (Wait-BridgeHealth -bridgeUrl $resolvedBridgeUrl) {
-        Write-Host "[OK] Bridge health check passed: $resolvedBridgeUrl/health"
+    if (Wait-BridgeHealth -bridgeUrl $bridgeProbeUrl) {
+        Write-Host "[OK] Bridge health check passed: $bridgeProbeUrl/health"
     } else {
-        Write-Warning "Bridge health check failed: $resolvedBridgeUrl/health"
+        Write-Warning "Bridge health check failed: $bridgeProbeUrl/health"
         Write-Warning "FastAPI will still start, but storage APIs may return 502 until bridge is healthy."
     }
 }
 
+${docsHost} = Resolve-LocalHealthHost -HostAddress $HostAddress
 Write-Host "[INFO] Starting backend: http://${HostAddress}:${Port}"
-Write-Host "[INFO] Swagger docs: http://127.0.0.1:${Port}/docs"
+Write-Host "[INFO] Swagger docs: http://${docsHost}:${Port}/docs"
 uv run uvicorn app.main:app --host $HostAddress --port $Port
