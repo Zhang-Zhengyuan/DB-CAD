@@ -5,7 +5,7 @@ param(
     [double]$StorageBridgeTimeoutSeconds = 15,
     [string]$Neo4jUri = "bolt://127.0.0.1:7687",
     [string]$Neo4jUser = "neo4j",
-    [string]$Neo4jPassword = "change_me",
+    [string]$Neo4jPassword = "your_password",
     [string]$Neo4jDatabase = "neo4j",
     [string]$ApiPassword = "",
     [switch]$IncludeBridgeBinary = $true,

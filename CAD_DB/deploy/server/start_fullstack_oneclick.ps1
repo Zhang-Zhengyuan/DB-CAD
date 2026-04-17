@@ -4,7 +4,7 @@ param(
     [string]$Neo4jHost = "127.0.0.1",
     [int]$Neo4jPort = 7687,
     [string]$Neo4jUser = "neo4j",
-    [string]$Neo4jPassword = "",
+    [string]$Neo4jPassword = "your_password",
     [string]$FastApiHost = "0.0.0.0",
     [int]$FastApiPort = 8000,
     [double]$StorageBridgeTimeoutSeconds = 15,

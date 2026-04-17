@@ -54,6 +54,11 @@ class BULLETIN_BOARD;
 class QWebSocket;
 class QProcess;
 class QTimer;
+class QLabel;
+class QListWidget;
+class QCheckBox;
+class QPushButton;
+class QDockWidget;
 
 typedef outcome(*GME_fp)(ENTITY_LIST&, AcisOptions*);
 
@@ -130,11 +135,14 @@ private:
     bool saveFile(const QString& fileName);
     bool restoreFastAPIModelFromSat(const QString& satContent);
     bool syncFastAPIRemoteVersion(int remoteVersion, const QString& reason);
+    void updateCollabPanelUi();
+    void setCollabConnectionState(const QString& stateText);
     void reconnectFastAPISync();
     void disconnectFastAPISync();
     void handleFastAPISyncMessage(const QString& message);
     void requestFastAPISyncNow();
     void updateFastAPICollaboratorsStatus();
+    void applyPendingRemoteVersion();
     void setCurrentFile(const QString& fileName);
     void setCurrentPartName(const QString& partName);
 
@@ -165,4 +173,16 @@ private:
     QWebSocket* fastapiSyncSocket = nullptr;
     QTimer* fastapiSyncTimer = nullptr;
     QTimer* fastapiHeartbeatTimer = nullptr;
+    QTimer* fastapiReconnectTimer = nullptr;
+    bool fastapiAutoFollowRemote = true;
+
+    QDockWidget* collabDock = nullptr;
+    QLabel* collabConnectionLabel = nullptr;
+    QLabel* collabProjectLabel = nullptr;
+    QLabel* collabVersionLabel = nullptr;
+    QLabel* collabPendingLabel = nullptr;
+    QListWidget* collabMembersList = nullptr;
+    QCheckBox* collabAutoFollowCheckBox = nullptr;
+    QPushButton* collabSyncNowButton = nullptr;
+    QPushButton* collabReconnectButton = nullptr;
 };

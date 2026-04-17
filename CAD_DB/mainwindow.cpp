@@ -25,6 +25,10 @@
 #include <QJsonObject>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QLabel>
+#include <QListWidget>
+#include <QCheckBox>
+#include <QDockWidget>
 #include <QTimer>
 #include <QUuid>
 #include <QUrl>
@@ -182,6 +186,17 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
     connect(fastapiHeartbeatTimer, &QTimer::timeout, this, [this]() {
         if (fastapiSyncSocket != nullptr && fastapiSyncSocket->isValid()) {
             fastapiSyncSocket->sendTextMessage("ping");
+        }
+    });
+
+    fastapiReconnectTimer = new QTimer(this);
+    fastapiReconnectTimer->setInterval(3000);
+    connect(fastapiReconnectTimer, &QTimer::timeout, this, [this]() {
+        QAction* checkedAct = setModeActGroup ? setModeActGroup->checkedAction() : nullptr;
+        if (checkedAct == setFASTAPIModeAct && !fastapi_project_id.isEmpty()) {
+            reconnectFastAPISync();
+        } else {
+            fastapiReconnectTimer->stop();
         }
     });
 
@@ -570,18 +585,23 @@ void MainWindow::disconnectFastAPISync() {
         fastapiHeartbeatTimer->stop();
     }
     fastapi_collaborators.clear();
-    fastapi_pending_remote_version = 0;
+    if (fastapiReconnectTimer != nullptr) {
+        fastapiReconnectTimer->stop();
+    }
 
     if (fastapiSyncSocket != nullptr) {
         fastapiSyncSocket->close();
         fastapiSyncSocket->deleteLater();
         fastapiSyncSocket = nullptr;
     }
+    setCollabConnectionState(tr("未连接"));
+    updateCollabPanelUi();
 }
 
 void MainWindow::requestFastAPISyncNow() {
     if (fastapiSyncSocket != nullptr && fastapiSyncSocket->isValid()) {
         fastapiSyncSocket->sendTextMessage("sync_now");
+        statusBar()->showMessage(tr("已请求服务器返回最新版本"), 1500);
     }
 }
 
@@ -589,6 +609,53 @@ void MainWindow::updateFastAPICollaboratorsStatus() {
     if (!fastapi_project_id.isEmpty()) {
         statusBar()->showMessage(tr("当前在线协作者：%1").arg(fastapi_collaborators.size()), 2500);
     }
+    updateCollabPanelUi();
+}
+
+void MainWindow::setCollabConnectionState(const QString& stateText) {
+    if (collabConnectionLabel != nullptr) {
+        collabConnectionLabel->setText(stateText);
+    }
+}
+
+void MainWindow::updateCollabPanelUi() {
+    if (collabProjectLabel != nullptr) {
+        collabProjectLabel->setText(
+            fastapi_project_name.isEmpty() ? tr("项目：未打开") : tr("项目：%1").arg(fastapi_project_name));
+    }
+    if (collabVersionLabel != nullptr) {
+        collabVersionLabel->setText(tr("本地版本：%1").arg(fastapi_model_version));
+    }
+    if (collabPendingLabel != nullptr) {
+        if (fastapi_pending_remote_version > fastapi_model_version) {
+            collabPendingLabel->setText(tr("待同步版本：%1").arg(fastapi_pending_remote_version));
+        } else {
+            collabPendingLabel->setText(tr("待同步版本：无"));
+        }
+    }
+    if (collabAutoFollowCheckBox != nullptr) {
+        collabAutoFollowCheckBox->setChecked(fastapiAutoFollowRemote);
+    }
+    if (collabMembersList != nullptr) {
+        collabMembersList->clear();
+        for (auto it = fastapi_collaborators.constBegin(); it != fastapi_collaborators.constEnd(); ++it) {
+            const QString author = it.value().trimmed().isEmpty() ? tr("unknown") : it.value();
+            collabMembersList->addItem(author + " (" + it.key() + ")");
+        }
+    }
+}
+
+void MainWindow::applyPendingRemoteVersion() {
+    if (fastapi_pending_remote_version <= fastapi_model_version) {
+        statusBar()->showMessage(tr("当前没有待同步版本"), 2000);
+        return;
+    }
+    if (curWindow != nullptr && curWindow->getIsModified()) {
+        QMessageBox::warning(this, tr("协作同步"), tr("当前有未保存修改，请先保存或放弃本地修改后再应用待同步版本。"));
+        return;
+    }
+    syncFastAPIRemoteVersion(fastapi_pending_remote_version, tr("manual-apply"));
+    updateCollabPanelUi();
 }
 
 bool MainWindow::syncFastAPIRemoteVersion(int remoteVersion, const QString& reason) {
@@ -616,6 +683,7 @@ bool MainWindow::syncFastAPIRemoteVersion(int remoteVersion, const QString& reas
     setCurrentPartName(fastapi_project_name);
     curWindow->setIsModified(false);
     statusBar()->showMessage(tr("已同步远程版本%1（%2）").arg(fastapi_model_version).arg(reason), 4000);
+    updateCollabPanelUi();
     return true;
 }
 
@@ -623,8 +691,13 @@ void MainWindow::reconnectFastAPISync() {
     disconnectFastAPISync();
 
     if (fastapi_project_id.isEmpty() || fastapi_base_url.empty()) {
+        setCollabConnectionState(tr("未连接"));
+        updateCollabPanelUi();
         return;
     }
+
+    setCollabConnectionState(tr("连接中"));
+    updateCollabPanelUi();
 
     QString wsBaseUrl = QString::fromStdString(fastapi_base_url).trimmed();
     while (wsBaseUrl.endsWith('/')) {
@@ -652,6 +725,10 @@ void MainWindow::reconnectFastAPISync() {
     connect(fastapiSyncSocket, &QWebSocket::textMessageReceived, this, &MainWindow::handleFastAPISyncMessage);
     connect(fastapiSyncSocket, &QWebSocket::connected, this, [this]() {
         statusBar()->showMessage(tr("FastAPI实时同步已连接"), 2000);
+        if (fastapiReconnectTimer != nullptr) {
+            fastapiReconnectTimer->stop();
+        }
+        setCollabConnectionState(tr("已连接"));
         requestFastAPISyncNow();
         if (fastapiSyncTimer != nullptr) {
             fastapiSyncTimer->start();
@@ -659,6 +736,7 @@ void MainWindow::reconnectFastAPISync() {
         if (fastapiHeartbeatTimer != nullptr) {
             fastapiHeartbeatTimer->start();
         }
+        updateCollabPanelUi();
     });
     connect(fastapiSyncSocket, &QWebSocket::disconnected, this, [this]() {
         if (fastapiSyncTimer != nullptr) {
@@ -669,7 +747,14 @@ void MainWindow::reconnectFastAPISync() {
         }
         if (!fastapi_project_id.isEmpty()) {
             statusBar()->showMessage(tr("FastAPI实时同步已断开"), 2000);
+            setCollabConnectionState(tr("已断开，重连中"));
+            if (fastapiReconnectTimer != nullptr && !fastapiReconnectTimer->isActive()) {
+                fastapiReconnectTimer->start();
+            }
+        } else {
+            setCollabConnectionState(tr("未连接"));
         }
+        updateCollabPanelUi();
     });
 
     fastapiSyncSocket->open(wsUrl);
@@ -757,6 +842,15 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
         statusBar()->showMessage(
             tr("检测到远程新版本%1，当前有未保存修改，已进入待同步队列").arg(fastapi_pending_remote_version),
             5000);
+        updateCollabPanelUi();
+        return;
+    }
+
+    if (!fastapiAutoFollowRemote) {
+        fastapi_pending_remote_version =
+            fastapi_pending_remote_version > remoteVersion ? fastapi_pending_remote_version : remoteVersion;
+        statusBar()->showMessage(tr("检测到远程新版本%1，已等待你手动应用").arg(fastapi_pending_remote_version), 5000);
+        updateCollabPanelUi();
         return;
     }
 
@@ -1352,6 +1446,58 @@ void MainWindow::createActions() {
     toggleBridgeModeAct->setCheckable(true);
     toggleBridgeModeAct->setStatusTip(tr("以独立CAD进程启动/停止C++ Bridge服务，便于手动联调FastAPI与客户端。"));
     settingsMenu->addAction(toggleBridgeModeAct);
+
+    QMenu* collabMenu = menuBar()->addMenu(tr("协作(&C)"));
+    QAction* collabSyncNowAct = collabMenu->addAction(tr("立即同步最新版本"), this, &MainWindow::requestFastAPISyncNow);
+    collabSyncNowAct->setStatusTip(tr("主动请求服务器返回最新版本并同步。"));
+    QAction* collabApplyPendingAct = collabMenu->addAction(tr("应用待同步版本"), this, &MainWindow::applyPendingRemoteVersion);
+    collabApplyPendingAct->setStatusTip(tr("当本地有未保存修改导致挂起时，手动应用待同步版本。"));
+    QAction* collabReconnectAct = collabMenu->addAction(tr("重连协作通道"), this, &MainWindow::reconnectFastAPISync);
+    collabReconnectAct->setStatusTip(tr("重建WebSocket协作连接。"));
+
+    collabDock = new QDockWidget(tr("多人协作控制台"), this);
+    collabDock->setObjectName("CollabDock");
+    QWidget* collabBody = new QWidget(collabDock);
+    QVBoxLayout* collabLayout = new QVBoxLayout(collabBody);
+
+    collabConnectionLabel = new QLabel(tr("未连接"), collabBody);
+    collabProjectLabel = new QLabel(tr("项目：未打开"), collabBody);
+    collabVersionLabel = new QLabel(tr("本地版本：0"), collabBody);
+    collabPendingLabel = new QLabel(tr("待同步版本：无"), collabBody);
+    collabMembersList = new QListWidget(collabBody);
+    collabMembersList->setMinimumHeight(120);
+    collabMembersList->setToolTip(tr("当前在线协作者列表"));
+    collabAutoFollowCheckBox = new QCheckBox(tr("自动跟随远程最新版本"), collabBody);
+    collabAutoFollowCheckBox->setChecked(true);
+    collabSyncNowButton = new QPushButton(tr("立即同步"), collabBody);
+    collabReconnectButton = new QPushButton(tr("重连"), collabBody);
+
+    connect(collabAutoFollowCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
+        fastapiAutoFollowRemote = checked;
+        if (checked && fastapi_pending_remote_version > fastapi_model_version && curWindow != nullptr && !curWindow->getIsModified()) {
+            applyPendingRemoteVersion();
+        }
+        updateCollabPanelUi();
+    });
+    connect(collabSyncNowButton, &QPushButton::clicked, this, &MainWindow::requestFastAPISyncNow);
+    connect(collabReconnectButton, &QPushButton::clicked, this, &MainWindow::reconnectFastAPISync);
+
+    collabLayout->addWidget(new QLabel(tr("连接状态"), collabBody));
+    collabLayout->addWidget(collabConnectionLabel);
+    collabLayout->addWidget(collabProjectLabel);
+    collabLayout->addWidget(collabVersionLabel);
+    collabLayout->addWidget(collabPendingLabel);
+    collabLayout->addWidget(new QLabel(tr("在线协作者"), collabBody));
+    collabLayout->addWidget(collabMembersList);
+    collabLayout->addWidget(collabAutoFollowCheckBox);
+    collabLayout->addWidget(collabSyncNowButton);
+    collabLayout->addWidget(collabReconnectButton);
+    collabLayout->addStretch();
+
+    collabDock->setWidget(collabBody);
+    addDockWidget(Qt::RightDockWidgetArea, collabDock);
+    collabDock->show();
+    updateCollabPanelUi();
 }
 
 void MainWindow::setNEO4JConnectInfo() {
@@ -1667,6 +1813,7 @@ void MainWindow::loadFile(const QString& fileName) {
             fastapi_project_id.clear();
             fastapi_project_name.clear();
             fastapi_model_version = 0;
+            fastapi_pending_remote_version = 0;
             setCurrentPartName(fileName);
             statusBar()->showMessage(tr("零件已导入(neo4j)"), 2000);
         } else if (checkedAct == setFASTAPIModeAct) {
@@ -1755,8 +1902,10 @@ void MainWindow::loadFile(const QString& partName, const int generation) {
             fastapi_project_id.clear();
             fastapi_project_name.clear();
             fastapi_model_version = 0;
+            fastapi_pending_remote_version = 0;
             statusBar()->showMessage(tr("零件已导入(neo4j)"), 2000);
         }
+        updateCollabPanelUi();
     }
 
 }
@@ -1862,6 +2011,7 @@ bool MainWindow::saveFile(const QString& fileName) {
                                 fastapi_model_version = *newVersion;
                                 fastapi_pending_remote_version = 0;
                                 reconnectFastAPISync();
+                                requestFastAPISyncNow();
                             }
                         }
                     }
@@ -1890,16 +2040,21 @@ bool MainWindow::saveFile(const QString& fileName) {
     } else if (checkedAct == setFASTAPIModeAct) {
         setCurrentPartName(fileName);
         statusBar()->showMessage(tr("零件已保存(FastAPI)，版本%1").arg(fastapi_model_version), 3000);
+        if (fastapiAutoFollowRemote && fastapi_pending_remote_version > fastapi_model_version && !curWindow->getIsModified()) {
+            applyPendingRemoteVersion();
+        }
     } else if (checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct) {
         disconnectFastAPISync();
         fastapi_project_id.clear();
         fastapi_project_name.clear();
         fastapi_model_version = 0;
+        fastapi_pending_remote_version = 0;
         setCurrentPartName(fileName);
         statusBar()->showMessage(tr("零件已保存(neo4j)"), 2000);
     } else {
         throw std::runtime_error("不支持的保存模式");
     }
+    updateCollabPanelUi();
     return true;
 }
 
