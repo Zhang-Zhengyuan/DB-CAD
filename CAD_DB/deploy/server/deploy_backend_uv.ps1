@@ -5,7 +5,8 @@ param(
     [string]$Neo4jUri = "bolt://127.0.0.1:7687",
     [string]$Neo4jUser = "neo4j",
     [string]$Neo4jPassword = "change_me",
-    [string]$Neo4jDatabase = "neo4j"
+    [string]$Neo4jDatabase = "neo4j",
+    [string]$ApiPassword = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -80,6 +81,11 @@ if ($resolvedStorageBackend -eq "neo4j") {
     $env:CAD_DB_NEO4J_USER = $resolvedNeo4jUser
     $env:CAD_DB_NEO4J_PASSWORD = $resolvedNeo4jPassword
     $env:CAD_DB_NEO4J_DATABASE = $resolvedNeo4jDatabase
+}
+
+$resolvedApiPassword = if ($PSBoundParameters.ContainsKey("ApiPassword")) { $ApiPassword } else { [Environment]::GetEnvironmentVariable("CAD_DB_API_PASSWORD") }
+if (-not [string]::IsNullOrWhiteSpace($resolvedApiPassword)) {
+    $env:CAD_DB_API_PASSWORD = $resolvedApiPassword
 }
 
 Write-Host "[INFO] Starting backend: http://${HostAddress}:${Port}"

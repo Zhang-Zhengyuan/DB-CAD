@@ -20,6 +20,7 @@
 #include <QDialogButtonBox>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QUrl>
 #include <QtWebSockets/QWebSocket>
@@ -115,6 +116,51 @@ std::vector<menu_struct> menus_operators = {
   //{"Brep转CSG",      "brep2csg",     false, OPERATOR_TYPES::OPERATOR_DEFEATURE,   DEFEATURE_BREP2CSG    },
 };
 
+namespace {
+std::string trim_copy(const std::string& input) {
+    const size_t first = input.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return "";
+    }
+    const size_t last = input.find_last_not_of(" \t\r\n");
+    return input.substr(first, last - first + 1);
+}
+
+std::vector<std::string> read_config_lines(const std::string& filePath, int maxLines) {
+    std::vector<std::string> values;
+    std::ifstream fs(filePath, std::ios_base::in);
+    if (!fs.is_open()) {
+        return values;
+    }
+
+    std::string line;
+    while (static_cast<int>(values.size()) < maxLines && std::getline(fs, line)) {
+        values.push_back(trim_copy(line));
+    }
+
+    while (static_cast<int>(values.size()) < maxLines) {
+        values.emplace_back("");
+    }
+
+    return values;
+}
+
+bool write_config_lines(const std::string& filePath, const std::vector<std::string>& lines, QString* error) {
+    std::ofstream fs(filePath, std::ios_base::out | std::ios_base::trunc);
+    if (!fs.is_open()) {
+        if (error != nullptr) {
+            *error = QObject::tr("无法写入配置文件：%1").arg(QString::fromStdString(filePath));
+        }
+        return false;
+    }
+
+    for (const auto& line : lines) {
+        fs << line << '\n';
+    }
+    return true;
+}
+}
+
 MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(parent, flags) {
     setObjectName("MainWindow");
     setWindowTitle("DBCAD");
@@ -139,8 +185,35 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
     HISTORY_STREAM* new_hs = new HISTORY_STREAM();
     set_default_stream(new_hs);
 
-    setNEO4JConnectInfo();
-    setFastAPIConnectInfo();
+    {
+        auto neo4jValues = read_config_lines("neo4j_connect_info.conf", 4);
+        if (!neo4jValues.empty()) {
+            if (!neo4jValues[0].empty()) {
+                neo4jdb_host = neo4jValues[0];
+            }
+            if (!neo4jValues[1].empty()) {
+                try {
+                    neo4jdb_port_bolt = std::stoi(neo4jValues[1]);
+                } catch (...) {
+                    neo4jdb_port_bolt = 7687;
+                }
+            }
+            neo4jdb_username = neo4jValues[2];
+            neo4jdb_password = neo4jValues[3];
+        } else {
+            neo4jdb_host = "127.0.0.1";
+            neo4jdb_port_bolt = 7687;
+            neo4jdb_username = "neo4j";
+        }
+
+        auto fastapiValues = read_config_lines("fastapi_connect_info.conf", 3);
+        if (!fastapiValues.empty()) {
+            fastapi_base_url = fastapiValues[0];
+            fastapi_author = fastapiValues[1];
+            fastapi_password = fastapiValues[2];
+        }
+    }
+
     mg_init();
 }
 
@@ -159,37 +232,88 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::setFastAPIConnectInfo() {
-    std::ifstream fs;
-    fs.open("fastapi_connect_info.conf", std::ios_base::in);
-    if (fs.is_open()) {
-        std::string str, str_trim;
-        int i = 0;
-        while (std::getline(fs, str)) {
-            size_t first = str.find_first_not_of(' ');
-            if (first == std::string::npos) {
-                str_trim = str;
-            } else {
-                size_t last = str.find_last_not_of(' ');
-                str_trim = str.substr(first, (last - first + 1));
-            }
-
-            if (i == 0) {
-                fastapi_base_url = str_trim;
-            } else if (i == 1) {
-                fastapi_author = str_trim;
-                break;
-            }
-            i++;
+    auto values = read_config_lines("fastapi_connect_info.conf", 3);
+    if (!values.empty()) {
+        if (!values[0].empty()) {
+            fastapi_base_url = values[0];
         }
-
-        if (fastapi_base_url.empty()) {
-            statusBar()->showMessage(tr("fastapi_connect_info.conf中缺少FastAPI地址"), 3000);
-        } else {
-            statusBar()->showMessage(tr("FastAPI连接信息已设置"), 2000);
+        if (!values[1].empty()) {
+            fastapi_author = values[1];
         }
-    } else {
-        statusBar()->showMessage(tr("fastapi_connect_info.conf文件打开失败！"), 2000);
+        fastapi_password = values[2];
     }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("FastAPI连接配置"));
+    dialog.setMinimumSize(420, 220);
+    QFormLayout form(&dialog);
+
+    QLineEdit baseUrlEdit(&dialog);
+    baseUrlEdit.setPlaceholderText("http://127.0.0.1:8000");
+    baseUrlEdit.setText(QString::fromStdString(fastapi_base_url));
+    form.addRow(tr("FastAPI地址:"), &baseUrlEdit);
+
+    QLineEdit authorEdit(&dialog);
+    authorEdit.setPlaceholderText("dbcad-exe");
+    authorEdit.setText(QString::fromStdString(fastapi_author));
+    form.addRow(tr("作者名:"), &authorEdit);
+
+    QLineEdit passwordEdit(&dialog);
+    passwordEdit.setEchoMode(QLineEdit::Password);
+    passwordEdit.setPlaceholderText("可留空（后端未启用密码时）");
+    passwordEdit.setText(QString::fromStdString(fastapi_password));
+    form.addRow(tr("连接密码:"), &passwordEdit);
+
+    QPushButton testButton(tr("测试连接"), &dialog);
+    form.addRow(&testButton);
+
+    QDialogButtonBox buttonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dialog);
+    form.addRow(&buttonBox);
+    QObject::connect(&buttonBox, SIGNAL(accepted()), &dialog, SLOT(accept()));
+    QObject::connect(&buttonBox, SIGNAL(rejected()), &dialog, SLOT(reject()));
+
+    QObject::connect(&testButton, &QPushButton::clicked, &dialog, [&]() {
+        const QString url = baseUrlEdit.text().trimmed();
+        if (url.isEmpty()) {
+            QMessageBox::warning(this, tr("FastAPI连接测试"), tr("FastAPI地址不能为空"));
+            return;
+        }
+
+        BackendApiClient client(url, authorEdit.text().trimmed(), passwordEdit.text());
+        auto project = client.getProjectByName("__dbcad_connection_test__");
+        Q_UNUSED(project);
+        const QString err = client.lastError();
+        if (!err.isEmpty()) {
+            QMessageBox::warning(this, tr("FastAPI连接测试"), tr("连接失败：%1").arg(err));
+        } else {
+            QMessageBox::information(this, tr("FastAPI连接测试"), tr("连接成功。"));
+        }
+    });
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString baseUrl = baseUrlEdit.text().trimmed();
+    if (baseUrl.isEmpty()) {
+        QMessageBox::warning(this, tr("FastAPI连接配置"), tr("FastAPI地址不能为空"));
+        return;
+    }
+
+    fastapi_base_url = baseUrl.toStdString();
+    fastapi_author = authorEdit.text().trimmed().toStdString();
+    fastapi_password = passwordEdit.text().trimmed().toStdString();
+
+    QString writeError;
+    if (!write_config_lines(
+            "fastapi_connect_info.conf",
+            { fastapi_base_url, fastapi_author, fastapi_password },
+            &writeError)) {
+        QMessageBox::warning(this, tr("FastAPI连接配置"), writeError);
+        return;
+    }
+
+    statusBar()->showMessage(tr("FastAPI连接信息已更新"), 2000);
 }
 
 bool MainWindow::restoreFastAPIModelFromSat(const QString& satContent) {
@@ -258,7 +382,11 @@ void MainWindow::reconnectFastAPISync() {
         wsBaseUrl = "ws://" + wsBaseUrl;
     }
 
-    const QUrl wsUrl(wsBaseUrl + "/ws/projects/" + fastapi_project_id);
+    QString wsPath = "/ws/projects/" + fastapi_project_id;
+    if (!fastapi_password.empty()) {
+        wsPath += "?password=" + QString::fromUtf8(QUrl::toPercentEncoding(QString::fromStdString(fastapi_password)));
+    }
+    const QUrl wsUrl(wsBaseUrl + wsPath);
     fastapiSyncSocket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
 
     connect(fastapiSyncSocket, &QWebSocket::textMessageReceived, this, &MainWindow::handleFastAPISyncMessage);
@@ -314,7 +442,10 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
         return;
     }
 
-    BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author));
+    BackendApiClient client(
+        QString::fromStdString(fastapi_base_url),
+        QString::fromStdString(fastapi_author),
+        QString::fromStdString(fastapi_password));
     auto model = client.getModelVersion(projectId, remoteVersion);
     if (!model.has_value()) {
         statusBar()->showMessage(tr("远程同步失败：%1").arg(client.lastError()), 4000);
@@ -910,42 +1041,110 @@ void MainWindow::createActions() {
     setNEO4JConnectInfoAct->setStatusTip(tr("读取与程序相同目录下的neo4j_connect_info.conf文件，设置neo4j图数据库连接信息。该文件第1行是IP地址，第2行是Bolt协议端口号，第3行是用户名，第4行是密码，不能包含空格和多余的换行符，编码须为UTF-8（无BOM）。"));
     settingsMenu->addAction(setNEO4JConnectInfoAct);
     QAction* setFastAPIConnectInfoAct = settingsMenu->addAction(tr("设置FastAPI连接信息"), this, &MainWindow::setFastAPIConnectInfo);
-    setFastAPIConnectInfoAct->setStatusTip(tr("读取与程序相同目录下的fastapi_connect_info.conf文件。第1行为FastAPI服务地址（如http://127.0.0.1:8000），第2行为作者名。"));
+    setFastAPIConnectInfoAct->setStatusTip(tr("配置FastAPI地址、作者名与连接密码，并保存到fastapi_connect_info.conf（前三行）。"));
     settingsMenu->addAction(setFastAPIConnectInfoAct);
 }
 
 void MainWindow::setNEO4JConnectInfo() {
-    std::ifstream fs;
-    fs.open("neo4j_connect_info.conf", std::ios_base::in);
-    if (fs.is_open()) {
-        // 判断序号是否在begin和end之间
-        std::string str, str_trim;
-        int i = 0;
-        while (std::getline(fs, str)) {
-            size_t first = str.find_first_not_of(' ');
-            if (first == std::string::npos) {
-                str_trim = str;
-            } else {
-                size_t last = str.find_last_not_of(' ');
-                str_trim = str.substr(first, (last - first + 1));
-            }
-            // if(str_trim.size() == 0) continue;
-            if (i == 0) {  // IP地址
-                neo4jdb_host = str_trim;
-            } else if (i == 1) {  // Bolt端口号
-                neo4jdb_port_bolt = std::stoi(str_trim);
-            } else if (i == 2) {  // 用户名(第4行是空行说明用户名为"")
-                neo4jdb_username = str_trim;
-            } else if (i == 3) {  // 密码(第5行是空行说明密码为"")
-                neo4jdb_password = str_trim;
-                break;
-            }
-            i++;
+    auto values = read_config_lines("neo4j_connect_info.conf", 4);
+    if (!values.empty()) {
+        if (!values[0].empty()) {
+            neo4jdb_host = values[0];
         }
-        statusBar()->showMessage(tr("neo4j连接信息已设置"), 2000);
-    } else {
-        statusBar()->showMessage(tr("neo4j_connect_info.conf文件打开失败！"), 2000);
+        if (!values[1].empty()) {
+            try {
+                neo4jdb_port_bolt = std::stoi(values[1]);
+            } catch (...) {
+                neo4jdb_port_bolt = 7687;
+            }
+        }
+        neo4jdb_username = values[2];
+        neo4jdb_password = values[3];
+    } else if (neo4jdb_host.empty()) {
+        neo4jdb_host = "127.0.0.1";
+        neo4jdb_port_bolt = 7687;
+        neo4jdb_username = "neo4j";
     }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("neo4j连接配置"));
+    dialog.setMinimumSize(420, 240);
+    QFormLayout form(&dialog);
+
+    QLineEdit hostEdit(&dialog);
+    hostEdit.setText(QString::fromStdString(neo4jdb_host));
+    form.addRow(tr("主机地址:"), &hostEdit);
+
+    QSpinBox portEdit(&dialog);
+    portEdit.setMinimum(1);
+    portEdit.setMaximum(65535);
+    portEdit.setValue(neo4jdb_port_bolt <= 0 ? 7687 : neo4jdb_port_bolt);
+    form.addRow(tr("Bolt端口:"), &portEdit);
+
+    QLineEdit userEdit(&dialog);
+    userEdit.setText(QString::fromStdString(neo4jdb_username));
+    form.addRow(tr("用户名:"), &userEdit);
+
+    QLineEdit passwordEdit(&dialog);
+    passwordEdit.setEchoMode(QLineEdit::Password);
+    passwordEdit.setText(QString::fromStdString(neo4jdb_password));
+    form.addRow(tr("密码:"), &passwordEdit);
+
+    QPushButton testButton(tr("测试连接"), &dialog);
+    form.addRow(&testButton);
+
+    QDialogButtonBox buttonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dialog);
+    form.addRow(&buttonBox);
+    QObject::connect(&buttonBox, SIGNAL(accepted()), &dialog, SLOT(accept()));
+    QObject::connect(&buttonBox, SIGNAL(rejected()), &dialog, SLOT(reject()));
+
+    QObject::connect(&testButton, &QPushButton::clicked, &dialog, [&]() {
+        const QString host = hostEdit.text().trimmed();
+        if (host.isEmpty()) {
+            QMessageBox::warning(this, tr("neo4j连接测试"), tr("主机地址不能为空"));
+            return;
+        }
+
+        try {
+            Neo4jPart conn(
+                host.toStdString().c_str(),
+                portEdit.value(),
+                userEdit.text().trimmed().toStdString().c_str(),
+                passwordEdit.text().toStdString().c_str(),
+                "");
+            const int64_t projectCount = count_partnode(conn);
+            Q_UNUSED(projectCount);
+            QMessageBox::information(this, tr("neo4j连接测试"), tr("连接成功。"));
+        } catch (const std::exception& ex) {
+            QMessageBox::warning(this, tr("neo4j连接测试"), tr("连接失败：%1").arg(QString::fromUtf8(ex.what())));
+        }
+    });
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString host = hostEdit.text().trimmed();
+    if (host.isEmpty()) {
+        QMessageBox::warning(this, tr("neo4j连接配置"), tr("主机地址不能为空"));
+        return;
+    }
+
+    neo4jdb_host = host.toStdString();
+    neo4jdb_port_bolt = portEdit.value();
+    neo4jdb_username = userEdit.text().trimmed().toStdString();
+    neo4jdb_password = passwordEdit.text().toStdString();
+
+    QString writeError;
+    if (!write_config_lines(
+            "neo4j_connect_info.conf",
+            { neo4jdb_host, std::to_string(neo4jdb_port_bolt), neo4jdb_username, neo4jdb_password },
+            &writeError)) {
+        QMessageBox::warning(this, tr("neo4j连接配置"), writeError);
+        return;
+    }
+
+    statusBar()->showMessage(tr("neo4j连接信息已更新"), 2000);
 }
 
 void MainWindow::clear() {
@@ -1091,23 +1290,30 @@ void MainWindow::loadFile(const QString& fileName) {
             QMessageBox::warning(this, tr("DBCAD"), tr("无法读取文件%1。").arg(QDir::toNativeSeparators(fileName)));
         }
     } else if (checkedAct == setNEO4JModeAct) {
-        Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), fileName.toStdString());
-        int64_t countn = count_partnode(f);
-        if (countn == 1) {
-            ENTITY_LIST el;
-            API_BEGIN;
-            api_restore_entity_list_neo4j_part(f, el);
-            API_END;
-            for (int i = 0; i < el.count(); i++) curWindow->addEntity(el[i], tr("导入(neo4j)实体%1").arg(i).toStdString(), -1);
-            isRead = true;
-        } else if (countn == 0) {
-            QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不存在。").arg(QString(fileName)));
-        } else {
-            assert(countn > 1);
-            QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不唯一。").arg(QString(fileName)));
+        try {
+            Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), fileName.toStdString());
+            int64_t countn = count_partnode(f);
+            if (countn == 1) {
+                ENTITY_LIST el;
+                API_BEGIN;
+                api_restore_entity_list_neo4j_part(f, el);
+                API_END;
+                for (int i = 0; i < el.count(); i++) curWindow->addEntity(el[i], tr("导入(neo4j)实体%1").arg(i).toStdString(), -1);
+                isRead = true;
+            } else if (countn == 0) {
+                QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不存在。").arg(QString(fileName)));
+            } else {
+                assert(countn > 1);
+                QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不唯一。").arg(QString(fileName)));
+            }
+        } catch (const std::exception& ex) {
+            QMessageBox::warning(this, tr("DBCAD"), tr("连接neo4j失败：%1").arg(QString::fromUtf8(ex.what())));
         }
     } else if (checkedAct == setFASTAPIModeAct) {
-        BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author));
+        BackendApiClient client(
+            QString::fromStdString(fastapi_base_url),
+            QString::fromStdString(fastapi_author),
+            QString::fromStdString(fastapi_password));
         if (!client.isConfigured()) {
             QMessageBox::warning(this, tr("DBCAD"), tr("FastAPI地址未配置，请先设置fastapi_connect_info.conf"));
         } else {
@@ -1177,22 +1383,29 @@ void MainWindow::loadFile(const QString& partName, const int generation) {
     QAction* checkedAct = setModeActGroup->checkedAction();
 
     if (checkedAct == setNEO4JIncrementalModeAct) {
-        Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), partName.toStdString());
-        int64_t countn = count_partnode(f);
-        if (countn == 1) {
-            api_restore_neo4j(f, generation);
-            ENTITY_LIST el;
-            acis_get_noattrib_toplevel_active_entities(el);
-            for (int i = 0; i < el.count(); i++) curWindow->addEntity(el[i], tr("导入(neo4j)实体%1").arg(i).toStdString(), -1);
-            isRead = true;
-        } else if (countn == 0) {
-            QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不存在。").arg(QString(partName)));
-        } else {
-            assert(countn > 1);
-            QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不唯一。").arg(QString(partName)));
+        try {
+            Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), partName.toStdString());
+            int64_t countn = count_partnode(f);
+            if (countn == 1) {
+                api_restore_neo4j(f, generation);
+                ENTITY_LIST el;
+                acis_get_noattrib_toplevel_active_entities(el);
+                for (int i = 0; i < el.count(); i++) curWindow->addEntity(el[i], tr("导入(neo4j)实体%1").arg(i).toStdString(), -1);
+                isRead = true;
+            } else if (countn == 0) {
+                QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不存在。").arg(QString(partName)));
+            } else {
+                assert(countn > 1);
+                QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不唯一。").arg(QString(partName)));
+            }
+        } catch (const std::exception& ex) {
+            QMessageBox::warning(this, tr("DBCAD"), tr("连接neo4j失败：%1").arg(QString::fromUtf8(ex.what())));
         }
     } else if (checkedAct == setFASTAPIModeAct) {
-        BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author));
+        BackendApiClient client(
+            QString::fromStdString(fastapi_base_url),
+            QString::fromStdString(fastapi_author),
+            QString::fromStdString(fastapi_password));
         if (!client.isConfigured()) {
             QMessageBox::warning(this, tr("DBCAD"), tr("FastAPI地址未配置，请先设置fastapi_connect_info.conf"));
         } else {
@@ -1267,15 +1480,26 @@ bool MainWindow::saveFile(const QString& fileName) {
         }
 
     } else if (checkedAct == setNEO4JModeAct) {
-        Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), fileName.toStdString());
-        ENTITY_LIST el;
-        acis_get_noattrib_toplevel_active_entities(el);
-        api_save_entity_list_neo4j_part(f, el);
+        try {
+            Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), fileName.toStdString());
+            ENTITY_LIST el;
+            acis_get_noattrib_toplevel_active_entities(el);
+            api_save_entity_list_neo4j_part(f, el);
+        } catch (const std::exception& ex) {
+            errorMessage = tr("保存到neo4j失败：%1").arg(QString::fromUtf8(ex.what()));
+        }
     } else if (checkedAct == setNEO4JIncrementalModeAct) {
-        Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), fileName.toStdString());
-        api_save_neo4j(f);
+        try {
+            Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), fileName.toStdString());
+            api_save_neo4j(f);
+        } catch (const std::exception& ex) {
+            errorMessage = tr("保存到neo4j失败：%1").arg(QString::fromUtf8(ex.what()));
+        }
     } else if (checkedAct == setFASTAPIModeAct) {
-        BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author));
+        BackendApiClient client(
+            QString::fromStdString(fastapi_base_url),
+            QString::fromStdString(fastapi_author),
+            QString::fromStdString(fastapi_password));
         if (!client.isConfigured()) {
             errorMessage = tr("FastAPI地址未配置，请先设置fastapi_connect_info.conf");
         } else {

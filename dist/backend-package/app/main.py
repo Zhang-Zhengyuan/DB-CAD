@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
 from . import crud, schemas
@@ -7,6 +7,11 @@ from .database import Base, engine, get_db
 from .sync import sync_manager
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
+
+
+def verify_api_password(x_api_password: str | None = Header(default=None)) -> None:
+    if settings.api_password and x_api_password != settings.api_password:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API password")
 
 
 @app.on_event("startup")
@@ -29,25 +34,42 @@ def health() -> dict[str, str]:
 
 
 @app.post("/projects", response_model=schemas.ProjectRead, status_code=201)
-def create_project(payload: schemas.ProjectCreate, db: Session = Depends(get_db)) -> schemas.ProjectRead:
+def create_project(
+    payload: schemas.ProjectCreate,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_api_password),
+) -> schemas.ProjectRead:
     entity = crud.create_project(db, payload)
     return schemas.ProjectRead.model_validate(entity)
 
 
 @app.get("/projects/{project_id}", response_model=schemas.ProjectRead)
-def get_project(project_id: str, db: Session = Depends(get_db)) -> schemas.ProjectRead:
+def get_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_api_password),
+) -> schemas.ProjectRead:
     entity = crud.get_project_or_404(db, project_id)
     return schemas.ProjectRead.model_validate(entity)
 
 
 @app.get("/projects/by-name/{project_name}", response_model=schemas.ProjectRead)
-def get_project_by_name(project_name: str, db: Session = Depends(get_db)) -> schemas.ProjectRead:
+def get_project_by_name(
+    project_name: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_api_password),
+) -> schemas.ProjectRead:
     entity = crud.get_project_by_name_or_404(db, project_name)
     return schemas.ProjectRead.model_validate(entity)
 
 
 @app.post("/projects/{project_id}/models", response_model=schemas.SaveResult, status_code=201)
-async def save_model(project_id: str, payload: schemas.ModelVersionCreate, db: Session = Depends(get_db)) -> schemas.SaveResult:
+async def save_model(
+    project_id: str,
+    payload: schemas.ModelVersionCreate,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_api_password),
+) -> schemas.SaveResult:
     version = crud.create_model_version(db, project_id, payload)
     await sync_manager.broadcast(
         project_id,
@@ -63,13 +85,22 @@ async def save_model(project_id: str, payload: schemas.ModelVersionCreate, db: S
 
 
 @app.get("/projects/{project_id}/models/latest", response_model=schemas.ModelVersionRead)
-def get_latest_model(project_id: str, db: Session = Depends(get_db)) -> schemas.ModelVersionRead:
+def get_latest_model(
+    project_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_api_password),
+) -> schemas.ModelVersionRead:
     version = crud.get_latest_version_or_404(db, project_id)
     return crud.deserialize_version(version)
 
 
 @app.get("/projects/{project_id}/models/{version}", response_model=schemas.ModelVersionRead)
-def get_model_by_version(project_id: str, version: int, db: Session = Depends(get_db)) -> schemas.ModelVersionRead:
+def get_model_by_version(
+    project_id: str,
+    version: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_api_password),
+) -> schemas.ModelVersionRead:
     entity = crud.get_version_or_404(db, project_id, version)
     return crud.deserialize_version(entity)
 
@@ -80,6 +111,7 @@ def get_versions(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    _: None = Depends(verify_api_password),
 ) -> list[schemas.ModelVersionRead]:
     versions = crud.list_versions(db, project_id, limit=limit, offset=offset)
     return [crud.deserialize_version(item) for item in versions]
@@ -87,6 +119,10 @@ def get_versions(
 
 @app.websocket("/ws/projects/{project_id}")
 async def ws_project_sync(websocket: WebSocket, project_id: str) -> None:
+    if settings.api_password and websocket.query_params.get("password") != settings.api_password:
+        await websocket.close(code=1008)
+        return
+
     await sync_manager.connect(project_id, websocket)
     try:
         while True:

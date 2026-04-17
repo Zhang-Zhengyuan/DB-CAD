@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     neo4j_user: str = Field(default="neo4j")
     neo4j_password: str = Field(default="")
     neo4j_database: str = Field(default="neo4j")
+    api_password: str = Field(default="")
 
     model_config = SettingsConfigDict(env_prefix="CAD_DB_", env_file=".env", extra="ignore")
 

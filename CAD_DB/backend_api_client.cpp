@@ -6,13 +6,16 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QTimer>
 #include <QUrl>
 
 #include <utility>
 
-BackendApiClient::BackendApiClient(QString baseUrl, QString author) : baseUrl(std::move(baseUrl)), author(std::move(author)) {
+BackendApiClient::BackendApiClient(QString baseUrl, QString author, QString apiPassword)
+    : baseUrl(std::move(baseUrl)), author(std::move(author)), apiPassword(std::move(apiPassword)) {
     this->baseUrl = this->baseUrl.trimmed();
     this->author = this->author.trimmed();
+    this->apiPassword = this->apiPassword.trimmed();
     while (this->baseUrl.endsWith('/')) {
         this->baseUrl.chop(1);
     }
@@ -42,6 +45,9 @@ BackendApiClient::HttpResult BackendApiClient::sendJsonRequest(const QString& me
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    if (!apiPassword.isEmpty()) {
+        request.setRawHeader("X-API-Password", apiPassword.toUtf8());
+    }
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = nullptr;
@@ -56,13 +62,25 @@ BackendApiClient::HttpResult BackendApiClient::sendJsonRequest(const QString& me
 
     QEventLoop loop;
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    QTimer timer;
+    timer.setSingleShot(true);
+    QObject::connect(&timer, &QTimer::timeout, &loop, [&]() {
+        if (reply->isRunning()) {
+            reply->abort();
+            result.error = QString::fromUtf8("连接FastAPI超时（10秒）");
+        }
+    });
+    timer.start(10000);
     loop.exec();
+    timer.stop();
 
     result.statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     result.body = reply->readAll();
 
     if (reply->error() != QNetworkReply::NoError) {
-        result.error = reply->errorString();
+        if (result.error.isEmpty()) {
+            result.error = reply->errorString();
+        }
     }
 
     reply->deleteLater();

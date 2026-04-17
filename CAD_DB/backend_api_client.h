@@ -18,7 +18,7 @@ public:
         QString sat;
     };
 
-    BackendApiClient(QString baseUrl, QString author);
+    BackendApiClient(QString baseUrl, QString author, QString apiPassword = {});
 
     bool isConfigured() const;
     QString lastError() const;
@@ -42,5 +42,6 @@ private:
 
     QString baseUrl;
     QString author;
+    QString apiPassword;
     mutable QString errorMessage;
 };

@@ -142,6 +142,7 @@ private:
     std::string neo4jdb_password;
     std::string fastapi_base_url;
     std::string fastapi_author;
+    std::string fastapi_password;
     QString fastapi_project_id;
     QString fastapi_project_name;
     int fastapi_model_version = 0;
