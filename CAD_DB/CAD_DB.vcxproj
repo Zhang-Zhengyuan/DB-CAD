@@ -147,6 +147,23 @@
   <ItemGroup>
     <ResourceCompile Include="images\DBCAD.rc" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="backend\app\config.py" />
+    <None Include="backend\app\crud.py" />
+    <None Include="backend\app\database.py" />
+    <None Include="backend\app\main.py" />
+    <None Include="backend\app\models.py" />
+    <None Include="backend\app\schemas.py" />
+    <None Include="backend\app\sync.py" />
+    <None Include="backend\app\__init__.py" />
+    <None Include="backend\pytest.ini" />
+    <None Include="backend\README.md" />
+    <None Include="backend\tests\test_api.py" />
+    <None Include="项目计划.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="backend\requirements.txt" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
     <Import Project="$(QtMsBuild)\qt.targets" />
