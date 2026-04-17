@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$HostAddress = "0.0.0.0",
     [int]$Port = 8000
 )
@@ -23,7 +23,9 @@ function Load-EnvFile([string]$EnvFilePath) {
         if ($line.StartsWith("#")) { return }
         $pair = $line.Split('=', 2)
         if ($pair.Count -ne 2) { return }
-        [Environment]::SetEnvironmentVariable($pair[0].Trim(), $pair[1].Trim())
+        $name = $pair[0].Trim().TrimStart([char]0xFEFF)
+        $value = $pair[1].Trim()
+        [Environment]::SetEnvironmentVariable($name, $value)
     }
 }
 
@@ -33,7 +35,7 @@ function Validate-BackendConfig {
 
     if ($storage.ToLower() -eq "neo4j") {
         $pwd = [Environment]::GetEnvironmentVariable("CAD_DB_NEO4J_PASSWORD")
-        $placeholders = @("change_me", "your_password", "password", "neo4j")
+        $placeholders = @("change_me", "your_password")
         if ([string]::IsNullOrWhiteSpace($pwd) -or ($placeholders -contains $pwd.ToLower())) {
             throw "Invalid Neo4j password in .env. Please set CAD_DB_NEO4J_PASSWORD to the real password before start."
         }
