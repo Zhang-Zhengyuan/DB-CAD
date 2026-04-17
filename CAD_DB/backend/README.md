@@ -36,3 +36,26 @@
 ## 数据库
 - 默认 SQLite：`cad_store.db`
 - 可通过环境变量 `CAD_DB_DATABASE_URL` 覆盖
+
+## 存储后端切换（关键）
+为支持“前后端分离 + FastAPI 统一服务层 + Neo4j 数据库存储”，后端支持双模式：
+
+- `CAD_DB_STORAGE_BACKEND=sqlite`（默认）
+- `CAD_DB_STORAGE_BACKEND=neo4j`
+
+当使用 Neo4j 模式时，还需要配置：
+
+- `CAD_DB_NEO4J_URI`（例如 `bolt://127.0.0.1:7687`）
+- `CAD_DB_NEO4J_USER`
+- `CAD_DB_NEO4J_PASSWORD`
+- `CAD_DB_NEO4J_DATABASE`（默认 `neo4j`）
+
+示例（PowerShell）：
+
+```powershell
+$env:CAD_DB_STORAGE_BACKEND = "neo4j"
+$env:CAD_DB_NEO4J_URI = "bolt://127.0.0.1:7687"
+$env:CAD_DB_NEO4J_USER = "neo4j"
+$env:CAD_DB_NEO4J_PASSWORD = "your_password"
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```

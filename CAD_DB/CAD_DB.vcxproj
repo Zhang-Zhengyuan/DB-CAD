@@ -150,11 +150,13 @@
     <ResourceCompile Include="images\DBCAD.rc" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="backend\.env.example" />
     <None Include="backend\app\config.py" />
     <None Include="backend\app\crud.py" />
     <None Include="backend\app\database.py" />
     <None Include="backend\app\main.py" />
     <None Include="backend\app\models.py" />
+    <None Include="backend\app\neo4j_store.py" />
     <None Include="backend\app\schemas.py" />
     <None Include="backend\app\sync.py" />
     <None Include="backend\app\__init__.py" />

@@ -11,7 +11,16 @@ app = FastAPI(title=settings.app_name, version="0.1.0")
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
+    if crud.neo4j_store is None:
+        Base.metadata.create_all(bind=engine)
+    else:
+        crud.neo4j_store.initialize()
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    if crud.neo4j_store is not None:
+        crud.neo4j_store.close()
 
 
 @app.get("/health")
