@@ -19,11 +19,12 @@ Neo4jPart::Neo4jPart(const char* host, int port_bolt, const char* un, const char
     mg_session_params_destroy(params);
     if (status < 0) {
         const char* err = session ? mg_session_error(session) : "unknown error";
+        const std::string errMsg = err ? err : "unknown error";
         if (session) {
             mg_session_destroy(session);
             session = nullptr;
         }
-        throw std::runtime_error(std::format("Neo4j数据库连接失败：{}", err));
+        throw std::runtime_error(std::format("Neo4j数据库连接失败：{}", errMsg));
     }
 }
 
@@ -33,27 +34,36 @@ void Neo4jPart::execute_bolt(const char* statement, const mg_map* parameters) co
     }
     if (mg_session_run(session, statement, parameters, NULL, NULL, NULL) < 0) {
         const char* err = mg_session_error(session);
+        const std::string errMsg = err ? err : "unknown error";
         if (err) {
             FILE* f = fopen("error.log", "w");
-            fprintf(f, "%s\n", err);
-            fclose(f);
-            printf("Error saved to error.log\n");
+            if (f) {
+                fprintf(f, "%s\n", err);
+                fclose(f);
+                printf("Error saved to error.log\n");
+            }
         }
         if (session) {
             mg_session_destroy(session);
+            session = nullptr;
         }
-        throw std::runtime_error(std::format("执行Cypher语句失败：{}", err ? err : "unknown error"));
+        throw std::runtime_error(std::format("执行Cypher语句失败：{}", errMsg));
     }
     if (mg_session_pull(session, NULL) < 0) {
         const char* err = mg_session_error(session);
+        const std::string errMsg = err ? err : "unknown error";
         if (session) {
             mg_session_destroy(session);
+            session = nullptr;
         }
-        throw std::runtime_error(std::format("拉取Cypher语句执行结果失败：{}", err ? err : "unknown error"));
+        throw std::runtime_error(std::format("拉取Cypher语句执行结果失败：{}", errMsg));
     }
 }
 
 void Neo4jPart::discard_all_results() const {
+    if (!session) {
+        return;
+    }
     mg_result* result;
     int status;
     while (1) {

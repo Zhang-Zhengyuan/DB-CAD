@@ -40,27 +40,33 @@ QByteArray asUtf8(const mg_string* value) {
     return QByteArray(value->data, static_cast<int>(value->size));
 }
 
-QString toQString(const mg_value* value) {
-    if (value == nullptr || mg_value_get_type(value) != MG_VALUE_TYPE_STRING) {
+struct QueryValue {
+    mg_value_type type = MG_VALUE_TYPE_NULL;
+    QString stringValue;
+    int64_t intValue = 0;
+};
+
+QString toQString(const QueryValue& value) {
+    if (value.type != MG_VALUE_TYPE_STRING) {
         return {};
     }
-    return QString::fromUtf8(asUtf8(mg_value_string(value)));
+    return value.stringValue;
 }
 
-int64_t toInt64(const mg_value* value, bool* ok = nullptr) {
+int64_t toInt64(const QueryValue& value, bool* ok = nullptr) {
     if (ok != nullptr) {
         *ok = false;
     }
-    if (value == nullptr || mg_value_get_type(value) != MG_VALUE_TYPE_INTEGER) {
+    if (value.type != MG_VALUE_TYPE_INTEGER) {
         return 0;
     }
     if (ok != nullptr) {
         *ok = true;
     }
-    return mg_value_integer(value);
+    return value.intValue;
 }
 
-std::vector<std::vector<const mg_value*>> runQuery(
+std::vector<std::vector<QueryValue>> runQuery(
     const QString& host,
     int port,
     const QString& user,
@@ -68,7 +74,7 @@ std::vector<std::vector<const mg_value*>> runQuery(
     const QString& statement,
     mg_map* params,
     QString& error) {
-    std::vector<std::vector<const mg_value*>> rows;
+    std::vector<std::vector<QueryValue>> rows;
 
     try {
         Neo4jPart conn(
@@ -78,14 +84,7 @@ std::vector<std::vector<const mg_value*>> runQuery(
             password.toStdString().c_str(),
             "");
 
-        if (mg_session_run(conn.session, statement.toUtf8().constData(), params, nullptr, nullptr, nullptr) < 0) {
-            error = QString::fromUtf8(mg_session_error(conn.session));
-            return rows;
-        }
-        if (mg_session_pull(conn.session, nullptr) < 0) {
-            error = QString::fromUtf8(mg_session_error(conn.session));
-            return rows;
-        }
+        conn.execute_bolt(statement.toUtf8().constData(), params);
 
         mg_result* result = nullptr;
         while (true) {
@@ -105,10 +104,18 @@ std::vector<std::vector<const mg_value*>> runQuery(
             }
 
             const uint32_t rowSize = mg_list_size(row);
-            std::vector<const mg_value*> values;
+            std::vector<QueryValue> values;
             values.reserve(rowSize);
             for (uint32_t i = 0; i < rowSize; ++i) {
-                values.push_back(mg_list_at(row, i));
+                const mg_value* raw = mg_list_at(row, i);
+                QueryValue parsed;
+                parsed.type = raw ? mg_value_get_type(raw) : MG_VALUE_TYPE_NULL;
+                if (parsed.type == MG_VALUE_TYPE_STRING) {
+                    parsed.stringValue = QString::fromUtf8(asUtf8(mg_value_string(raw)));
+                } else if (parsed.type == MG_VALUE_TYPE_INTEGER) {
+                    parsed.intValue = mg_value_integer(raw);
+                }
+                values.push_back(std::move(parsed));
             }
             rows.push_back(std::move(values));
         }

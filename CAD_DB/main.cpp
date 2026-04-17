@@ -1,12 +1,16 @@
 #include <QtWidgets/QApplication>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCommandLineParser>
+#include <QtCore/QDir>
+#include <QtCore/QFileInfo>
+#include <QtCore/QLibraryInfo>
 #include <QtGui/QScreen>
 #include <QtCore/QTranslator>
 
 #include "glwidget.h"
 #include "mainwindow.h"
 #include "storage_bridge_service.h"
+#include <mgclient-1.4.2/mgclient.h>
 
 namespace {
 bool hasArg(int argc, char** argv, const char* arg) {
@@ -17,6 +21,23 @@ bool hasArg(int argc, char** argv, const char* arg) {
     }
     return false;
 }
+
+void configureQtPluginPath(const char* argv0) {
+    const QString appDir = QFileInfo(QString::fromLocal8Bit(argv0)).absolutePath();
+    const QString localPlatforms = QDir(appDir).filePath("platforms");
+    if (QDir(localPlatforms).exists()) {
+        qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", localPlatforms.toUtf8());
+        QCoreApplication::addLibraryPath(appDir);
+        return;
+    }
+
+    const QString qtPlugins = QLibraryInfo::path(QLibraryInfo::PluginsPath);
+    const QString qtPlatforms = QDir(qtPlugins).filePath("platforms");
+    if (QDir(qtPlatforms).exists()) {
+        qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", qtPlatforms.toUtf8());
+        QCoreApplication::addLibraryPath(qtPlugins);
+    }
+}
 }
 
 int main(int argc, char** argv) {
@@ -24,9 +45,13 @@ int main(int argc, char** argv) {
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
+    QCoreApplication::setApplicationName("DBCAD");
+    configureQtPluginPath(argv[0]);
+
     if (hasArg(argc, argv, "--storage-bridge")) {
         QCoreApplication app(argc, argv);
         QCoreApplication::setApplicationName("DBCAD Storage Bridge");
+        mg_init();
 
         QCommandLineParser parser;
         parser.addHelpOption();
@@ -64,15 +89,17 @@ int main(int argc, char** argv) {
         QString error;
         if (!service.start(error)) {
             qCritical() << "Failed to start storage bridge:" << error;
+            mg_finalize();
             return 3;
         }
-        return app.exec();
+        const int code = app.exec();
+        mg_finalize();
+        return code;
     }
 
     qputenv("QT_ENABLE_HIGHDPI_SCALING", "0");
 
     QApplication app(argc, argv);
-    QCoreApplication::setApplicationName("DBCAD");
     QCoreApplication::setOrganizationName("DBCAD");
     QCoreApplication::setApplicationVersion("0.0.1");
     QCommandLineParser parser;
