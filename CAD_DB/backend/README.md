@@ -7,18 +7,17 @@
 - 最新版本与历史版本查询
 - WebSocket 同步通知（模型保存后广播）
 
-## 快速启动
-1. 安装依赖
+## 快速启动（推荐 uv）
+1. 安装 uv（若未安装）
    ```powershell
-   cd CAD_DB/backend
-   python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
+   powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-2. 启动服务
+2. 同步依赖并启动
    ```powershell
-   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   cd CAD_DB/backend
+   uv sync
+   uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
 
 3. 打开文档
@@ -32,6 +31,12 @@
 - 需放通网络策略：
   - HTTP 端口（默认 8000）
   - WebSocket 路径：`/ws/projects/{project_id}`（与 HTTP 同端口）
+
+也可直接用一键脚本（仓库根目录）：
+
+```powershell
+.\CAD_DB\deploy\server\deploy_backend_uv.ps1 -HostAddress 0.0.0.0 -Port 8000 -StorageBackend neo4j
+```
 
 ## 核心 API
 - `POST /projects` 创建项目

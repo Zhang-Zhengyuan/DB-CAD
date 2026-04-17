@@ -160,9 +160,14 @@
     <None Include="backend\app\schemas.py" />
     <None Include="backend\app\sync.py" />
     <None Include="backend\app\__init__.py" />
+    <None Include="backend\pyproject.toml" />
     <None Include="backend\pytest.ini" />
     <None Include="backend\README.md" />
     <None Include="backend\tests\test_api.py" />
+    <None Include="DEPLOYMENT.md" />
+    <None Include="deploy\client\package_client.ps1" />
+    <None Include="deploy\server\check_backend.ps1" />
+    <None Include="deploy\server\deploy_backend_uv.ps1" />
     <None Include="fastapi_connect_info.conf" />
     <None Include="项目计划.md" />
   </ItemGroup>
