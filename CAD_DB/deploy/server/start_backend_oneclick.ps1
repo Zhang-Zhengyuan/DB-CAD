@@ -1,6 +1,7 @@
 param(
     [string]$HostAddress = "0.0.0.0",
-    [int]$Port = 8000
+    [int]$Port = 8000,
+    [switch]$BackendOnly = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,11 +19,13 @@ function Validate-BackendConfig {
     $storage = [Environment]::GetEnvironmentVariable("CAD_DB_STORAGE_BACKEND")
     if ([string]::IsNullOrWhiteSpace($storage)) { $storage = "neo4j" }
 
-    if ($storage.ToLower() -eq "neo4j") {
-        $pwd = [Environment]::GetEnvironmentVariable("CAD_DB_NEO4J_PASSWORD")
-        if ([string]::IsNullOrWhiteSpace($pwd)) {
-            throw "Invalid Neo4j password in .env. Please set CAD_DB_NEO4J_PASSWORD to the real password before start."
-        }
+    if ($storage.ToLower() -ne "neo4j") {
+        throw "Only neo4j backend is supported. Set CAD_DB_STORAGE_BACKEND=neo4j"
+    }
+
+    $bridgeUrl = [Environment]::GetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL")
+    if ([string]::IsNullOrWhiteSpace($bridgeUrl)) {
+        throw "Missing CAD_DB_STORAGE_BRIDGE_URL in .env"
     }
 }
 
@@ -42,6 +45,12 @@ function Load-EnvFile([string]$EnvFilePath) {
 }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+if (-not $BackendOnly -and (Test-Path (Join-Path $scriptRoot "start_fullstack_oneclick.ps1"))) {
+    Write-Host "[INFO] Fullstack mode detected. Delegating to start_fullstack_oneclick.ps1 ..."
+    & (Join-Path $scriptRoot "start_fullstack_oneclick.ps1") -FastApiHost $HostAddress -FastApiPort $Port
+    exit $LASTEXITCODE
+}
 
 $candidateRoots = @(
     $scriptRoot,

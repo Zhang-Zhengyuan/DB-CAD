@@ -175,6 +175,8 @@
     <None Include="deploy\server\set_neo4j_password.ps1" />
     <None Include="deploy\server\start_backend_oneclick.cmd" />
     <None Include="deploy\server\start_backend_oneclick.ps1" />
+    <None Include="deploy\server\start_fullstack_oneclick.cmd" />
+    <None Include="deploy\server\start_fullstack_oneclick.ps1" />
     <None Include="fastapi_connect_info.conf" />
     <None Include="项目计划.md" />
   </ItemGroup>
