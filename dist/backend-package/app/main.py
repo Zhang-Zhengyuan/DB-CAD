@@ -1,9 +1,7 @@
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from sqlalchemy.orm import Session
 
 from . import crud, schemas
 from .config import settings
-from .database import Base, engine, get_db
 from .sync import sync_manager
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
@@ -16,10 +14,7 @@ def verify_api_password(x_api_password: str | None = Header(default=None)) -> No
 
 @app.on_event("startup")
 def on_startup() -> None:
-    if crud.storage_bridge is None:
-        Base.metadata.create_all(bind=engine)
-    else:
-        crud.initialize_backend()
+    crud.initialize_backend()
 
 
 @app.on_event("shutdown")
@@ -35,30 +30,27 @@ def health() -> dict[str, str]:
 @app.post("/projects", response_model=schemas.ProjectRead, status_code=201)
 def create_project(
     payload: schemas.ProjectCreate,
-    db: Session = Depends(get_db),
     _: None = Depends(verify_api_password),
 ) -> schemas.ProjectRead:
-    entity = crud.create_project(db, payload)
+    entity = crud.create_project(payload)
     return schemas.ProjectRead.model_validate(entity)
 
 
 @app.get("/projects/{project_id}", response_model=schemas.ProjectRead)
 def get_project(
     project_id: str,
-    db: Session = Depends(get_db),
     _: None = Depends(verify_api_password),
 ) -> schemas.ProjectRead:
-    entity = crud.get_project_or_404(db, project_id)
+    entity = crud.get_project_or_404(project_id)
     return schemas.ProjectRead.model_validate(entity)
 
 
 @app.get("/projects/by-name/{project_name}", response_model=schemas.ProjectRead)
 def get_project_by_name(
     project_name: str,
-    db: Session = Depends(get_db),
     _: None = Depends(verify_api_password),
 ) -> schemas.ProjectRead:
-    entity = crud.get_project_by_name_or_404(db, project_name)
+    entity = crud.get_project_by_name_or_404(project_name)
     return schemas.ProjectRead.model_validate(entity)
 
 
@@ -66,10 +58,9 @@ def get_project_by_name(
 async def save_model(
     project_id: str,
     payload: schemas.ModelVersionCreate,
-    db: Session = Depends(get_db),
     _: None = Depends(verify_api_password),
 ) -> schemas.SaveResult:
-    version = crud.create_model_version(db, project_id, payload)
+    version = crud.create_model_version(project_id, payload)
     await sync_manager.broadcast(
         project_id,
         {
@@ -86,10 +77,9 @@ async def save_model(
 @app.get("/projects/{project_id}/models/latest", response_model=schemas.ModelVersionRead)
 def get_latest_model(
     project_id: str,
-    db: Session = Depends(get_db),
     _: None = Depends(verify_api_password),
 ) -> schemas.ModelVersionRead:
-    version = crud.get_latest_version_or_404(db, project_id)
+    version = crud.get_latest_version_or_404(project_id)
     return crud.deserialize_version(version)
 
 
@@ -97,10 +87,9 @@ def get_latest_model(
 def get_model_by_version(
     project_id: str,
     version: int,
-    db: Session = Depends(get_db),
     _: None = Depends(verify_api_password),
 ) -> schemas.ModelVersionRead:
-    entity = crud.get_version_or_404(db, project_id, version)
+    entity = crud.get_version_or_404(project_id, version)
     return crud.deserialize_version(entity)
 
 
@@ -109,10 +98,9 @@ def get_versions(
     project_id: str,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
     _: None = Depends(verify_api_password),
 ) -> list[schemas.ModelVersionRead]:
-    versions = crud.list_versions(db, project_id, limit=limit, offset=offset)
+    versions = crud.list_versions(project_id, limit=limit, offset=offset)
     return [crud.deserialize_version(item) for item in versions]
 
 

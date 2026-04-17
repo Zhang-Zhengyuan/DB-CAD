@@ -6,6 +6,7 @@
 - 版本冲突检测（`base_version`）
 - 最新版本与历史版本查询
 - WebSocket 同步通知（模型保存后广播）
+- Python 仅作为服务层，底层存储由 C++ Storage Bridge + Neo4j 实现
 
 ## 快速启动（推荐 uv）
 1. 安装 uv（若未安装）
@@ -47,17 +48,14 @@
 - `GET /health` 健康检查
 - `WS /ws/projects/{project_id}` 订阅项目更新
 
-## 数据库
-- 默认 SQLite：`cad_store.db`
-- 可通过环境变量 `CAD_DB_DATABASE_URL` 覆盖
+## 存储架构（关键）
+FastAPI 不直接操作 Neo4j 几何存储，必须通过 C++ Storage Bridge。后端只支持 Neo4j 路径。
 
-## 存储后端切换（关键）
-为支持“前后端分离 + FastAPI 统一服务层 + Neo4j 数据库存储”，后端支持双模式：
+需要配置：
 
-- `CAD_DB_STORAGE_BACKEND=sqlite`（默认）
 - `CAD_DB_STORAGE_BACKEND=neo4j`
-
-当使用 Neo4j 模式时，还需要配置：
+- `CAD_DB_STORAGE_BRIDGE_URL`（例如 `http://127.0.0.1:8100`）
+- `CAD_DB_STORAGE_BRIDGE_TIMEOUT_SECONDS`
 
 - `CAD_DB_NEO4J_URI`（例如 `bolt://127.0.0.1:7687`）
 - `CAD_DB_NEO4J_USER`
@@ -68,8 +66,15 @@
 
 ```powershell
 $env:CAD_DB_STORAGE_BACKEND = "neo4j"
+$env:CAD_DB_STORAGE_BRIDGE_URL = "http://127.0.0.1:8100"
 $env:CAD_DB_NEO4J_URI = "bolt://127.0.0.1:7687"
 $env:CAD_DB_NEO4J_USER = "neo4j"
 $env:CAD_DB_NEO4J_PASSWORD = "your_password"
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+启动 C++ Storage Bridge（与 Qt 同一可执行程序）：
+
+```powershell
+CAD_DB.exe --storage-bridge --bridge-host 127.0.0.1 --bridge-port 8100 --neo4j-host 127.0.0.1 --neo4j-port 7687 --neo4j-user neo4j --neo4j-password your_password
 ```

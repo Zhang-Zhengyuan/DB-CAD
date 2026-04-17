@@ -123,6 +123,7 @@
     <ClCompile Include="gme_dump_object.cpp" />
     <ClCompile Include="gme_mesh.cpp" />
     <ClCompile Include="neo4j.cpp" />
+    <ClCompile Include="storage_bridge_service.cpp" />
     <ClCompile Include="window.cpp" />
     <QtRcc Include="mainwindow.qrc" />
     <QtMoc Include="mainwindow.h" />
@@ -145,6 +146,7 @@
     <ClInclude Include="gme_user_data.hxx" />
     <ClInclude Include="neo4j.hxx" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="storage_bridge_service.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="images\DBCAD.rc" />
