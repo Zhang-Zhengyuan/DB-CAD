@@ -270,6 +270,23 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
     }
 
     mg_init();
+
+    // 彻底重置历史系统
+    HISTORY_STREAM *hs = get_default_stream(false);
+    if (hs) {
+        // 删除所有 delta states，但保留流对象
+        delete_all_delta_states(hs, true);   // true 表示保留流
+        hs->clear();                          // 清空流内容
+    }
+    else {
+        hs = get_default_stream(true);        // 创建新流
+    }
+    // 重置全局历史管理器状态
+    initialize_delta_states();
+    // 确保根状态为空（便于后续记录）
+    DELTA_STATE *root_state = nullptr;
+    api_ensure_empty_root_state(hs, root_state);
+
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -953,9 +970,10 @@ void MainWindow::buildTreeFromHistroy(HISTORY_STREAM* hs) {
     if (hs == nullptr) {
         hs = get_default_stream();
     }
+    
     set_logging(false);
     curWindow->clear();
-    DELTA_STATE* this_ds = hs->get_root_ds();
+    DELTA_STATE *this_ds = hs->get_root_ds();
     while (this_ds) {
         GME_DELTA_STATE_user_data* delta_state_user_data = (GME_DELTA_STATE_user_data*)(this_ds->get_user_data());
         if (delta_state_user_data) {
@@ -984,6 +1002,13 @@ void MainWindow::buildTreeFromHistroy(HISTORY_STREAM* hs) {
 
 void MainWindow::undo() {
     HISTORY_STREAM* hs = get_default_stream();
+    if (!hs) return;
+    abort_bb(hs);
+
+    
+
+    
+    
     int request_n = -1;
     int actual_n = 0;
 
@@ -1613,24 +1638,56 @@ void MainWindow::createStatusBar() {
 
 void MainWindow::insertElements(const OPERATOR_TYPES ot, const int subOperatorType) {
     if (!curWindow) return;
-    ENTITY* ptrEntity = nullptr;
-    std::vector<std::vector<SPAposition>> handles;
-    curWindow->createEntity(subOperatorType, ptrEntity, handles);
-    if (ptrEntity == nullptr) return;
 
-    std::string name_cn = "实体";
-    for (auto mi : menus_entities) {
-        if (mi.operatorType == ot && mi.subOperatorType == subOperatorType) name_cn = mi.name_cn;
+    ENTITY *ptrEntity = nullptr;
+    std::vector<std::vector<SPAposition>> handles;
+
+    // 1. 开始一个新的事务（开启 bulletin board）
+    api_bb_begin(TRUE);          // TRUE = 线性历史流
+
+    // 2. 执行建模操作
+    curWindow->createEntity(subOperatorType, ptrEntity, handles);
+
+    // 3. 决定事务结果
+    outcome result;              // 临时的 outcome，用于 api_bb_end
+    if (ptrEntity != nullptr) {
+        // 成功：关闭 bulletin board 并标注为成功
+        api_bb_end(result, TRUE, FALSE);   // 第三个参数 FALSE 表示不删除 stacked BB
+        if (result.ok()) {
+            // 4. 成功：记录当前状态为 DELTA_STATE
+            DELTA_STATE *ds = nullptr;
+            outcome note_result = api_note_state(ds);
+            
+            if (ds && ds->id() != 0) {
+                // 附加自定义数据
+                std::string name_cn = "实体";
+                for (auto mi : menus_entities) {
+                    if (mi.operatorType == ot && mi.subOperatorType == subOperatorType)
+                        name_cn = mi.name_cn;
+                }
+                GME_DELTA_STATE_user_data *userData = ACIS_NEW GME_DELTA_STATE_user_data();
+                userData->add_tree_item(curWindow->addEntity(ptrEntity, name_cn, subOperatorType, handles));
+                ds->set_user_data(userData);
+            }
+        }
     }
+    else {
+        // 失败：关闭 bulletin board 并标注为失败（这会自动回滚模型）
+        api_bb_end(result, FALSE, FALSE);  // 第二个参数 FALSE 表示线性历史流（失败也需标记）
+        // 注意：result 此时会包含错误信息，但不需额外处理
+    }
+
+    
+    
 
     // curWindow->addEntity(ptrEntity, name_cn, subOperatorType, handles);
     //  @todo：以下版本管理导致demo_qt创建任意实体后再交互式插入B样条时程序崩溃。
-    GME_DELTA_STATE_user_data* delta_state_user_data = ACIS_NEW GME_DELTA_STATE_user_data();
+    /*GME_DELTA_STATE_user_data* delta_state_user_data = ACIS_NEW GME_DELTA_STATE_user_data();
     delta_state_user_data->add_tree_item(curWindow->addEntity(ptrEntity, name_cn, subOperatorType, handles));
 
     DELTA_STATE* ds = nullptr;
     api_note_state(ds);
-    ds->set_user_data(delta_state_user_data);
+    ds->set_user_data(delta_state_user_data);*/
 
     // debug_history_stream();
 }

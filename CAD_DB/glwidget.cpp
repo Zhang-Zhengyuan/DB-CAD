@@ -220,6 +220,7 @@ void GLWidget::initializeShadersEdge() {
 }
 
 void GLWidget::updateMeshData() {
+    API_NOP_BEGIN
     // 将面网格数据写入VBO
     data_face.clear();
     count_face = 0;
@@ -286,6 +287,7 @@ void GLWidget::updateMeshData() {
     }
 
     update();
+    API_NOP_END
 }
 
 void GLWidget::paintGL() {

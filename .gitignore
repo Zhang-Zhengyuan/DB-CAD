@@ -15,4 +15,10 @@ backend-package/
 *.pyc
 **/logs/
 fastapi_error.log
-
+*.vcxproj
+models/
+reserved/
+neo4j/
+postgres/
+*.conf
+*.log
