@@ -12,6 +12,18 @@
 .\deploy\stop_dbcad_fullstack.cmd
 ```
 
+清理旧部署、旧 Neo4j 数据和旧密码文件：
+
+```powershell
+.\deploy\reset_dbcad_deployment.cmd
+```
+
+唯一可编辑密码源是：
+
+```text
+.\deploy\dbcad.local.env
+```
+
 详细使用说明见仓库根文档：
 
 ```text

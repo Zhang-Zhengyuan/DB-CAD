@@ -13,13 +13,20 @@ param(
     [string]$Author = "dbcad-exe",
     [string]$ClientExePath = "",
     [string]$PackageRoot = "",
+    [string]$ConfigPath = "",
     [string]$WinDeployQtPath = "",
+    [int]$Neo4jHttpPort = 7474,
+    [string]$Neo4jDockerName = "",
+    [string]$Neo4jDockerImage = "",
+    [string]$Neo4jDockerDataRoot = "",
     [switch]$SkipClient = $false,
     [switch]$SkipPackageSync = $false,
     [switch]$PrepareOnly = $false,
     [switch]$SkipDependencySync = $false,
     [switch]$SkipBridgeHealthCheck = $false,
     [switch]$SkipNeo4jPortCheck = $false,
+    [switch]$SkipNeo4jDocker = $false,
+    [switch]$ResetNeo4jDockerData = $false,
     [switch]$SkipWinDeployQt = $false,
     [switch]$KeepExistingServices = $false,
     [int]$RetryCount = 30,
@@ -133,63 +140,159 @@ function Merge-EnvFiles([string[]]$Paths) {
     return $merged
 }
 
-function Read-Neo4jConfig([string[]]$Paths) {
-    $best = $null
+function Write-EnvFile([string]$EnvFilePath, [hashtable]$Values) {
+    $orderedKeys = @(
+        "DBCAD_PASSWORD",
+        "DBCAD_NEO4J_DOCKER_NAME",
+        "DBCAD_NEO4J_DOCKER_IMAGE",
+        "DBCAD_NEO4J_HOST",
+        "DBCAD_NEO4J_BOLT_PORT",
+        "DBCAD_NEO4J_HTTP_PORT",
+        "DBCAD_NEO4J_USER",
+        "DBCAD_FASTAPI_HOST",
+        "DBCAD_FASTAPI_PORT",
+        "DBCAD_BRIDGE_HOST",
+        "DBCAD_BRIDGE_PORT",
+        "DBCAD_AUTHOR"
+    )
 
-    foreach ($path in $Paths) {
-        if (!(Test-Path -LiteralPath $path)) {
-            continue
-        }
-
-        $lines = @(Get-Content -LiteralPath $path | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
-        if ($lines.Count -ge 4) {
-            $candidate = @{
-                Host = $lines[0]
-                Port = $lines[1]
-                User = $lines[2]
-                Password = $lines[3]
-                Path = $path
-            }
-            if ($null -eq $best) {
-                $best = $candidate
-            }
-            if (-not (Test-PlaceholderPassword $candidate.Password)) {
-                return $candidate
-            }
-        }
-
-        if ($lines.Count -eq 1) {
-            $parts = @($lines[0] -split "\s+" | Where-Object { $_ -ne "" })
-            if ($parts.Count -ge 4) {
-                $candidate = @{
-                    Host = $parts[0]
-                    Port = $parts[1]
-                    User = $parts[2]
-                    Password = $parts[3]
-                    Path = $path
-                }
-                if ($null -eq $best) {
-                    $best = $candidate
-                }
-                if (-not (Test-PlaceholderPassword $candidate.Password)) {
-                    return $candidate
-                }
-            }
+    $lines = @(
+        "# Local DBCAD deployment configuration.",
+        "# This is the single source for Docker, Bridge, FastAPI and client credentials.",
+        "# Do not commit this file."
+    )
+    foreach ($key in $orderedKeys) {
+        if ($Values.ContainsKey($key)) {
+            $lines += "$key=$($Values[$key])"
         }
     }
 
-    if ($null -ne $best) {
-        return $best
-    }
-    return @{}
+    $parent = Split-Path -Parent $EnvFilePath
+    Ensure-Directory $parent | Out-Null
+    Set-Content -LiteralPath $EnvFilePath -Value $lines -Encoding UTF8
 }
 
-function Test-PlaceholderPassword([string]$Password) {
+function New-StrongPassword([int]$Length = 32) {
+    $alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789_-"
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $bytes = New-Object byte[] ($Length)
+        $rng.GetBytes($bytes)
+        $chars = @()
+        for ($i = 0; $i -lt $Length; $i++) {
+            $chars += $alphabet[$bytes[$i] % $alphabet.Length]
+        }
+        return (-join $chars)
+    } finally {
+        $rng.Dispose()
+    }
+}
+
+function Test-WeakDeploymentPassword([string]$Password) {
     if ([string]::IsNullOrWhiteSpace($Password)) {
         return $true
     }
 
-    return $Password.Trim().ToLowerInvariant() -in @("your_password", "password", "changeme")
+    $value = $Password.Trim()
+    if ($value.Length -lt 16) {
+        return $true
+    }
+
+    if ($value -match "^\d+$") {
+        return $true
+    }
+
+    $weakValues = @("12345678", "password", "neo4j", "changeme", "your_password", "dbcad")
+    return ($weakValues -contains $value.ToLowerInvariant())
+}
+
+function New-DefaultLocalConfig([string]$Password) {
+    return @{
+        DBCAD_PASSWORD = $Password
+        DBCAD_NEO4J_DOCKER_NAME = "neo4j-apoc"
+        DBCAD_NEO4J_DOCKER_IMAGE = "neo4j:5.15"
+        DBCAD_NEO4J_HOST = "127.0.0.1"
+        DBCAD_NEO4J_BOLT_PORT = "7687"
+        DBCAD_NEO4J_HTTP_PORT = "7474"
+        DBCAD_NEO4J_USER = "neo4j"
+        DBCAD_FASTAPI_HOST = "0.0.0.0"
+        DBCAD_FASTAPI_PORT = "8000"
+        DBCAD_BRIDGE_HOST = "127.0.0.1"
+        DBCAD_BRIDGE_PORT = "8100"
+        DBCAD_AUTHOR = "dbcad-exe"
+    }
+}
+
+function Ensure-LocalConfig([string]$ConfigFilePath) {
+    if (Test-Path -LiteralPath $ConfigFilePath) {
+        return Read-EnvFile $ConfigFilePath
+    }
+
+    $defaults = New-DefaultLocalConfig -Password (New-StrongPassword)
+    Write-EnvFile -EnvFilePath $ConfigFilePath -Values $defaults
+    Write-Host "[INFO] Created local config: $ConfigFilePath"
+    Write-Host "[INFO] Generated one strong DBCAD_PASSWORD for Neo4j, FastAPI and client access."
+    return $defaults
+}
+
+function Ensure-UnifiedPasswordConfig([string]$ConfigFilePath, [hashtable]$Config) {
+    $password = Get-ConfigValue -Config $Config -Name "DBCAD_PASSWORD" -DefaultValue ""
+    $legacyNeo4jPassword = Get-ConfigValue -Config $Config -Name "DBCAD_NEO4J_PASSWORD" -DefaultValue ""
+    $legacyApiPassword = Get-ConfigValue -Config $Config -Name "DBCAD_API_PASSWORD" -DefaultValue ""
+    $rewrite = $false
+
+    if ([string]::IsNullOrWhiteSpace($password)) {
+        if (-not (Test-WeakDeploymentPassword $legacyNeo4jPassword)) {
+            $password = $legacyNeo4jPassword
+        } elseif (-not (Test-WeakDeploymentPassword $legacyApiPassword)) {
+            $password = $legacyApiPassword
+        }
+        $rewrite = $true
+    }
+
+    if (Test-WeakDeploymentPassword $password) {
+        $password = New-StrongPassword
+        $rewrite = $true
+        Write-Warning "The local deployment password was missing or weak. A new strong DBCAD_PASSWORD was generated in $ConfigFilePath. Recreate the local Neo4j Docker data once with -ResetNeo4jDockerData."
+    }
+
+    if ($Config.ContainsKey("DBCAD_NEO4J_PASSWORD") -or $Config.ContainsKey("DBCAD_API_PASSWORD")) {
+        $rewrite = $true
+    }
+
+    $normalized = New-DefaultLocalConfig -Password $password
+    foreach ($key in $Config.Keys) {
+        if ($key -in @("DBCAD_NEO4J_PASSWORD", "DBCAD_API_PASSWORD")) {
+            continue
+        }
+        if ($normalized.ContainsKey($key)) {
+            $normalized[$key] = $Config[$key]
+        }
+    }
+    $normalized["DBCAD_PASSWORD"] = $password
+
+    if ($rewrite) {
+        Write-EnvFile -EnvFilePath $ConfigFilePath -Values $normalized
+        Write-Host "[INFO] Normalized local config to one password source: $ConfigFilePath"
+    }
+
+    return $normalized
+}
+
+function Get-ConfigValue([hashtable]$Config, [string]$Name, [string]$DefaultValue = "") {
+    if ($Config.ContainsKey($Name) -and -not [string]::IsNullOrWhiteSpace([string]$Config[$Name])) {
+        return [string]$Config[$Name]
+    }
+    return $DefaultValue
+}
+
+function Get-ConfigInt([hashtable]$Config, [string]$Name, [int]$DefaultValue) {
+    $value = Get-ConfigValue -Config $Config -Name $Name -DefaultValue ""
+    $parsed = 0
+    if ([int]::TryParse($value, [ref]$parsed) -and $parsed -gt 0) {
+        return $parsed
+    }
+    return $DefaultValue
 }
 
 function ConvertTo-LocalHealthHost([string]$HostAddress) {
@@ -380,6 +483,164 @@ function Test-TcpPort([string]$HostName, [int]$Port) {
     }
 }
 
+function Wait-TcpPort([string]$HostName, [int]$Port, [int]$Attempts, [int]$DelaySeconds) {
+    for ($i = 1; $i -le $Attempts; $i++) {
+        if (Test-TcpPort -HostName $HostName -Port $Port) {
+            return $true
+        }
+        if ($i -lt $Attempts) {
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+    return $false
+}
+
+function Invoke-Docker([string[]]$Arguments, [switch]$AllowFailure = $false) {
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if ($null -eq $docker) {
+        if ($AllowFailure) {
+            return $null
+        }
+        throw "Docker is not available. Install Docker Desktop or pass -SkipNeo4jDocker."
+    }
+
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & $docker.Source @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+    }
+
+    if ($exitCode -ne 0) {
+        if ($AllowFailure) {
+            return $output
+        }
+        throw "docker $($Arguments -join ' ') failed: $output"
+    }
+    return $output
+}
+
+function Remove-DirectorySafe([string]$Path, [string]$AllowedRoot) {
+    if (!(Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $target = (Resolve-Path -LiteralPath $Path).Path
+    $root = (Resolve-Path -LiteralPath $AllowedRoot).Path
+    if (-not $target.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to delete outside allowed root. Target=$target Root=$root"
+    }
+
+    Remove-Item -LiteralPath $target -Recurse -Force
+}
+
+function Ensure-Neo4jDocker(
+    [string]$RepoRoot,
+    [string]$ContainerName,
+    [string]$Image,
+    [string]$Neo4jHostName,
+    [int]$HttpPort,
+    [int]$BoltPort,
+    [string]$User,
+    [string]$Password,
+    [string]$DataRoot,
+    [bool]$ResetData
+) {
+    if ($Neo4jHostName -notin @("127.0.0.1", "localhost", "0.0.0.0")) {
+        Write-Host "[INFO] Neo4j host is not local ($Neo4jHostName); Docker container management skipped."
+        return
+    }
+
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if ($null -eq $docker) {
+        throw "Docker is not available. Install Docker Desktop or pass -SkipNeo4jDocker."
+    }
+
+    $dataRootFull = Ensure-Directory $DataRoot
+    $confDir = Join-Path $dataRootFull "conf"
+    $dataDir = Join-Path $dataRootFull "data"
+    $pluginsDir = Join-Path $dataRootFull "plugins"
+
+    if ($ResetData) {
+        Write-Host "[INFO] Resetting local Neo4j Docker data under $dataRootFull"
+        Invoke-Docker -Arguments @("rm", "-f", $ContainerName) -AllowFailure | Out-Null
+        Remove-DirectorySafe -Path $dataRootFull -AllowedRoot $RepoRoot
+    }
+
+    Ensure-Directory $confDir | Out-Null
+    Ensure-Directory $dataDir | Out-Null
+    Ensure-Directory $pluginsDir | Out-Null
+
+    $existingId = (Invoke-Docker -Arguments @("ps", "-a", "--filter", "name=^/$ContainerName$", "--format", "{{.ID}}") -AllowFailure)
+    if (-not [string]::IsNullOrWhiteSpace([string]$existingId)) {
+        $runningId = (Invoke-Docker -Arguments @("ps", "--filter", "name=^/$ContainerName$", "--format", "{{.ID}}") -AllowFailure)
+        if ([string]::IsNullOrWhiteSpace([string]$runningId)) {
+            Write-Host "[INFO] Starting existing Neo4j Docker container: $ContainerName"
+            Invoke-Docker -Arguments @("start", $ContainerName) | Out-Null
+        } else {
+            Write-Host "[INFO] Neo4j Docker container already running: $ContainerName"
+        }
+        return
+    }
+
+    Write-Host "[INFO] Creating Neo4j Docker container: $ContainerName"
+    $oldNeo4jAuth = [Environment]::GetEnvironmentVariable("NEO4J_AUTH", "Process")
+    $oldNeo4jPlugins = [Environment]::GetEnvironmentVariable("NEO4J_PLUGINS", "Process")
+    try {
+        [Environment]::SetEnvironmentVariable("NEO4J_AUTH", "$User/$Password", "Process")
+        [Environment]::SetEnvironmentVariable("NEO4J_PLUGINS", '["apoc"]', "Process")
+        Invoke-Docker -Arguments @(
+            "run", "-d",
+            "--name", $ContainerName,
+            "-p", "$HttpPort`:7474",
+            "-p", "$BoltPort`:7687",
+            "-v", "$confDir`:/conf",
+            "-v", "$dataDir`:/data",
+            "-v", "$pluginsDir`:/plugins",
+            "-e", "NEO4J_AUTH",
+            "-e", "NEO4J_PLUGINS",
+            "-e", "NEO4J_apoc_export_file_enabled=true",
+            "-e", "NEO4J_apoc_import_file_enabled=true",
+            "-e", "NEO4J_apoc_import_file_use__neo4j__config=true",
+            $Image
+        ) | Out-Null
+    } finally {
+        [Environment]::SetEnvironmentVariable("NEO4J_AUTH", $oldNeo4jAuth, "Process")
+        [Environment]::SetEnvironmentVariable("NEO4J_PLUGINS", $oldNeo4jPlugins, "Process")
+    }
+}
+
+function Wait-Neo4jApoc(
+    [string]$ContainerName,
+    [string]$User,
+    [string]$Password,
+    [int]$Attempts,
+    [int]$DelaySeconds
+) {
+    $lastOutput = ""
+    for ($i = 1; $i -le $Attempts; $i++) {
+        $output = Invoke-Docker -Arguments @(
+            "exec",
+            $ContainerName,
+            "cypher-shell",
+            "-u", $User,
+            "-p", $Password,
+            "RETURN apoc.version() AS apoc;"
+        ) -AllowFailure
+        $lastOutput = ($output | Out-String).Trim()
+        if ($lastOutput -match "\d+\.\d+\.\d+") {
+            return
+        }
+        if ($i -lt $Attempts) {
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+
+    throw "Neo4j APOC is not available in Docker container '$ContainerName'. Recreate local Neo4j with -ResetNeo4jDockerData. Last check output: $lastOutput"
+}
+
 function Wait-ServiceHealth(
     [string]$Url,
     [object]$Process,
@@ -510,9 +771,7 @@ function Start-FastApi(
 
     [Environment]::SetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL", $BridgeUrl, "Process")
     [Environment]::SetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_TIMEOUT_SECONDS", [string]$BridgeTimeoutSeconds, "Process")
-    if (-not [string]::IsNullOrWhiteSpace($ApiPassword)) {
-        [Environment]::SetEnvironmentVariable("CAD_DB_API_PASSWORD", $ApiPassword, "Process")
-    }
+    [Environment]::SetEnvironmentVariable("CAD_DB_API_PASSWORD", $ApiPassword, "Process")
 
     $args = @(
         "run",
@@ -567,10 +826,27 @@ function Remove-ObsoletePackageScripts([string]$ServerDir) {
     }
 }
 
+function Remove-LegacyCredentialFiles([string[]]$Directories) {
+    $names = @(
+        "neo4j_connect_info.conf",
+        "neo4j_connect_info.config",
+        "postgresql_connect_info.conf"
+    )
+    foreach ($dir in $Directories) {
+        foreach ($name in $names) {
+            $path = Join-Path $dir $name
+            if (Test-Path -LiteralPath $path) {
+                Remove-Item -LiteralPath $path -Force
+            }
+        }
+    }
+}
+
 function Sync-FullstackPackage(
     [string]$ProjectRoot,
     [string]$RepoRoot,
     [string]$DeployRoot,
+    [string]$ConfigPath,
     [string]$BackendRoot,
     [string]$PackageRoot,
     [System.IO.FileInfo]$LatestExe,
@@ -599,18 +875,18 @@ function Sync-FullstackPackage(
         Copy-DirectoryContents -Source $runtimeDir -Destination $clientDir
     }
 
+    Remove-LegacyCredentialFiles -Directories @($clientDir)
     Copy-FileToPathIfDifferent -Source $LatestExe.FullName -Destination (Join-Path $clientDir "CAD_DB.exe")
     Invoke-WinDeployQtIfAvailable -ExePath (Join-Path $clientDir "CAD_DB.exe") -IsDebug (Test-DebugBuild $LatestExe)
 
     $fastApiConfig = "$FastApiUrl`r`n$Author`r`n$ApiPassword`r`n"
     Write-TextFile -Path (Join-Path $clientDir "fastapi_connect_info.conf") -Text $fastApiConfig
 
-    $neo4jConfig = "$Neo4jHost`r`n$Neo4jPort`r`n$Neo4jUser`r`n$Neo4jPassword`r`n"
-    Write-TextFile -Path (Join-Path $clientDir "neo4j_connect_info.conf") -Text $neo4jConfig
     Write-TextFile -Path (Join-Path $clientDir "storage_bridge_connect_info.conf") -Text "$BridgeHost`r`n$BridgePort`r`n"
 
     Copy-DirectoryContents -Source $clientDir -Destination $bridgeDir
     Copy-FileToPathIfDifferent -Source (Join-Path $clientDir "CAD_DB.exe") -Destination (Join-Path $bridgeDir "CAD_DB.exe")
+    Remove-LegacyCredentialFiles -Directories @($bridgeDir)
 
     $backendSource = Resolve-FullPath $BackendRoot
     $serverTarget = Resolve-FullPath $serverDir
@@ -634,6 +910,7 @@ function Sync-FullstackPackage(
     )) {
         Copy-FileIfExists -Source (Join-Path $DeployRoot $file) -DestinationDir $PackageRoot
     }
+    Copy-FileToPathIfDifferent -Source $ConfigPath -Destination (Join-Path $PackageRoot "dbcad.local.env")
 
     $envFile = Join-Path $serverDir ".env"
     $envText = @"
@@ -642,7 +919,6 @@ CAD_DB_STORAGE_BRIDGE_URL=http://127.0.0.1:$BridgePort
 CAD_DB_STORAGE_BRIDGE_TIMEOUT_SECONDS=$StorageBridgeTimeoutSeconds
 CAD_DB_NEO4J_URI=$Neo4jUri
 CAD_DB_NEO4J_USER=$Neo4jUser
-CAD_DB_NEO4J_PASSWORD=$Neo4jPassword
 CAD_DB_NEO4J_DATABASE=neo4j
 CAD_DB_API_PASSWORD=$ApiPassword
 "@
@@ -683,6 +959,54 @@ if (Test-Path -LiteralPath (Join-Path $sourceBackendRoot "app\main.py")) {
     throw "Cannot locate backend. Run this script from CAD_DB\deploy or DBCAD-fullstack-package."
 }
 
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $deployRoot "dbcad.local.env"
+}
+$ConfigPath = Resolve-FullPath $ConfigPath
+$localConfig = Ensure-LocalConfig -ConfigFilePath $ConfigPath
+$localConfig = Ensure-UnifiedPasswordConfig -ConfigFilePath $ConfigPath -Config $localConfig
+$UnifiedPassword = Get-ConfigValue -Config $localConfig -Name "DBCAD_PASSWORD" -DefaultValue ""
+
+if (-not $PSBoundParameters.ContainsKey("FastApiHost")) {
+    $FastApiHost = Get-ConfigValue -Config $localConfig -Name "DBCAD_FASTAPI_HOST" -DefaultValue $FastApiHost
+}
+if (-not $PSBoundParameters.ContainsKey("FastApiPort")) {
+    $FastApiPort = Get-ConfigInt -Config $localConfig -Name "DBCAD_FASTAPI_PORT" -DefaultValue $FastApiPort
+}
+if (-not $PSBoundParameters.ContainsKey("BridgeHost")) {
+    $BridgeHost = Get-ConfigValue -Config $localConfig -Name "DBCAD_BRIDGE_HOST" -DefaultValue $BridgeHost
+}
+if (-not $PSBoundParameters.ContainsKey("BridgePort")) {
+    $BridgePort = Get-ConfigInt -Config $localConfig -Name "DBCAD_BRIDGE_PORT" -DefaultValue $BridgePort
+}
+if (-not $PSBoundParameters.ContainsKey("Neo4jHost")) {
+    $Neo4jHost = Get-ConfigValue -Config $localConfig -Name "DBCAD_NEO4J_HOST" -DefaultValue "127.0.0.1"
+}
+if (-not $PSBoundParameters.ContainsKey("Neo4jPort")) {
+    $Neo4jPort = Get-ConfigInt -Config $localConfig -Name "DBCAD_NEO4J_BOLT_PORT" -DefaultValue 7687
+}
+if (-not $PSBoundParameters.ContainsKey("Neo4jHttpPort")) {
+    $Neo4jHttpPort = Get-ConfigInt -Config $localConfig -Name "DBCAD_NEO4J_HTTP_PORT" -DefaultValue $Neo4jHttpPort
+}
+if (-not $PSBoundParameters.ContainsKey("Neo4jUser")) {
+    $Neo4jUser = Get-ConfigValue -Config $localConfig -Name "DBCAD_NEO4J_USER" -DefaultValue "neo4j"
+}
+if (-not $PSBoundParameters.ContainsKey("Neo4jPassword")) {
+    $Neo4jPassword = $UnifiedPassword
+}
+if (-not $PSBoundParameters.ContainsKey("ApiPassword")) {
+    $ApiPassword = $UnifiedPassword
+}
+if (-not $PSBoundParameters.ContainsKey("Author")) {
+    $Author = Get-ConfigValue -Config $localConfig -Name "DBCAD_AUTHOR" -DefaultValue $Author
+}
+if (-not $PSBoundParameters.ContainsKey("Neo4jDockerName")) {
+    $Neo4jDockerName = Get-ConfigValue -Config $localConfig -Name "DBCAD_NEO4J_DOCKER_NAME" -DefaultValue "neo4j-apoc"
+}
+if (-not $PSBoundParameters.ContainsKey("Neo4jDockerImage")) {
+    $Neo4jDockerImage = Get-ConfigValue -Config $localConfig -Name "DBCAD_NEO4J_DOCKER_IMAGE" -DefaultValue "neo4j:5.15"
+}
+
 $PackageRoot = Ensure-Directory $PackageRoot
 $pidFileBeforeSync = Join-Path $PackageRoot "run\pids.json"
 $stopScriptBeforeSync = Join-Path $deployRoot "stop_dbcad_fullstack.ps1"
@@ -692,78 +1016,20 @@ if ((-not $KeepExistingServices) -and (Test-Path -LiteralPath $stopScriptBeforeS
 }
 
 $latestExe = Resolve-LatestCadDbExe -ProjectRoot $projectRoot -RepoRoot $repoRoot -PackageRoot $PackageRoot -ExplicitPath $ClientExePath
-
-$packageServerDir = Join-Path $PackageRoot "server"
-$existingEnv = Merge-EnvFiles @(
-    (Join-Path $backendRoot ".env"),
-    (Join-Path $packageServerDir ".env")
-)
-
-$neo4jFileValues = Read-Neo4jConfig @(
-    (Join-Path $latestExe.DirectoryName "neo4j_connect_info.conf"),
-    (Join-Path $latestExe.DirectoryName "neo4j_connect_info.config"),
-    (Join-Path $projectRoot "neo4j_connect_info.conf"),
-    (Join-Path $repoRoot "x64\Release\neo4j_connect_info.conf"),
-    (Join-Path $repoRoot "x64\Debug\neo4j_connect_info.conf"),
-    (Join-Path $repoRoot "x64\Debug\neo4j_connect_info.config"),
-    (Join-Path $PackageRoot "client\neo4j_connect_info.conf")
-)
-
-if (-not $PSBoundParameters.ContainsKey("Neo4jUri") -and $existingEnv.ContainsKey("CAD_DB_NEO4J_URI")) {
-    $Neo4jUri = $existingEnv["CAD_DB_NEO4J_URI"]
-}
 if ([string]::IsNullOrWhiteSpace($Neo4jUri)) {
-    $Neo4jUri = "bolt://127.0.0.1:7687"
+    $Neo4jUri = "bolt://$Neo4jHost`:$Neo4jPort"
+} else {
+    $uriParts = Split-Neo4jUri $Neo4jUri
+    if (-not $PSBoundParameters.ContainsKey("Neo4jHost")) { $Neo4jHost = $uriParts.Host }
+    if (-not $PSBoundParameters.ContainsKey("Neo4jPort")) { $Neo4jPort = $uriParts.Port }
 }
 
-$uriParts = Split-Neo4jUri $Neo4jUri
-if (-not $PSBoundParameters.ContainsKey("Neo4jHost")) {
-    if ($neo4jFileValues.ContainsKey("Host")) {
-        $Neo4jHost = $neo4jFileValues["Host"]
-    } else {
-        $Neo4jHost = $uriParts.Host
-    }
-}
-if (-not $PSBoundParameters.ContainsKey("Neo4jPort")) {
-    if ($neo4jFileValues.ContainsKey("Port")) {
-        $parsedPort = 0
-        if ([int]::TryParse([string]$neo4jFileValues["Port"], [ref]$parsedPort) -and $parsedPort -gt 0) {
-            $Neo4jPort = $parsedPort
-        }
-    }
-    if ($Neo4jPort -le 0) {
-        $Neo4jPort = $uriParts.Port
-    }
-}
-if (-not $PSBoundParameters.ContainsKey("Neo4jUser")) {
-    if ($existingEnv.ContainsKey("CAD_DB_NEO4J_USER")) {
-        $Neo4jUser = $existingEnv["CAD_DB_NEO4J_USER"]
-    } elseif ($neo4jFileValues.ContainsKey("User")) {
-        $Neo4jUser = $neo4jFileValues["User"]
-    }
-}
-if ([string]::IsNullOrWhiteSpace($Neo4jUser)) {
-    $Neo4jUser = "neo4j"
-}
-if (-not $PSBoundParameters.ContainsKey("Neo4jPassword")) {
-    if ($neo4jFileValues.ContainsKey("Password") -and -not (Test-PlaceholderPassword $neo4jFileValues["Password"])) {
-        $Neo4jPassword = $neo4jFileValues["Password"]
-    } elseif ($existingEnv.ContainsKey("CAD_DB_NEO4J_PASSWORD") -and -not (Test-PlaceholderPassword $existingEnv["CAD_DB_NEO4J_PASSWORD"])) {
-        $Neo4jPassword = $existingEnv["CAD_DB_NEO4J_PASSWORD"]
-    } elseif ($neo4jFileValues.ContainsKey("Password")) {
-        $Neo4jPassword = $neo4jFileValues["Password"]
-    } elseif ($existingEnv.ContainsKey("CAD_DB_NEO4J_PASSWORD")) {
-        $Neo4jPassword = $existingEnv["CAD_DB_NEO4J_PASSWORD"]
-    }
-}
-if ([string]::IsNullOrWhiteSpace($Neo4jPassword)) {
-    $Neo4jPassword = "your_password"
-}
-if (-not $PSBoundParameters.ContainsKey("ApiPassword") -and $existingEnv.ContainsKey("CAD_DB_API_PASSWORD")) {
-    $ApiPassword = $existingEnv["CAD_DB_API_PASSWORD"]
-}
-
-$Neo4jUri = "bolt://$Neo4jHost`:$Neo4jPort"
+if ([string]::IsNullOrWhiteSpace($Neo4jUser)) { $Neo4jUser = "neo4j" }
+if ([string]::IsNullOrWhiteSpace($Neo4jPassword)) { throw "Neo4j password is empty. Set DBCAD_PASSWORD in $ConfigPath or pass -Neo4jPassword." }
+if ([string]::IsNullOrWhiteSpace($ApiPassword)) { throw "FastAPI password is empty. Set DBCAD_PASSWORD in $ConfigPath or pass -ApiPassword." }
+if ([string]::IsNullOrWhiteSpace($Neo4jDockerName)) { $Neo4jDockerName = "neo4j-apoc" }
+if ([string]::IsNullOrWhiteSpace($Neo4jDockerImage)) { $Neo4jDockerImage = "neo4j:5.15" }
+if ([string]::IsNullOrWhiteSpace($Neo4jDockerDataRoot)) { $Neo4jDockerDataRoot = Join-Path $repoRoot "neo4j-runtime" }
 
 $fastApiProbeHost = ConvertTo-LocalHealthHost $FastApiHost
 $bridgeProbeHost = ConvertTo-LocalHealthHost $BridgeHost
@@ -779,6 +1045,7 @@ if (-not $SkipPackageSync) {
         -ProjectRoot $projectRoot `
         -RepoRoot $repoRoot `
         -DeployRoot $deployRoot `
+        -ConfigPath $ConfigPath `
         -BackendRoot $backendRoot `
         -PackageRoot $PackageRoot `
         -LatestExe $latestExe `
@@ -826,11 +1093,35 @@ $bridgeProcess = $null
 $backendProcess = $null
 $clientProcess = $null
 
+if (-not $SkipNeo4jDocker) {
+    Ensure-Neo4jDocker `
+        -RepoRoot $repoRoot `
+        -ContainerName $Neo4jDockerName `
+        -Image $Neo4jDockerImage `
+        -Neo4jHostName $Neo4jHost `
+        -HttpPort $Neo4jHttpPort `
+        -BoltPort $Neo4jPort `
+        -User $Neo4jUser `
+        -Password $Neo4jPassword `
+        -DataRoot $Neo4jDockerDataRoot `
+        -ResetData ([bool]$ResetNeo4jDockerData)
+}
+
 if (-not $SkipNeo4jPortCheck) {
     Write-Host "[INFO] Checking Neo4j bolt port: $Neo4jHost`:$Neo4jPort"
-    if (-not (Test-TcpPort -HostName $Neo4jHost -Port $Neo4jPort)) {
+    if (-not (Wait-TcpPort -HostName $Neo4jHost -Port $Neo4jPort -Attempts $RetryCount -DelaySeconds $RetryDelaySeconds)) {
         throw "Neo4j is not reachable at $Neo4jHost`:$Neo4jPort. Start Neo4j first, pass the correct -Neo4jHost/-Neo4jPort, or use -SkipNeo4jPortCheck for remote/proxied deployments."
     }
+}
+
+if (-not $SkipNeo4jDocker) {
+    Write-Host "[INFO] Checking Neo4j APOC plugin..."
+    Wait-Neo4jApoc `
+        -ContainerName $Neo4jDockerName `
+        -User $Neo4jUser `
+        -Password $Neo4jPassword `
+        -Attempts $RetryCount `
+        -DelaySeconds $RetryDelaySeconds
 }
 
 if (Test-ServiceHealth "$bridgeUrl/health") {

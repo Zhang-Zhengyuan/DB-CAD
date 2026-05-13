@@ -6,43 +6,39 @@
 .\CAD_DB\deploy\start_dbcad_fullstack.ps1
 ```
 
-## 参数
+## 核心参数
 
-`-FastApiHost`
+`-ConfigPath`
 
-FastAPI 监听地址，默认 `0.0.0.0`。
+指定统一配置文件。默认是 `CAD_DB\deploy\dbcad.local.env`。
 
-`-FastApiPort`
+`-ResetNeo4jDockerData`
 
-FastAPI 端口，默认 `8000`。
+删除并重建本地 Neo4j Docker 容器和 `neo4j-runtime` 数据。修改 `DBCAD_PASSWORD` 后需要使用。
 
-`-BridgeHost`
+`-SkipNeo4jDocker`
 
-C++ Storage Bridge 监听地址，默认 `127.0.0.1`。
+不创建、不启动 Docker 容器。适合使用外部 Neo4j。
 
-`-BridgePort`
+`-FastApiHost` / `-FastApiPort`
 
-C++ Storage Bridge 端口，默认 `8100`。
+FastAPI 监听地址和端口，默认来自 `dbcad.local.env`。
 
-`-Neo4jHost`
+`-BridgeHost` / `-BridgePort`
 
-Neo4j Bolt 主机，默认从配置文件或 `127.0.0.1` 推断。
+C++ Storage Bridge 监听地址和端口，默认来自 `dbcad.local.env`。
 
-`-Neo4jPort`
+`-Neo4jHost` / `-Neo4jPort`
 
-Neo4j Bolt 端口，默认 `7687`。
+Neo4j Bolt 地址，默认来自 `dbcad.local.env`。
 
-`-Neo4jUser`
+`-Neo4jUser` / `-Neo4jPassword`
 
-Neo4j 用户名，默认 `neo4j`。
-
-`-Neo4jPassword`
-
-Neo4j 密码。脚本会优先读取最新构建目录旁边的 `neo4j_connect_info.conf` 或 `.config`，也可以通过此参数覆盖。
+Neo4j 认证信息。默认使用 `DBCAD_NEO4J_USER` 和统一的 `DBCAD_PASSWORD`。命令行参数优先级高于配置文件，通常不需要传。
 
 `-ApiPassword`
 
-FastAPI 可选访问密码。为空表示不校验。
+FastAPI 访问密码。默认使用统一的 `DBCAD_PASSWORD`。不建议传空值；空 FastAPI 密码会关闭鉴权，导致客户端连接测试无论填什么都通过。
 
 `-ClientExePath`
 
@@ -50,7 +46,7 @@ FastAPI 可选访问密码。为空表示不校验。
 
 `-WinDeployQtPath`
 
-指定 `windeployqt.exe`。不传时会自动查找 `D:\Qt`、`C:\Qt`、PATH 和 qmake 所在目录。
+指定 `windeployqt.exe`。不传时自动查找 `D:\Qt`、`C:\Qt`、PATH 和 qmake 所在目录。
 
 `-PackageRoot`
 
@@ -58,32 +54,29 @@ FastAPI 可选访问密码。为空表示不校验。
 
 `-PrepareOnly`
 
-只同步部署包和写配置，不启动任何服务。
+只同步部署包和写配置，不启动 Docker、Bridge、FastAPI 或客户端。
 
 `-SkipClient`
 
-只启动 Bridge 和 FastAPI，不打开桌面客户端。
+只启动 Docker、Bridge 和 FastAPI，不打开桌面客户端。
 
 `-SkipDependencySync`
 
 跳过 `uv sync`，适合依赖已经安装好的快速重启。
 
-`-SkipNeo4jPortCheck`
-
-跳过 Neo4j 端口预检查。仅在特殊网络代理或远程部署时使用。
-
 `-KeepExistingServices`
 
-如果 8000/8100 已有健康服务，复用现有服务。默认会要求先停止旧服务，避免误用旧版本。
+如果 8000/8100 已有健康服务，复用现有服务。默认要求先停止旧服务，避免误用旧版本。
 
 ## 推荐流程
 
 1. 构建 `CAD_DB.exe`。
-2. 启动 Neo4j。
-3. 执行：
+2. 执行一次启动器，让它创建或迁移 `CAD_DB\deploy\dbcad.local.env`。
+3. 确认配置里只有一个 `DBCAD_PASSWORD`，不要再维护 `DBCAD_NEO4J_PASSWORD` 或 `DBCAD_API_PASSWORD`。
+4. 重建本地 Neo4j 数据并启动：
 
 ```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -Neo4jPassword 12345678
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd -ResetNeo4jDockerData
 ```
 
-4. 两台客户端打开同一个 FastAPI 项目，验证实时协作。
+5. 两台客户端打开同一个 FastAPI 项目，验证实时协作。

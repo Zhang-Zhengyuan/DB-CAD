@@ -68,11 +68,16 @@ function Stop-Pid([object]$PidValue, [string]$Name) {
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $deployRoot = Resolve-FullPath $scriptRoot
-$projectRoot = Resolve-FullPath (Join-Path $deployRoot "..")
-$repoRoot = Resolve-FullPath (Join-Path $projectRoot "..")
 
 if ([string]::IsNullOrWhiteSpace($PackageRoot)) {
-    $PackageRoot = Join-Path $repoRoot "dist\DBCAD-fullstack-package"
+    $packageCandidate = Join-Path $deployRoot "run\pids.json"
+    if (Test-Path -LiteralPath $packageCandidate) {
+        $PackageRoot = $deployRoot
+    } else {
+        $projectRoot = Resolve-FullPath (Join-Path $deployRoot "..")
+        $repoRoot = Resolve-FullPath (Join-Path $projectRoot "..")
+        $PackageRoot = Join-Path $repoRoot "dist\DBCAD-fullstack-package"
+    }
 }
 $PackageRoot = Resolve-FullPath $PackageRoot
 $pidFile = Join-Path $PackageRoot "run\pids.json"

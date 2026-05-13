@@ -59,6 +59,12 @@ neo4j_connect_info.conf
 neo4j_connect_info.config
 fastapi_connect_info.conf
 storage_bridge_connect_info.conf
+CAD_DB/deploy/dbcad.local.env
+CAD_DB/deploy/*.local.env
+neo4j-runtime/
+neo4j-conf/
+neo4j-data/
+neo4j-plugins/
 
 # Model/export scratch files
 *.sat
