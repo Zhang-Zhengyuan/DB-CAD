@@ -94,6 +94,7 @@ public:
     explicit MainWindow(QWidget* parent = nullptr, Qt::WindowFlags flags = {});
     void setCurWindow(Window* w) { curWindow = w; }
     void showMessage(const QString s, int duration = -1);
+    void notifyModelChangedForCollaboration();
 
     void buildTreeFromHistroy(HISTORY_STREAM* hs = nullptr);
 
@@ -135,6 +136,7 @@ private:
     bool saveFile(const QString& fileName);
     bool restoreFastAPIModelFromSat(const QString& satContent);
     bool syncFastAPIRemoteVersion(int remoteVersion, const QString& reason);
+    bool applyFastAPIRemoteSat(int remoteVersion, const QString& satContent, const QString& reason);
     void updateCollabPanelUi();
     void setCollabConnectionState(const QString& stateText);
     void reconnectFastAPISync();
@@ -143,6 +145,10 @@ private:
     void requestFastAPISyncNow();
     void updateFastAPICollaboratorsStatus();
     void applyPendingRemoteVersion();
+    void scheduleFastAPIAutoPublish(const QString& reason);
+    void publishFastAPIAutoSnapshot();
+    bool publishFastAPIModelSnapshot(bool interactiveConflict);
+    bool exportCurrentModelToSat(QString* satContent, QString* errorMessage);
     void setCurrentFile(const QString& fileName);
     void setCurrentPartName(const QString& partName);
 
@@ -174,7 +180,11 @@ private:
     QTimer* fastapiSyncTimer = nullptr;
     QTimer* fastapiHeartbeatTimer = nullptr;
     QTimer* fastapiReconnectTimer = nullptr;
+    QTimer* fastapiPublishTimer = nullptr;
     bool fastapiAutoFollowRemote = true;
+    bool fastapiApplyingRemoteSnapshot = false;
+    bool fastapiPublishingSnapshot = false;
+    QString fastapiLastPublishReason;
 
     QDockWidget* collabDock = nullptr;
     QLabel* collabConnectionLabel = nullptr;

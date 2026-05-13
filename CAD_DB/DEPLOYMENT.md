@@ -1,127 +1,134 @@
-# DBCAD 验收部署指南（服务器 + 客户机）
+# DBCAD 一键部署和启动
 
-## 目标
-
-- 服务器：运行 FastAPI 统一后端（可接 Neo4j）。
-- 客户机：运行打包后的 Qt EXE，配置后即可远程访问。
-
-> 详细配置项、参数说明与故障排查请见：`STARTUP_CONFIG.md`
-
----
-
-## 一、服务器部署（推荐 uv）
-
-### 1. 前置
-
-- Windows Server / Windows 10+
-- 可访问 Neo4j（若使用 `neo4j` 存储后端）
-
-### 2. 一键启动
-
-在仓库根目录执行：
+当前只保留一套部署入口：
 
 ```powershell
-.\CAD_DB\deploy\server\deploy_backend_uv.ps1 \
-  -HostAddress 0.0.0.0 \
-  -Port 8000 \
-  -StorageBackend neo4j \
-  -Neo4jUri bolt://127.0.0.1:7687 \
-  -Neo4jUser neo4j \
-  -Neo4jPassword "your_password"
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd
 ```
 
-### 3. 验证
+这个脚本会自动完成：
+
+1. 查找最新的 `CAD_DB.exe`。
+2. 调用 `windeployqt` 补齐 Qt 运行时 DLL。
+3. 同步完整包到 `dist\DBCAD-fullstack-package`。
+4. 写入客户端和后端配置。
+5. 启动 C++ Storage Bridge、FastAPI 和桌面客户端。
+
+## 前置条件
+
+1. Neo4j 已启动，默认 Bolt 地址为 `127.0.0.1:7687`。
+2. Qt 安装在 `D:\Qt\6.9.0\msvc2022_64`，或通过参数传入 `windeployqt.exe`。
+3. Python 后端使用 `uv` 管理依赖；脚本找不到 `uv` 时会自动安装。
+
+## 常用命令
+
+启动完整前后端和客户端：
 
 ```powershell
-.\CAD_DB\deploy\server\check_backend.ps1 -BaseUrl http://127.0.0.1:8000
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd
 ```
 
-通过后可访问：
-
-- `http://服务器IP:8000/health`
-- `http://服务器IP:8000/docs`
-
-### 4. 重新打开（重启后端）
-
-如果你已经部署过并关闭了进程，直接一键重启：
+只准备部署包，不启动进程：
 
 ```powershell
-.\CAD_DB\deploy\server\start_backend_oneclick.ps1
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd -PrepareOnly
 ```
 
-也可双击：
+指定 Neo4j 密码：
+
+```powershell
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd -Neo4jPassword 12345678
+```
+
+强制使用某个 exe：
+
+```powershell
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd -ClientExePath ..\x64\Release\CAD_DB.exe
+```
+
+指定 `windeployqt`：
+
+```powershell
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd -WinDeployQtPath D:\Qt\6.9.0\msvc2022_64\bin\windeployqt.exe
+```
+
+只启动 Bridge 和 FastAPI，不打开客户端：
+
+```powershell
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd -SkipClient
+```
+
+停止由启动器拉起的进程：
+
+```powershell
+.\CAD_DB\deploy\stop_dbcad_fullstack.cmd
+```
+
+## 生成目录
+
+统一包目录：
 
 ```text
-CAD_DB\deploy\server\start_backend_oneclick.cmd
+dist\DBCAD-fullstack-package
 ```
 
----
+关键文件：
 
-## 二、客户机部署（Qt EXE 打包）
+```text
+dist\DBCAD-fullstack-package\start_dbcad_fullstack.cmd
+dist\DBCAD-fullstack-package\stop_dbcad_fullstack.cmd
+dist\DBCAD-fullstack-package\client\CAD_DB.exe
+dist\DBCAD-fullstack-package\server\app\main.py
+dist\DBCAD-fullstack-package\server\bridge-bin\CAD_DB.exe
+```
 
-### 1. 一键打包
+## 配置文件
 
-在开发机执行：
+客户端连接 FastAPI：
+
+```text
+dist\DBCAD-fullstack-package\client\fastapi_connect_info.conf
+```
+
+后端环境变量：
+
+```text
+dist\DBCAD-fullstack-package\server\.env
+```
+
+脚本会自动写入这些文件。需要改服务地址、端口或密码时，优先通过启动参数传入。
+
+## 健康检查
+
+启动后检查：
 
 ```powershell
-.\CAD_DB\deploy\client\package_client.ps1 \
-  -Configuration Release \
-  -Platform x64 \
-  -ServerBaseUrl http://服务器IP:8000 \
-  -Author customer-user \
-  -QtInstall 6.9.0_msvc2022_64 \
-  -WinDeployQtPath D:\Qt\6.9.0\msvc2022_64\bin\windeployqt.exe
+Invoke-RestMethod http://127.0.0.1:8100/health
+Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-输出：
+FastAPI 文档：
 
-- `dist/DBCAD-client-Release.zip`
+```text
+http://127.0.0.1:8000/docs
+```
 
-### 1.1 若客户机提示缺少 DLL
+## 常见问题
 
-当前打包脚本已包含：
-
-- Qt 运行时（windeployqt）
-- ACIS 运行时（SpaACIS.dll）
-
-若仍有遗漏，反馈缺失 DLL 名称后可继续补充到脚本。
-
----
-
-## 二点五、服务端离线交付包
-
-可先生成服务端部署包：
+如果提示缺少 Qt DLL，重新执行：
 
 ```powershell
-.\CAD_DB\deploy\server\package_backend.ps1 -OutDir dist -StorageBackend neo4j
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd -PrepareOnly -WinDeployQtPath D:\Qt\6.9.0\msvc2022_64\bin\windeployqt.exe
 ```
 
-输出：
+如果提示 Neo4j 不可达，先确认：
 
-- `dist/DBCAD-backend-package.zip`
+```powershell
+Test-NetConnection 127.0.0.1 -Port 7687
+```
 
-### 2. 客户机安装
+如果 8000 或 8100 被占用，先执行：
 
-- 解压 zip 到任意目录
-- 双击 EXE 运行
-- 如需本地 neo4j 直连模式，编辑同目录 `neo4j_connect_info.conf`
-
----
-
-## 三、验收清单
-
-- [ ] 客户端可打开 FastAPI 模式并加载项目。
-- [ ] 客户端可保存模型，后端版本号递增。
-- [ ] 两台客户机同时打开同一项目，一台保存后另一台收到实时同步。
-- [ ] 切换到 ACIS/neo4j 本地模式仍可正常保存加载。
-
----
-
-## 四、通信说明
-
-当前 C++ 与 Python 后端通信方式：
-
-- HTTP REST（保存/加载）
-- WebSocket（实时订阅）
-
-不依赖 pybind。该方式天然支持跨电脑部署与运维分层。
+```powershell
+.\CAD_DB\deploy\stop_dbcad_fullstack.cmd
+```

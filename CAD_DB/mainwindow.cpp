@@ -13,6 +13,7 @@
 #include <QMouseEvent>
 #include <QProcess>
 #include <QSettings>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QStatusBar>
 #include <QTemporaryFile>
@@ -199,6 +200,11 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
             fastapiReconnectTimer->stop();
         }
     });
+
+    fastapiPublishTimer = new QTimer(this);
+    fastapiPublishTimer->setSingleShot(true);
+    fastapiPublishTimer->setInterval(900);
+    connect(fastapiPublishTimer, &QTimer::timeout, this, &MainWindow::publishFastAPIAutoSnapshot);
 
     if (0 == initialize_acis()) {
         QMessageBox::warning(this, tr("异常"), tr("ACIS初始化失败"));
@@ -543,6 +549,8 @@ bool MainWindow::restoreFastAPIModelFromSat(const QString& satContent) {
         addWindow();
     }
 
+    QScopedValueRollback<bool> remoteSnapshotGuard(fastapiApplyingRemoteSnapshot, true);
+
     QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_load_XXXXXX.sat");
     tempFile.setAutoRemove(true);
     if (!tempFile.open()) {
@@ -571,9 +579,19 @@ bool MainWindow::restoreFastAPIModelFromSat(const QString& satContent) {
     API_END;
     fclose(f);
 
+    if (el.count() == 0) {
+        acis_get_noattrib_toplevel_active_entities(el);
+    }
+
+    if (el.count() == 0) {
+        QMessageBox::warning(this, tr("DBCAD"), tr("远程模型已恢复，但未检测到可渲染实体。请检查SAT内容或存储桥输出。"));
+        return false;
+    }
+
     for (int i = 0; i < el.count(); i++) {
         curWindow->addEntity(el[i], tr("导入(FastAPI)实体%1").arg(i).toStdString(), -1);
     }
+    curWindow->updateMeshData();
     return true;
 }
 
@@ -583,6 +601,9 @@ void MainWindow::disconnectFastAPISync() {
     }
     if (fastapiHeartbeatTimer != nullptr) {
         fastapiHeartbeatTimer->stop();
+    }
+    if (fastapiPublishTimer != nullptr) {
+        fastapiPublishTimer->stop();
     }
     fastapi_collaborators.clear();
     if (fastapiReconnectTimer != nullptr) {
@@ -603,6 +624,180 @@ void MainWindow::requestFastAPISyncNow() {
         fastapiSyncSocket->sendTextMessage("sync_now");
         statusBar()->showMessage(tr("已请求服务器返回最新版本"), 1500);
     }
+}
+
+void MainWindow::notifyModelChangedForCollaboration() {
+    if (fastapiApplyingRemoteSnapshot || fastapiPublishingSnapshot) {
+        return;
+    }
+
+    QAction* checkedAct = setModeActGroup ? setModeActGroup->checkedAction() : nullptr;
+    if (checkedAct != setFASTAPIModeAct) {
+        return;
+    }
+
+    if (fastapi_project_id.isEmpty() || fastapi_project_name.isEmpty()) {
+        return;
+    }
+
+    scheduleFastAPIAutoPublish(tr("local-change"));
+}
+
+void MainWindow::scheduleFastAPIAutoPublish(const QString& reason) {
+    if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
+        return;
+    }
+    if (fastapiApplyingRemoteSnapshot || fastapiPublishingSnapshot) {
+        return;
+    }
+    if (fastapiPublishTimer == nullptr) {
+        return;
+    }
+
+    fastapiLastPublishReason = reason;
+    fastapiPublishTimer->start();
+}
+
+void MainWindow::publishFastAPIAutoSnapshot() {
+    if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
+        return;
+    }
+
+    QAction* checkedAct = setModeActGroup ? setModeActGroup->checkedAction() : nullptr;
+    if (checkedAct != setFASTAPIModeAct) {
+        return;
+    }
+
+    publishFastAPIModelSnapshot(false);
+}
+
+bool MainWindow::exportCurrentModelToSat(QString* satContent, QString* errorMessage) {
+    if (satContent == nullptr) {
+        return false;
+    }
+    satContent->clear();
+
+    ENTITY_LIST el;
+    acis_get_noattrib_toplevel_active_entities(el);
+    if (el.count() == 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = tr("当前无顶级活跃实体。");
+        }
+        return false;
+    }
+
+    QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_save_XXXXXX.sat");
+    tempFile.setAutoRemove(true);
+    if (!tempFile.open()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = tr("无法创建临时文件用于导出SAT");
+        }
+        return false;
+    }
+
+    const QString tempPath = tempFile.fileName();
+    tempFile.close();
+
+    FILE* f = fopen(tempPath.toStdString().c_str(), "wb");
+    if (!f) {
+        if (errorMessage != nullptr) {
+            *errorMessage = tr("无法打开临时SAT文件用于写入");
+        }
+        return false;
+    }
+
+    API_NOP_BEGIN;
+    api_save_version(2, 0);
+    FileInfo fileinfo;
+    fileinfo.set_units(1.0);
+    fileinfo.set_product_id("dbcad_fastapi");
+    result = api_set_file_info((FileIdent | FileUnits), fileinfo);
+    result = api_set_int_option("sequence_save_files", 1);
+    result = api_save_entity_list(f, true, el);
+    API_NOP_END;
+    fclose(f);
+
+    QFile satFile(tempPath);
+    if (!satFile.open(QIODevice::ReadOnly)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = tr("读取临时SAT文件失败");
+        }
+        return false;
+    }
+
+    *satContent = QString::fromUtf8(satFile.readAll());
+    satFile.close();
+    if (satContent->isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = tr("导出的SAT内容为空");
+        }
+        return false;
+    }
+
+    return true;
+}
+
+bool MainWindow::publishFastAPIModelSnapshot(bool interactiveConflict) {
+    if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
+        return false;
+    }
+
+    QString satContent;
+    QString errorMessage;
+    if (!exportCurrentModelToSat(&satContent, &errorMessage)) {
+        if (interactiveConflict && !errorMessage.isEmpty()) {
+            QMessageBox::warning(this, tr("DBCAD"), errorMessage);
+        }
+        return false;
+    }
+
+    BackendApiClient client(
+        QString::fromStdString(fastapi_base_url),
+        QString::fromStdString(fastapi_author),
+        QString::fromStdString(fastapi_password));
+    if (!client.isConfigured()) {
+        if (interactiveConflict) {
+            QMessageBox::warning(this, tr("DBCAD"), tr("FastAPI地址未配置，请先设置fastapi_connect_info.conf"));
+        }
+        return false;
+    }
+
+    fastapiPublishingSnapshot = true;
+    std::optional<int> baseVersion;
+    if (fastapi_model_version > 0) {
+        baseVersion = fastapi_model_version;
+    }
+
+    auto newVersion = client.saveModel(fastapi_project_id, satContent, baseVersion);
+    if (!newVersion.has_value() && client.lastStatusCode() == 409 && !interactiveConflict) {
+        auto latest = client.getLatestModel(fastapi_project_id);
+        if (latest.has_value() && latest->version >= fastapi_model_version) {
+            newVersion = client.saveModel(fastapi_project_id, satContent, latest->version);
+        }
+    }
+    fastapiPublishingSnapshot = false;
+
+    if (!newVersion.has_value()) {
+        fastapi_pending_remote_version =
+            fastapi_pending_remote_version > fastapi_model_version ? fastapi_pending_remote_version : fastapi_model_version;
+        if (interactiveConflict) {
+            QMessageBox::warning(this, tr("DBCAD"), client.lastError());
+        } else {
+            statusBar()->showMessage(tr("自动发布协作版本失败：%1").arg(client.lastError()), 5000);
+        }
+        updateCollabPanelUi();
+        return false;
+    }
+
+    fastapi_model_version = *newVersion;
+    fastapi_pending_remote_version = 0;
+    curWindow->setIsModified(false);
+    if (!fastapi_project_name.isEmpty()) {
+        setCurrentPartName(fastapi_project_name);
+    }
+    updateCollabPanelUi();
+    statusBar()->showMessage(tr("已自动发布协作版本%1").arg(fastapi_model_version), 2000);
+    return true;
 }
 
 void MainWindow::updateFastAPICollaboratorsStatus() {
@@ -679,6 +874,32 @@ bool MainWindow::syncFastAPIRemoteVersion(int remoteVersion, const QString& reas
     }
 
     fastapi_model_version = model->version;
+    fastapi_pending_remote_version = 0;
+    setCurrentPartName(fastapi_project_name);
+    curWindow->setIsModified(false);
+    if (fastapiPublishTimer != nullptr) {
+        fastapiPublishTimer->stop();
+    }
+    statusBar()->showMessage(tr("已同步远程版本%1（%2）").arg(fastapi_model_version).arg(reason), 4000);
+    updateCollabPanelUi();
+    return true;
+}
+
+bool MainWindow::applyFastAPIRemoteSat(int remoteVersion, const QString& satContent, const QString& reason) {
+    if (curWindow == nullptr || remoteVersion <= 0 || fastapi_project_id.isEmpty() || satContent.isEmpty()) {
+        return false;
+    }
+
+    if (fastapiPublishTimer != nullptr) {
+        fastapiPublishTimer->stop();
+    }
+
+    curWindow->clear();
+    if (!restoreFastAPIModelFromSat(satContent)) {
+        return false;
+    }
+
+    fastapi_model_version = remoteVersion;
     fastapi_pending_remote_version = 0;
     setCurrentPartName(fastapi_project_name);
     curWindow->setIsModified(false);
@@ -832,6 +1053,9 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
         return;
     }
 
+    const QJsonObject content = root.value("content").toObject();
+    const QString satContent = content.value("sat").toString();
+
     if (curWindow == nullptr) {
         return;
     }
@@ -839,6 +1063,7 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
     if (curWindow->getIsModified()) {
         fastapi_pending_remote_version =
             fastapi_pending_remote_version > remoteVersion ? fastapi_pending_remote_version : remoteVersion;
+        scheduleFastAPIAutoPublish(tr("before-remote-sync"));
         statusBar()->showMessage(
             tr("检测到远程新版本%1，当前有未保存修改，已进入待同步队列").arg(fastapi_pending_remote_version),
             5000);
@@ -854,7 +1079,12 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
         return;
     }
 
-    syncFastAPIRemoteVersion(remoteVersion, root.value("trigger").toString("broadcast"));
+    const QString reason = root.value("trigger").toString("broadcast");
+    if (!satContent.isEmpty()) {
+        applyFastAPIRemoteSat(remoteVersion, satContent, reason);
+    } else {
+        syncFastAPIRemoteVersion(remoteVersion, reason);
+    }
 }
 
 void MainWindow::addWindow() {
@@ -1774,16 +2004,41 @@ void MainWindow::loadFile(const QString& fileName) {
         } else {
             auto project = client.getProjectByName(fileName);
             if (!project.has_value()) {
-                QString err = client.lastError();
-                if (err.isEmpty()) {
-                    QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的项目(FastAPI)不存在。").arg(fileName));
+                if (client.lastStatusCode() == 404) {
+                    auto created = client.createProject(fileName);
+                    if (!created.has_value()) {
+                        QMessageBox::warning(this, tr("DBCAD"), tr("创建协作项目失败：%1").arg(client.lastError()));
+                    } else {
+                        fastapi_project_id = created->id;
+                        fastapi_project_name = fileName;
+                        fastapi_model_version = 0;
+                        reconnectFastAPISync();
+                        setCurrentPartName(fileName);
+                        statusBar()->showMessage(tr("已创建并加入协作项目（当前无版本，请先保存模型）"), 4000);
+                        isRead = true;
+                    }
                 } else {
-                    QMessageBox::warning(this, tr("DBCAD"), err);
+                    QString err = client.lastError();
+                    if (err.isEmpty()) {
+                        QMessageBox::warning(this, tr("DBCAD"), tr("查询协作项目失败"));
+                    } else {
+                        QMessageBox::warning(this, tr("DBCAD"), err);
+                    }
                 }
             } else {
                 auto model = client.getLatestModel(project->id);
                 if (!model.has_value()) {
-                    QMessageBox::warning(this, tr("DBCAD"), client.lastError());
+                    if (client.lastStatusCode() == 404) {
+                        fastapi_project_id = project->id;
+                        fastapi_project_name = fileName;
+                        fastapi_model_version = 0;
+                        reconnectFastAPISync();
+                        setCurrentPartName(fileName);
+                        statusBar()->showMessage(tr("已加入协作项目（当前无版本，请先保存模型）"), 4000);
+                        isRead = true;
+                    } else {
+                        QMessageBox::warning(this, tr("DBCAD"), client.lastError());
+                    }
                 } else if (restoreFastAPIModelFromSat(model->sat)) {
                     fastapi_project_id = project->id;
                     fastapi_project_name = fileName;
@@ -1801,6 +2056,7 @@ void MainWindow::loadFile(const QString& fileName) {
     QGuiApplication::restoreOverrideCursor();
 #endif
     if (isRead) {
+        curWindow->setIsModified(false);
         if (checkedAct == setACISModeAct) {
             disconnectFastAPISync();
             fastapi_project_id.clear();
@@ -1876,7 +2132,11 @@ void MainWindow::loadFile(const QString& partName, const int generation) {
             } else {
                 auto model = client.getModelVersion(project->id, generation);
                 if (!model.has_value()) {
-                    QMessageBox::warning(this, tr("DBCAD"), client.lastError());
+                    if (client.lastStatusCode() == 404) {
+                        QMessageBox::warning(this, tr("DBCAD"), tr("协作项目存在，但指定版本不存在。"));
+                    } else {
+                        QMessageBox::warning(this, tr("DBCAD"), client.lastError());
+                    }
                 } else if (restoreFastAPIModelFromSat(model->sat)) {
                     fastapi_project_id = project->id;
                     fastapi_project_name = partName;
@@ -1894,6 +2154,7 @@ void MainWindow::loadFile(const QString& partName, const int generation) {
     QGuiApplication::restoreOverrideCursor();
 #endif
     if (isRead) {
+        curWindow->setIsModified(false);
         setCurrentPartName(partName);
         if (checkedAct == setFASTAPIModeAct) {
             statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(fastapi_model_version), 3000);
@@ -2004,14 +2265,96 @@ bool MainWindow::saveFile(const QString& fileName) {
 
                             auto newVersion = client.saveModel(project->id, satContent, baseVersion);
                             if (!newVersion.has_value()) {
-                                errorMessage = client.lastError();
+                                if (client.lastStatusCode() == 409) {
+                                    QMessageBox msg(this);
+                                    msg.setIcon(QMessageBox::Warning);
+                                    msg.setWindowTitle(tr("协作冲突"));
+                                    msg.setText(tr("检测到版本冲突：远程已有更新。请选择处理方式。"));
+                                    QPushButton* syncRemoteBtn = msg.addButton(tr("同步远程最新"), QMessageBox::AcceptRole);
+                                    QPushButton* forceSubmitBtn = msg.addButton(tr("提交我的版本（基于最新重试）"), QMessageBox::ActionRole);
+                                    QPushButton* forkBtn = msg.addButton(tr("另存为新协作项目"), QMessageBox::DestructiveRole);
+                                    QPushButton* cancelBtn = msg.addButton(QMessageBox::Cancel);
+                                    Q_UNUSED(syncRemoteBtn);
+                                    Q_UNUSED(forceSubmitBtn);
+                                    Q_UNUSED(forkBtn);
+                                    msg.exec();
+
+                                    if (msg.clickedButton() == cancelBtn) {
+                                        errorMessage = tr("已取消保存");
+                                    } else if (msg.clickedButton() == syncRemoteBtn) {
+                                        auto latest = client.getLatestModel(project->id);
+                                        if (!latest.has_value()) {
+                                            errorMessage = tr("获取远程最新版本失败：%1").arg(client.lastError());
+                                        } else {
+                                            curWindow->clear();
+                                            if (!restoreFastAPIModelFromSat(latest->sat)) {
+                                                errorMessage = tr("同步远程最新版本失败");
+                                            } else {
+                                                fastapi_project_id = project->id;
+                                                fastapi_project_name = fileName;
+                                                fastapi_model_version = latest->version;
+                                                fastapi_pending_remote_version = 0;
+                                                reconnectFastAPISync();
+                                                errorMessage.clear();
+                                            }
+                                        }
+                                    } else if (msg.clickedButton() == forceSubmitBtn) {
+                                        auto latest = client.getLatestModel(project->id);
+                                        if (!latest.has_value()) {
+                                            errorMessage = tr("获取远程最新版本失败：%1").arg(client.lastError());
+                                        } else {
+                                            auto retriedVersion = client.saveModel(project->id, satContent, latest->version);
+                                            if (!retriedVersion.has_value()) {
+                                                errorMessage = tr("基于最新版本重试提交失败：%1").arg(client.lastError());
+                                            } else {
+                                                fastapi_project_id = project->id;
+                                                fastapi_project_name = fileName;
+                                                fastapi_model_version = *retriedVersion;
+                                                fastapi_pending_remote_version = 0;
+                                                reconnectFastAPISync();
+                                                errorMessage.clear();
+                                            }
+                                        }
+                                    } else {
+                                        bool ok = false;
+                                        QString newProjectName = QInputDialog::getText(
+                                            this,
+                                            tr("另存为新协作项目"),
+                                            tr("请输入新项目名:"),
+                                            QLineEdit::Normal,
+                                            fileName + tr("-fork"),
+                                            &ok,
+                                            this->windowFlags() | Qt::MSWindowsFixedSizeDialogHint);
+                                        if (!ok || newProjectName.trimmed().isEmpty()) {
+                                            errorMessage = tr("已取消另存为");
+                                        } else {
+                                            auto forkProject = client.getOrCreateProject(newProjectName.trimmed());
+                                            if (!forkProject.has_value()) {
+                                                errorMessage = tr("创建新协作项目失败：%1").arg(client.lastError());
+                                            } else {
+                                                auto forkVersion = client.saveModel(forkProject->id, satContent, std::nullopt);
+                                                if (!forkVersion.has_value()) {
+                                                    errorMessage = tr("保存到新协作项目失败：%1").arg(client.lastError());
+                                                } else {
+                                                    fastapi_project_id = forkProject->id;
+                                                    fastapi_project_name = newProjectName.trimmed();
+                                                    fastapi_model_version = *forkVersion;
+                                                    fastapi_pending_remote_version = 0;
+                                                    reconnectFastAPISync();
+                                                    errorMessage.clear();
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    errorMessage = client.lastError();
+                                }
                             } else {
                                 fastapi_project_id = project->id;
                                 fastapi_project_name = fileName;
                                 fastapi_model_version = *newVersion;
                                 fastapi_pending_remote_version = 0;
                                 reconnectFastAPISync();
-                                requestFastAPISyncNow();
                             }
                         }
                     }

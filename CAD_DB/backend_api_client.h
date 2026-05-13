@@ -22,6 +22,7 @@ public:
 
     bool isConfigured() const;
     QString lastError() const;
+    int lastStatusCode() const;
 
     std::optional<ProjectInfo> getProjectByName(const QString& projectName);
     std::optional<ProjectInfo> createProject(const QString& projectName);
@@ -44,4 +45,5 @@ private:
     QString author;
     QString apiPassword;
     mutable QString errorMessage;
+    mutable int lastHttpStatusCode = -1;
 };

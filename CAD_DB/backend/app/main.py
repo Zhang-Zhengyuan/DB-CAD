@@ -129,6 +129,7 @@ async def save_model(
             "version": version.version,
             "author": version.author,
             "created_at": version.created_at.isoformat(),
+            "content": version.content,
         },
     )
     return schemas.SaveResult(version=version.version, created_at=version.created_at)
@@ -150,6 +151,7 @@ async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, 
             "author": latest.author,
             "created_at": latest.created_at.isoformat(),
             "trigger": trigger,
+            "content": latest.content,
         }
     )
 

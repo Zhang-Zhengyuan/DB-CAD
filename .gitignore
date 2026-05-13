@@ -1,18 +1,67 @@
+# Visual Studio / Qt build state
 .vs/
+.vscode/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+
+# Build outputs
 x64/
 x86/
-DBCAD/x64/
-DBCAD/x86/
-*.sat
+Win32/
+Debug/
+Release/
+CAD_DB/x64/
+CAD_DB/x86/
+CAD_DB/Debug/
+CAD_DB/Release/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
 
-# Packaging artifacts and legacy outputs
+# Keep source-controlled launcher scripts despite the executable ignore rules.
+!CAD_DB/deploy/*.cmd
+!CAD_DB/deploy/*.ps1
+
+# Generated deployment packages
 dist/
 dist_fixed/
 backend-package/
+*.zip
 
-# Runtime noise
+# Python / backend runtime state
+**/.venv/
 **/__pycache__/
-*.pyc
-**/logs/
-fastapi_error.log
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+*.egg-info/
 
+# Runtime logs and local databases
+**/logs/
+*.log
+CAD_DB/backend/cad_store.db
+
+# Local credentials and generated connection files
+*.env
+.env
+*.env.local
+neo4j_connect_info.conf
+neo4j_connect_info.config
+fastapi_connect_info.conf
+storage_bridge_connect_info.conf
+
+# Model/export scratch files
+*.sat
+*.sab
+*.step
+*.stp

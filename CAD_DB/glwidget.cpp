@@ -75,6 +75,11 @@ GLWidget::~GLWidget() {
 }
 
 void GLWidget::clear() {
+    const bool canUseContext = isValid();
+    if (canUseContext) {
+        makeCurrent();
+    }
+
     updateLP_local = false;
     xRot = 0;
     yRot = 0;
@@ -91,14 +96,26 @@ void GLWidget::clear() {
     updateMove_handle = false;
     display_data.clear();
     radius = 0.0;
-    vao_face.release();
-    vbo_face.release();
+    if (canUseContext && vbo_face.isCreated()) {
+        vbo_face.bind();
+        vbo_face.allocate(nullptr, 0);
+        vbo_face.release();
+    }
     data_face.clear();
     count_face = 0;
-    vao_edge.release();
-    vbo_edge.release();
+    if (canUseContext && vbo_edge.isCreated()) {
+        vbo_edge.bind();
+        vbo_edge.allocate(nullptr, 0);
+        vbo_edge.release();
+    }
     data_edge.clear();
     count_edge = 0;
+    pendingGpuUpload = false;
+
+    if (canUseContext) {
+        doneCurrent();
+    }
+
     update();
 }
 
@@ -173,6 +190,10 @@ void GLWidget::initializeGL() {
     initializeShadersFace();
     initializeShadersEdge();
 
+    if (pendingGpuUpload) {
+        uploadMeshDataToGpu();
+    }
+
     connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, &GLWidget::cleanup);
 }
 
@@ -241,8 +262,6 @@ void GLWidget::updateMeshData() {
             }
         }
     }
-    vbo_face.bind();
-    vbo_face.allocate(data_face.constData(), count_face * sizeof(GLfloat));
 
     // 将边数据写入VBO
     data_edge.clear();
@@ -259,8 +278,6 @@ void GLWidget::updateMeshData() {
             }
         }
     }
-    vbo_edge.bind();
-    vbo_edge.allocate(data_edge.constData(), count_edge * sizeof(GLfloat));
 
     // 计算包围球
     if (parent->getInputMode() == INPUT_MODES::SELECTION) {
@@ -285,10 +302,35 @@ void GLWidget::updateMeshData() {
         radius *= 1.5;
     }
 
+    pendingGpuUpload = true;
     update();
 }
 
+void GLWidget::uploadMeshDataToGpu() {
+    if (!isValid()) {
+        return;
+    }
+
+    if (!vbo_face.isCreated() || !vbo_edge.isCreated()) {
+        return;
+    }
+
+    vbo_face.bind();
+    vbo_face.allocate(data_face.constData(), count_face * sizeof(GLfloat));
+    vbo_face.release();
+
+    vbo_edge.bind();
+    vbo_edge.allocate(data_edge.constData(), count_edge * sizeof(GLfloat));
+    vbo_edge.release();
+
+    pendingGpuUpload = false;
+}
+
 void GLWidget::paintGL() {
+    if (pendingGpuUpload) {
+        uploadMeshDataToGpu();
+    }
+
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
