@@ -55,6 +55,13 @@ class _MemoryStorage:
     ) -> VersionRecord:
         rows = self.versions.setdefault(project_id, [])
         latest = rows[-1].version if rows else None
+        if latest is not None and base_version is None:
+            from fastapi import HTTPException, status
+
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"base_version is required: latest version is {latest}",
+            )
         if base_version is not None and base_version != latest:
             from fastapi import HTTPException, status
 
@@ -133,6 +140,26 @@ def test_create_project_and_save_model(client: TestClient) -> None:
     assert version_response.json()["version"] == 1
 
 
+def test_save_requires_base_version_after_first_version(client: TestClient) -> None:
+    project_name = f"demo-conflict-project-{uuid4()}"
+    create_project_response = client.post("/projects", json={"name": project_name})
+    assert create_project_response.status_code == 201
+    project_id = create_project_response.json()["id"]
+
+    first = client.post(
+        f"/projects/{project_id}/models",
+        json={"author": "tester", "content": {"sat": "v1"}, "base_version": None},
+    )
+    assert first.status_code == 201
+
+    missing_base = client.post(
+        f"/projects/{project_id}/models",
+        json={"author": "tester", "content": {"sat": "v2"}, "base_version": None},
+    )
+    assert missing_base.status_code == 409
+    assert "base_version is required" in missing_base.json()["detail"]
+
+
 def test_websocket_multi_client_sync(client: TestClient) -> None:
     project_name = f"demo-ws-project-{uuid4()}"
     create_project_response = client.post("/projects", json={"name": project_name})
@@ -185,6 +212,8 @@ def test_websocket_multi_client_sync(client: TestClient) -> None:
             assert update2["type"] == "model_saved"
             assert update1["version"] == 2
             assert update2["version"] == 2
+            assert update1["trigger"] == "http_save"
+            assert update2["trigger"] == "http_save"
             assert update1["content"] == {"entities": ["v2"]}
             assert update2["content"] == {"entities": ["v2"]}
 
@@ -235,3 +264,69 @@ def test_websocket_join_empty_project_before_first_save(client: TestClient) -> N
             assert update2["version"] == 1
             assert update1["content"] == {"sat": "first-version"}
             assert update2["content"] == {"sat": "first-version"}
+
+
+def test_websocket_submit_model_accepts_and_rejects_stale_base(client: TestClient) -> None:
+    project_name = f"demo-submit-ws-project-{uuid4()}"
+    create_project_response = client.post("/projects", json={"name": project_name})
+    assert create_project_response.status_code == 201
+    project_id = create_project_response.json()["id"]
+
+    with client.websocket_connect(f"/ws/projects/{project_id}?client_id=a&author=A") as ws1:
+        assert ws1.receive_json()["type"] == "presence_snapshot"
+
+        with client.websocket_connect(f"/ws/projects/{project_id}?client_id=b&author=B") as ws2:
+            assert ws1.receive_json()["type"] == "collaborator_joined"
+            assert ws2.receive_json()["type"] == "presence_snapshot"
+
+            ws1.send_json(
+                {
+                    "type": "submit_model",
+                    "request_id": "r1",
+                    "author": "A",
+                    "content": {"sat": "v1"},
+                    "base_version": None,
+                    "reason": "test-submit",
+                }
+            )
+            accepted1 = ws1.receive_json()
+            broadcast1 = ws2.receive_json()
+            assert accepted1["type"] == "model_saved"
+            assert broadcast1["type"] == "model_saved"
+            assert accepted1["request_id"] == "r1"
+            assert accepted1["source_client_id"] == "a"
+            assert accepted1["version"] == 1
+            assert broadcast1["version"] == 1
+
+            ws2.send_json(
+                {
+                    "type": "submit_model",
+                    "request_id": "r2",
+                    "author": "B",
+                    "content": {"sat": "stale"},
+                    "base_version": None,
+                }
+            )
+            rejected = ws2.receive_json()
+            assert rejected["type"] == "submit_rejected"
+            assert rejected["request_id"] == "r2"
+            assert rejected["reason"] == "conflict"
+            assert rejected["latest_version"] == 1
+            assert rejected["content"] == {"sat": "v1"}
+
+            ws2.send_json(
+                {
+                    "type": "submit_model",
+                    "request_id": "r3",
+                    "author": "B",
+                    "content": {"sat": "v2"},
+                    "base_version": 1,
+                }
+            )
+            accepted2_on_ws1 = ws1.receive_json()
+            accepted2_on_ws2 = ws2.receive_json()
+            assert accepted2_on_ws1["type"] == "model_saved"
+            assert accepted2_on_ws2["type"] == "model_saved"
+            assert accepted2_on_ws2["request_id"] == "r3"
+            assert accepted2_on_ws2["version"] == 2
+            assert accepted2_on_ws1["content"] == {"sat": "v2"}

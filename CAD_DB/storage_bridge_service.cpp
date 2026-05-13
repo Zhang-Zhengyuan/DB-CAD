@@ -715,6 +715,12 @@ QByteArray StorageBridgeService::handleCreateModel(const QString& projectId, con
     const int64_t latestVersionValue = toInt64(lookup.front()[1], &latestOk);
     const int latestVersion = latestOk ? static_cast<int>(latestVersionValue) : 0;
 
+    if (!hasBaseVersion && latestVersion > 0) {
+        statusCode = 409;
+        error = QString::fromUtf8("base_version is required: latest version is %1").arg(latestVersion);
+        return {};
+    }
+
     if (hasBaseVersion && baseVersion != latestVersion) {
         statusCode = 409;
         error = QString::fromUtf8("Version conflict: latest version is %1").arg(latestVersion);

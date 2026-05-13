@@ -38,6 +38,12 @@ def get_project_by_name_or_404(project_name: str):
 
 
 def create_model_version(project_id: str, payload: schemas.ModelVersionCreate):
+    latest = storage_bridge.get_latest_version_or_none(project_id)
+    if latest is not None and payload.base_version is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"base_version is required: latest version is {latest.version}",
+        )
     return storage_bridge.create_model_version(project_id, payload.author, payload.content, payload.base_version)
 
 

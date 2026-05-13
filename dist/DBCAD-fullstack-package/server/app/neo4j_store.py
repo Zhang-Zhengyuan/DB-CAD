@@ -178,6 +178,11 @@ class Neo4jStore:
             ).single()
 
             latest_version = latest_record["latest"] if latest_record else None
+            if latest_version is not None and base_version is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"base_version is required: latest version is {latest_version}",
+                )
             if base_version is not None and base_version != latest_version:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,

@@ -148,6 +148,7 @@ private:
     void scheduleFastAPIAutoPublish(const QString& reason);
     void publishFastAPIAutoSnapshot();
     bool publishFastAPIModelSnapshot(bool interactiveConflict);
+    bool submitFastAPIModelOverSocket(const QString& satContent, const QString& reason, bool interactiveConflict);
     bool exportCurrentModelToSat(QString* satContent, QString* errorMessage);
     void setCurrentFile(const QString& fileName);
     void setCurrentPartName(const QString& partName);
@@ -184,7 +185,10 @@ private:
     bool fastapiAutoFollowRemote = true;
     bool fastapiApplyingRemoteSnapshot = false;
     bool fastapiPublishingSnapshot = false;
+    bool fastapiSubmitInFlight = false;
+    bool fastapiLocalDirtyDuringSubmit = false;
     QString fastapiLastPublishReason;
+    QString fastapiPendingSubmitRequestId;
 
     QDockWidget* collabDock = nullptr;
     QLabel* collabConnectionLabel = nullptr;
