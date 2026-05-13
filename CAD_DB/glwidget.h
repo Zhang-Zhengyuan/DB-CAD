@@ -19,10 +19,19 @@ class GLWidget : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
 
 public:
+    struct ViewState {
+        int xRot = 0;
+        int yRot = 0;
+        int zRot = 0;
+        double scale = 1.0;
+    };
+
     GLWidget(Window* p = nullptr, int w = 800, int h = 600);
     ~GLWidget();
 
     void clear();
+    ViewState viewState() const;
+    void setViewState(const ViewState& state);
 
     std::vector<GmeMesh::DisplayData*>& getMeshData() { return display_data; }
     void updateMeshData();

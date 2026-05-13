@@ -951,10 +951,12 @@ bool MainWindow::syncFastAPIRemoteVersion(int remoteVersion, const QString& reas
         return false;
     }
 
+    const GLWidget::ViewState viewState = curWindow->getViewState();
     curWindow->clear();
     if (!restoreFastAPIModelFromSat(model->sat)) {
         return false;
     }
+    curWindow->setViewState(viewState);
 
     fastapi_model_version = model->version;
     fastapi_pending_remote_version = 0;
@@ -977,10 +979,12 @@ bool MainWindow::applyFastAPIRemoteSat(int remoteVersion, const QString& satCont
         fastapiPublishTimer->stop();
     }
 
+    const GLWidget::ViewState viewState = curWindow->getViewState();
     curWindow->clear();
     if (!restoreFastAPIModelFromSat(satContent)) {
         return false;
     }
+    curWindow->setViewState(viewState);
 
     fastapi_model_version = remoteVersion;
     fastapi_pending_remote_version = 0;
@@ -2418,10 +2422,12 @@ bool MainWindow::saveFile(const QString& fileName) {
                                         if (!latest.has_value()) {
                                             errorMessage = tr("获取远程最新版本失败：%1").arg(client.lastError());
                                         } else {
+                                            const GLWidget::ViewState viewState = curWindow->getViewState();
                                             curWindow->clear();
                                             if (!restoreFastAPIModelFromSat(latest->sat)) {
                                                 errorMessage = tr("同步远程最新版本失败");
                                             } else {
+                                                curWindow->setViewState(viewState);
                                                 fastapi_project_id = project->id;
                                                 fastapi_project_name = fileName;
                                                 fastapi_model_version = latest->version;

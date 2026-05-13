@@ -1,12 +1,16 @@
 # Visual Studio / Qt build state
 .vs/
 .vscode/
+.idea/
+Thumbs.db
+.DS_Store
 *.user
 *.suo
 *.VC.db
 *.VC.opendb
 *.opensdf
 *.sdf
+*.tlog
 
 # Build outputs
 x64/
@@ -29,6 +33,8 @@ CAD_DB/Release/
 # Keep source-controlled launcher scripts despite the executable ignore rules.
 !CAD_DB/deploy/*.cmd
 !CAD_DB/deploy/*.ps1
+!_deps/**/*.dll
+!_deps/**/*.lib
 
 # Generated deployment packages
 dist/
@@ -49,6 +55,8 @@ htmlcov/
 # Runtime logs and local databases
 **/logs/
 *.log
+*testlog*.txt
+*.aps
 CAD_DB/backend/cad_store.db
 
 # Local credentials and generated connection files

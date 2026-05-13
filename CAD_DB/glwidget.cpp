@@ -119,6 +119,23 @@ void GLWidget::clear() {
     update();
 }
 
+GLWidget::ViewState GLWidget::viewState() const {
+    ViewState state;
+    state.xRot = xRot;
+    state.yRot = yRot;
+    state.zRot = zRot;
+    state.scale = scale;
+    return state;
+}
+
+void GLWidget::setViewState(const ViewState& state) {
+    xRot = state.xRot;
+    yRot = state.yRot;
+    zRot = state.zRot;
+    scale = state.scale;
+    update();
+}
+
 QSize GLWidget::minimumSizeHint() const {
     return QSize(50, 50);
 }
