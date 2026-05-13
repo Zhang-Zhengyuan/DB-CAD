@@ -6,6 +6,12 @@
 .\CAD_DB\deploy\start_dbcad_fullstack.cmd
 ```
 
+双客户端入口：
+
+```powershell
+.\CAD_DB\deploy\start_dbcad_two_clients.cmd
+```
+
 停止入口：
 
 ```powershell
@@ -129,6 +135,12 @@ dist\DBCAD-fullstack-package
 
 ```powershell
 .\CAD_DB\deploy\start_dbcad_fullstack.cmd -SkipClient
+```
+
+同时启动两个客户端：
+
+```powershell
+.\CAD_DB\deploy\start_dbcad_two_clients.cmd
 ```
 
 强制使用某个 exe：

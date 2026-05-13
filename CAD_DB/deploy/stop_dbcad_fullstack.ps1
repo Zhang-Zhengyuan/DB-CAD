@@ -66,6 +66,18 @@ function Stop-Pid([object]$PidValue, [string]$Name) {
     Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
 }
 
+function Stop-PidList([object]$PidValues, [string]$BaseName) {
+    if ($null -eq $PidValues) {
+        return
+    }
+
+    $index = 1
+    foreach ($pidValue in @($PidValues)) {
+        Stop-Pid -PidValue $pidValue -Name "$BaseName #$index"
+        $index++
+    }
+}
+
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $deployRoot = Resolve-FullPath $scriptRoot
 
@@ -90,7 +102,11 @@ if (!(Test-Path -LiteralPath $pidFile)) {
 }
 
 $data = Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json
-Stop-Pid -PidValue $data.client_pid -Name "client"
+if ($null -ne $data.client_pids) {
+    Stop-PidList -PidValues $data.client_pids -BaseName "client"
+} else {
+    Stop-Pid -PidValue $data.client_pid -Name "client"
+}
 Stop-Pid -PidValue $data.backend_pid -Name "FastAPI"
 Stop-Pid -PidValue $data.bridge_pid -Name "storage bridge"
 

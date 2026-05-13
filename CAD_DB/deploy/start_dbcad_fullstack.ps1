@@ -19,6 +19,8 @@ param(
     [string]$Neo4jDockerName = "",
     [string]$Neo4jDockerImage = "",
     [string]$Neo4jDockerDataRoot = "",
+    [ValidateRange(0, 16)]
+    [int]$ClientCount = 1,
     [switch]$SkipClient = $false,
     [switch]$SkipPackageSync = $false,
     [switch]$PrepareOnly = $false,
@@ -793,6 +795,9 @@ DBCAD fullstack package
 Start all services and the client:
   .\start_dbcad_fullstack.cmd
 
+Start all services and two clients:
+  .\start_dbcad_two_clients.cmd
+
 Stop services started by the launcher:
   .\stop_dbcad_fullstack.cmd
 
@@ -905,6 +910,8 @@ function Sync-FullstackPackage(
     foreach ($file in @(
         "start_dbcad_fullstack.ps1",
         "start_dbcad_fullstack.cmd",
+        "start_dbcad_two_clients.ps1",
+        "start_dbcad_two_clients.cmd",
         "stop_dbcad_fullstack.ps1",
         "stop_dbcad_fullstack.cmd"
     )) {
@@ -1091,7 +1098,7 @@ if ($PrepareOnly) {
 
 $bridgeProcess = $null
 $backendProcess = $null
-$clientProcess = $null
+$clientProcesses = @()
 
 if (-not $SkipNeo4jDocker) {
     Ensure-Neo4jDocker `
@@ -1177,9 +1184,11 @@ if (Test-ServiceHealth "$fastApiUrl/health") {
     }
 }
 
-if (-not $SkipClient) {
-    Write-Host "[INFO] Starting client: $clientExe"
-    $clientProcess = Start-Process -FilePath $clientExe -WorkingDirectory $paths.ClientDir -PassThru
+if ((-not $SkipClient) -and $ClientCount -gt 0) {
+    Write-Host "[INFO] Starting $ClientCount client instance(s): $clientExe"
+    for ($i = 1; $i -le $ClientCount; $i++) {
+        $clientProcesses += Start-Process -FilePath $clientExe -WorkingDirectory $paths.ClientDir -PassThru
+    }
 }
 
 $pidData = [ordered]@{
@@ -1189,7 +1198,9 @@ $pidData = [ordered]@{
     bridge_exe = $bridgeExe
     bridge_pid = if ($null -ne $bridgeProcess) { $bridgeProcess.Id } else { $null }
     backend_pid = if ($null -ne $backendProcess) { $backendProcess.Id } else { $null }
-    client_pid = if ($null -ne $clientProcess) { $clientProcess.Id } else { $null }
+    client_pid = if ($clientProcesses.Count -gt 0) { $clientProcesses[0].Id } else { $null }
+    client_pids = @($clientProcesses | ForEach-Object { $_.Id })
+    client_count = $clientProcesses.Count
     bridge_url = $bridgeUrl
     fastapi_url = $fastApiUrl
     started_at = (Get-Date).ToString("o")
@@ -1202,4 +1213,7 @@ Write-Host "[INFO] Source executable: $($latestExe.FullName)"
 Write-Host "[INFO] Bridge health: $bridgeUrl/health"
 Write-Host "[INFO] FastAPI health: $fastApiUrl/health"
 Write-Host "[INFO] FastAPI docs: $fastApiUrl/docs"
+if (-not $SkipClient) {
+    Write-Host "[INFO] Client instances: $($clientProcesses.Count)"
+}
 Write-Host "[INFO] PID file: $pidFile"

@@ -6,6 +6,12 @@
 .\CAD_DB\deploy\start_dbcad_fullstack.ps1
 ```
 
+双客户端入口：
+
+```powershell
+.\CAD_DB\deploy\start_dbcad_two_clients.ps1
+```
+
 ## 核心参数
 
 `-ConfigPath`
@@ -59,6 +65,10 @@ FastAPI 访问密码。默认使用统一的 `DBCAD_PASSWORD`。不建议传空�
 `-SkipClient`
 
 只启动 Docker、Bridge 和 FastAPI，不打开桌面客户端。
+
+`-ClientCount`
+
+启动客户端实例数量，默认 `1`。传 `-ClientCount 2` 等价于使用 `start_dbcad_two_clients.ps1`。
 
 `-SkipDependencySync`
 

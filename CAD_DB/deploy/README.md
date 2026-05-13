@@ -6,6 +6,12 @@
 .\deploy\start_dbcad_fullstack.cmd
 ```
 
+双客户端入口：
+
+```powershell
+.\deploy\start_dbcad_two_clients.cmd
+```
+
 停止入口：
 
 ```powershell
