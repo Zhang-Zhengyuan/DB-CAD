@@ -161,74 +161,89 @@ static void get_polylines_from_faceted_edges(ENTITY_LIST& edges, std::vector<Gme
     }
 }
 
-bool CreateMeshFromEntityList(ENTITY_LIST& el, GmeMesh::DisplayData& dd)
-{
-    API_BEGIN;
-        int numEnt = el.iteration_count();
-        if (0 == numEnt)
-        {
-            return false;
-        }
-        {
-            for (class ENTITY* ent = el.first(); ent; ent = el.next())
-            {
-                outcome out = api_facet_entity(ent);
-                // outcome out = gme_api_facet_entity(ent);
-                if (!out.ok())
-                {
-                    return false;
-                }
+bool CreateMeshFromEntityList(ENTITY_LIST& el, GmeMesh::DisplayData& dd) {
+    bool success = false;
+    API_NOP_BEGIN
+    {
+    int numEnt = el.iteration_count();
+    if (0 == numEnt) {
+        success = false;
+        goto exit;
+    }
+    {
+        for (ENTITY* ent = el.first(); ent; ent = el.next()) {
+            outcome out = api_facet_entity(ent);
+            // outcome out = gme_api_facet_entity(ent);
+            if (!out.ok()) {
+                success = false;
+                goto exit;
             }
         }
-        ENTITY_LIST faces;
-        {
-            for (class ENTITY* ent = el.first(); ent; ent = el.next())
-            {
-                if (is_EDGE(ent))
-                {
-                    continue;
-                }
-                outcome out = api_get_faces(ent, faces);
-                if (!out.ok())
-                {
-                    return false;
-                }
+    }
+    ENTITY_LIST faces;
+    {
+        for (ENTITY* ent = el.first(); ent; ent = el.next()) {
+            if (is_EDGE(ent)) {
+                continue;
+            }
+            outcome out = api_get_faces(ent, faces);
+            if (!out.ok()) {
+                success = false;
+                goto exit;
             }
         }
         int numFaces = faces.iteration_count();
         dd.faceMesh.resize(numFaces);
 
-        ENTITY_LIST edges;
-        {
-            for (class ENTITY* ent = el.first(); ent; ent = el.next())
-            {
-                outcome out = api_get_edges(ent, edges);
-                if (!out.ok())
-                {
-                    return false;
-                }
+    ENTITY_LIST edges;
+    {
+        for (ENTITY* ent = el.first(); ent; ent = el.next()) {
+            outcome out = api_get_edges(ent, edges);
+            if (!out.ok()) {
+                success = false;
+                goto exit;
             }
         }
         int numEdges = edges.iteration_count();
         dd.edgeMesh.resize(numEdges);
 
-        if (0 == numEdges + numFaces)
-        {
-            return false;
-        }
+    if (0 == numEdges + numFaces) {
+        success = false;
+        goto exit;
+    }
 
         get_triangles_from_faceted_faces(faces, dd.faceMesh, dd.faceCoords, dd.triangles, dd.normalCoords);
         get_polylines_from_faceted_edges(edges, dd.edgeMesh, dd.edgeCoords);
 
-        return true;
-    API_END;
+    success = true;
+    }
+    exit:
+    API_NOP_END
+        return success;
 }
-
-bool CreateMeshFromEntity(class ENTITY* e, GmeMesh::DisplayData& dd)
-{
-    API_BEGIN;
-        if (nullptr == e)
-        {
+// old
+/* 
+bool CreateMeshFromEntity(ENTITY* e, GmeMesh::DisplayData& dd) {
+    // API_BEGIN;
+    if (nullptr == e) {
+        return false;
+    }
+    {
+        if (is_VERTEX(e)) {
+            GmeMesh::VertexMesh vm = GmeMesh::VertexMesh();
+            vm.numIndices = 0;
+            vm.ptrVertex = (VERTEX*)e;
+            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().x());
+            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().y());
+            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().z());
+            dd.vertexMesh.push_back(vm);
+            return true;
+        }
+    }
+    {
+        outcome out;
+        out = api_facet_entity(e);
+        if (!out.ok()) {
             return false;
         }
         {
@@ -286,12 +301,70 @@ bool CreateMeshFromEntity(class ENTITY* e, GmeMesh::DisplayData& dd)
         get_polylines_from_faceted_edges(edges, dd.edgeMesh, dd.edgeCoords);
 
 
-        return true;
-    API_END;
+    return true;
+    // API_END;
 }
+*/
+bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
+    bool success = false;
+    API_NOP_BEGIN
+    {
+        if (nullptr == e) {
+            success = false;
+            goto exit;
+        }
+        if (is_VERTEX(e)) {
+            GmeMesh::VertexMesh vm = GmeMesh::VertexMesh();
+            vm.numIndices = 0;
+            vm.ptrVertex = (VERTEX *)e;
+            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().x());
+            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().y());
+            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().z());
+            dd.vertexMesh.push_back(vm);
+            success = true;
+            goto exit;
+        }
+        // 调用 facet API（这些 API 产生的 bulletins 会被 NOP 丢弃）
+        outcome out = api_facet_entity(e);
+        if (!out.ok()) {
+            success = false;
+            goto exit;
+        }
 
-GmeMesh::GmeMesh(DisplayData* dd)
-{
+        ENTITY_LIST faces;
+        if (!is_EDGE(e)) {
+            out = api_get_faces(e, faces);
+            if (!out.ok()) {
+                success = false;
+                goto exit;
+            }
+        }
+        int numFaces = faces.iteration_count();
+        dd.faceMesh.resize(numFaces);
+
+        ENTITY_LIST edges;
+        out = api_get_edges(e, edges);
+        if (!out.ok()) {
+            success = false;
+            goto exit;
+        }
+        int numEdges = edges.iteration_count();
+        dd.edgeMesh.resize(numEdges);
+
+        if (0 == numEdges + numFaces) {
+            success = false;
+            goto exit;
+        }
+
+        get_triangles_from_faceted_faces(faces, dd.faceMesh, dd.faceCoords, dd.triangles, dd.normalCoords);
+        get_polylines_from_faceted_edges(edges, dd.edgeMesh, dd.edgeCoords);
+        success = true;
+    }
+    exit:
+    API_NOP_END
+        return success;
+}
+GmeMesh::GmeMesh(DisplayData* dd) {
     m_data = dd;
 }
 

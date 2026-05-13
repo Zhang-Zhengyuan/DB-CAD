@@ -1,6 +1,81 @@
+# Visual Studio / Qt build state
 .vs/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+*.tlog
+
+# Build outputs
 x64/
 x86/
-DBCAD/x64/
-DBCAD/x86/
+Win32/
+Debug/
+Release/
+CAD_DB/x64/
+CAD_DB/x86/
+CAD_DB/Debug/
+CAD_DB/Release/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+
+# Keep source-controlled launcher scripts despite the executable ignore rules.
+!CAD_DB/deploy/*.cmd
+!CAD_DB/deploy/*.ps1
+!_deps/**/*.dll
+!_deps/**/*.lib
+
+# Generated deployment packages
+dist/
+dist_fixed/
+backend-package/
+*.zip
+
+# Python / backend runtime state
+**/.venv/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+*.egg-info/
+
+# Runtime logs and local databases
+**/logs/
+*.log
+*testlog*.txt
+*.aps
+CAD_DB/backend/cad_store.db
+
+# Local credentials and generated connection files
+*.env
+.env
+*.env.local
+neo4j_connect_info.conf
+neo4j_connect_info.config
+fastapi_connect_info.conf
+storage_bridge_connect_info.conf
+CAD_DB/deploy/dbcad.local.env
+CAD_DB/deploy/*.local.env
+neo4j-runtime/
+neo4j-conf/
+neo4j-data/
+neo4j-plugins/
+
+# Model/export scratch files
 *.sat
+*.sab
+*.step
+*.stp

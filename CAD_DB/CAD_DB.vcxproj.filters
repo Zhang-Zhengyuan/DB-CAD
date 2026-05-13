@@ -38,12 +38,23 @@
     <ClCompile Include="common.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="backend_api_client.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="acis.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="DbcadAPI.cpp">
+    <ClCompile Include="storage_bridge_service.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="window.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="glwidget.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="gme_mesh.hxx">
@@ -61,10 +72,13 @@
     <ClInclude Include="common.hxx">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="backend_api_client.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="acis.hxx">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="DbcadAPI.h">
+    <ClInclude Include="storage_bridge_service.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -72,5 +86,38 @@
     <ResourceCompile Include="images\DBCAD.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="backend\.env.example" />
+    <None Include="backend\app\config.py" />
+    <None Include="backend\app\crud.py" />
+    <None Include="backend\app\database.py" />
+    <None Include="backend\app\main.py" />
+    <None Include="backend\app\models.py" />
+    <None Include="backend\app\neo4j_store.py" />
+    <None Include="backend\app\schemas.py" />
+    <None Include="backend\app\storage_bridge.py" />
+    <None Include="backend\app\sync.py" />
+    <None Include="backend\app\__init__.py" />
+    <None Include="backend\pyproject.toml" />
+    <None Include="backend\pytest.ini" />
+    <None Include="backend\README.md" />
+    <None Include="backend\tests\test_api.py" />
+    <None Include="backend\tests\test_integration_client_perspective_live.py" />
+    <None Include="DEPLOYMENT.md" />
+    <None Include="deploy\client\package_client.ps1" />
+    <None Include="deploy\server\check_backend.ps1" />
+    <None Include="deploy\server\deploy_backend_uv.ps1" />
+    <None Include="deploy\server\package_backend.ps1" />
+    <None Include="deploy\server\set_neo4j_password.ps1" />
+    <None Include="deploy\server\start_backend_oneclick.cmd" />
+    <None Include="deploy\server\start_backend_oneclick.ps1" />
+    <None Include="deploy\server\start_fullstack_oneclick.cmd" />
+    <None Include="deploy\server\start_fullstack_oneclick.ps1" />
+    <None Include="fastapi_connect_info.conf" />
+    <None Include="项目计划.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="backend\requirements.txt" />
   </ItemGroup>
 </Project>

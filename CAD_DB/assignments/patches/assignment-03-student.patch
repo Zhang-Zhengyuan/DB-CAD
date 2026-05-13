@@ -1,0 +1,98 @@
+diff --git a/backend/app/main.py b/backend/app/main.py
+index 2c9c95b..ac5b901 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -125,20 +125,8 @@ def _model_saved_event(
+     request_id: str | None = None,
+     source_client_id: str | None = None,
+ ) -> dict[str, Any]:
+-    event = {
+-        "type": "model_saved",
+-        "project_id": project_id,
+-        "version": version.version,
+-        "author": version.author,
+-        "created_at": version.created_at.isoformat(),
+-        "trigger": trigger,
+-        "content": version.content,
+-    }
+-    if request_id:
+-        event["request_id"] = request_id
+-    if source_client_id:
+-        event["source_client_id"] = source_client_id
+-    return event
++    # TODO(assignment-03): build the standard model_saved websocket event payload.
++    raise NotImplementedError("assignment-03: _model_saved_event is not implemented")
+ 
+ 
+ async def _create_model_version_serialized(
+@@ -223,31 +211,8 @@ async def _send_submit_rejected(
+     reason: str,
+     detail: str,
+ ) -> None:
+-    event: dict[str, Any] = {
+-        "type": "submit_rejected",
+-        "project_id": project_id,
+-        "reason": reason,
+-        "detail": detail,
+-    }
+-    if request_id:
+-        event["request_id"] = request_id
+-
+-    try:
+-        latest = crud.get_latest_version_or_404(project_id)
+-    except HTTPException:
+-        latest = None
+-
+-    if latest is not None:
+-        event.update(
+-            {
+-                "latest_version": latest.version,
+-                "author": latest.author,
+-                "created_at": latest.created_at.isoformat(),
+-                "content": latest.content,
+-            }
+-        )
+-
+-    await websocket.send_json(event)
++    # TODO(assignment-03): build and send a submit_rejected websocket payload.
++    raise NotImplementedError("assignment-03: _send_submit_rejected is not implemented")
+ 
+ 
+ async def _handle_submit_model_message(
+@@ -313,34 +278,8 @@ async def _handle_project_ws_message(
+     author: str,
+     message: str,
+ ) -> None:
+-    normalized = message.strip()
+-    lowered = normalized.lower()
+-    if lowered == "sync_now":
+-        await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now")
+-        return
+-    if lowered == "ping":
+-        await websocket.send_json({"type": "pong", "project_id": project_id})
+-        return
+-
+-    try:
+-        data = json.loads(normalized)
+-    except json.JSONDecodeError:
+-        await websocket.send_json({"type": "error", "project_id": project_id, "detail": "Unsupported WebSocket message"})
+-        return
+-
+-    if not isinstance(data, dict):
+-        await websocket.send_json({"type": "error", "project_id": project_id, "detail": "WebSocket JSON message must be an object"})
+-        return
+-
+-    message_type = str(data.get("type") or "").strip()
+-    if message_type == "submit_model":
+-        await _handle_submit_model_message(websocket, project_id, client_id, author, data)
+-    elif message_type == "sync_now":
+-        await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now")
+-    elif message_type == "ping":
+-        await websocket.send_json({"type": "pong", "project_id": project_id})
+-    else:
+-        await websocket.send_json({"type": "error", "project_id": project_id, "detail": f"Unsupported WebSocket message type: {message_type}"})
++    # TODO(assignment-03): route raw websocket messages to sync_now / ping / submit_model / error branches.
++    raise NotImplementedError("assignment-03: _handle_project_ws_message is not implemented")
+ 
+ 
+ @app.websocket("/ws/projects/{project_id}")

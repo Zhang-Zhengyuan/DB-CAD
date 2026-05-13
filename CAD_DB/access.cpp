@@ -6166,10 +6166,25 @@ void acis_save_entity_list(const ENTITY_LIST& elist, const char* file_name, int 
     API_NOP_END;
 }
 
-void acis_get_noattrib_toplevel_active_entities(ENTITY_LIST& elist, HISTORY_STREAM* hs)
-{
-    if (hs == NULL)
-    {
+void acis_save_entity_list(FILE* file, const ENTITY_LIST& elist, int major_version, int minor_version, int text_mode) {
+    API_NOP_BEGIN;
+    api_save_version(major_version, minor_version);
+    FileInfo fileinfo;
+    fileinfo.set_units(1.0);
+    fileinfo.set_product_id("SimpleApi");
+    result = api_set_file_info((FileIdent | FileUnits), fileinfo);
+    result = api_set_int_option("sequence_save_files", 1);
+    if (!file) {
+        myerror("打开文件失败，文件句柄为空");
+    } else {
+        result = api_save_entity_list(file, text_mode, elist);
+        fflush(file);
+    }
+    API_NOP_END;
+}
+
+void acis_get_noattrib_toplevel_active_entities(ENTITY_LIST& elist, HISTORY_STREAM* hs) {
+    if (hs == NULL) {
         api_get_default_history(hs);
     }
     api_get_active_entities(hs, elist, 1); //参数1表示只获取顶级实体
@@ -6236,8 +6251,18 @@ void acis_restore_entity_list(ENTITY_LIST& elist, const char* file_name, int maj
     API_END;
 }
 
-std::string AccessTest::read_file_to_string(std::string filename)
-{
+void acis_restore_entity_list(ENTITY_LIST& elist, FILE* file, int major_version, int minor_version, int text_mode) {
+    API_BEGIN;
+    api_save_version(major_version, minor_version);
+    if (!file) {
+        myerror("打开文件失败，文件句柄为空");
+    } else {
+        result = api_restore_entity_list(file, text_mode, elist);
+    }
+    API_END;
+}
+
+std::string AccessTest::read_file_to_string(std::string filename) {
     std::ifstream t(filename);
     t.seekg(0, std::ios::end);
     size_t size = t.tellg();

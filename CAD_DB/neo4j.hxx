@@ -4,7 +4,7 @@
 
 class Neo4jPart {
 public:
-    mg_session* session = nullptr;
+    mutable mg_session* session = nullptr;
     std::string partname;
     Neo4jPart(const char* host, int port_bolt, const char* un, const char* pw, const std::string& pn);
     void execute_bolt(const char* statement, const mg_map* parameters) const;

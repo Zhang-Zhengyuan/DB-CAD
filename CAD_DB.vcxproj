@@ -17,12 +17,11 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{5E33354C-9FD6-4B95-B5CF-924478F548C6}</ProjectGuid>
+    <ProjectGuid>{265F0C86-EC7F-4A6E-8914-9D8E240E3779}</ProjectGuid>
     <Keyword>QtVS_v304</Keyword>
     <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">10.0.22621.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">10.0.22621.0</WindowsTargetPlatformVersion>
     <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
-    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
@@ -39,12 +38,12 @@
   </ImportGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
     <QtInstall>6.7.3</QtInstall>
-    <QtModules>core;gui;widgets;opengl;openglwidgets;network;websockets</QtModules>
+    <QtModules>core;gui;widgets</QtModules>
     <QtBuildConfig>debug</QtBuildConfig>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
-    <QtInstall>6.7.3</QtInstall>
-    <QtModules>core;gui;widgets;opengl;openglwidgets;network;websockets</QtModules>
+    <QtInstall>6.7.3_msvc2019_64</QtInstall>
+    <QtModules>core;gui;widgets</QtModules>
     <QtBuildConfig>release</QtBuildConfig>
   </PropertyGroup>
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
@@ -74,7 +73,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>../_deps</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SpaACISd.lib;ws2_32.lib;openssl\lib\libssl64MDd.lib;openssl\lib\libcrypto64MDd.lib;libpqxx-7.10.1\lib\pqxxd.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SpaACISd.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6OpenGLWidgetsd.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6OpenGLd.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6Widgetsd.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6Guid.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6Cored.lib;ws2_32.lib;openssl\lib\libssl64MDd.lib;openssl\lib\libcrypto64MDd.lib;libpqxx-7.10.1\lib\pqxxd.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -86,7 +85,7 @@
       <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SpaACIS.lib;ws2_32.lib;openssl\lib\libssl64MD.lib;openssl\lib\libcrypto64MD.lib;libpqxx-7.10.1\lib\pqxx.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SpaACIS.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6OpenGLWidgets.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6OpenGL.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6Widgets.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6Gui.lib;D:\Qt\6.7.3\msvc2019_64\lib\Qt6Core.lib;ws2_32.lib;openssl\lib\libssl64MD.lib;openssl\lib\libcrypto64MD.lib;libpqxx-7.10.1\lib\pqxx.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>../_deps</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
@@ -116,14 +115,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="acis.cpp" />
-    <ClCompile Include="backend_api_client.cpp" />
     <ClCompile Include="common.cpp" />
+    <ClCompile Include="glwidget.cpp" />
     <ClCompile Include="access.cpp" />
-    <ClCompile Include="DbcadAPI.cpp" />
     <ClCompile Include="gme_dump_object.cpp" />
     <ClCompile Include="gme_mesh.cpp" />
     <ClCompile Include="neo4j.cpp" />
-    <ClCompile Include="storage_bridge_service.cpp" />
     <ClCompile Include="window.cpp" />
     <QtRcc Include="mainwindow.qrc" />
     <QtMoc Include="mainwindow.h" />
@@ -138,51 +135,16 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="acis.hxx" />
-    <ClInclude Include="backend_api_client.h" />
     <ClInclude Include="common.hxx" />
     <ClInclude Include="access.hxx" />
-    <ClInclude Include="DbcadAPI.h" />
     <ClInclude Include="gme_dump_object.hxx" />
     <ClInclude Include="gme_mesh.hxx" />
+    <ClInclude Include="gme_user_data.hxx" />
     <ClInclude Include="neo4j.hxx" />
     <ClInclude Include="resource.h" />
-    <ClInclude Include="storage_bridge_service.h" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="images\DBCAD.rc" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="backend\.env.example" />
-    <None Include="backend\app\config.py" />
-    <None Include="backend\app\crud.py" />
-    <None Include="backend\app\database.py" />
-    <None Include="backend\app\main.py" />
-    <None Include="backend\app\models.py" />
-    <None Include="backend\app\neo4j_store.py" />
-    <None Include="backend\app\schemas.py" />
-    <None Include="backend\app\storage_bridge.py" />
-    <None Include="backend\app\sync.py" />
-    <None Include="backend\app\__init__.py" />
-    <None Include="backend\pyproject.toml" />
-    <None Include="backend\pytest.ini" />
-    <None Include="backend\README.md" />
-    <None Include="backend\tests\test_api.py" />
-    <None Include="backend\tests\test_integration_client_perspective_live.py" />
-    <None Include="DEPLOYMENT.md" />
-    <None Include="deploy\client\package_client.ps1" />
-    <None Include="deploy\server\check_backend.ps1" />
-    <None Include="deploy\server\deploy_backend_uv.ps1" />
-    <None Include="deploy\server\package_backend.ps1" />
-    <None Include="deploy\server\set_neo4j_password.ps1" />
-    <None Include="deploy\server\start_backend_oneclick.cmd" />
-    <None Include="deploy\server\start_backend_oneclick.ps1" />
-    <None Include="deploy\server\start_fullstack_oneclick.cmd" />
-    <None Include="deploy\server\start_fullstack_oneclick.ps1" />
-    <None Include="fastapi_connect_info.conf" />
-    <None Include="项目计划.md" />
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="backend\requirements.txt" />
+    <ResourceCompile Include="images\CAD_DB.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
