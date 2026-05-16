@@ -1,14 +1,12 @@
 # DBCAD 后端三份独立作业
 
-这三个作业都基于 `CAD_DB/backend` 目录，目标是让学生在尽量少改代码的前提下，学习：
-
 - 基本的业务逻辑与异常处理
 - WebSocket 连接状态管理
 - WebSocket 协议消息解析与错误返回
 
 每份作业都满足：
 
-- 只需要改 `1-3` 个函数
+- 只需要改 `3` 个函数
 - 只涉及 `1` 个 Python 文件
 - 可以独立评测
 - 不需要碰 Qt / C++ / Neo4j / Bridge
@@ -30,8 +28,7 @@ git apply assignments\patches\assignment-02-student.patch
 git apply assignments\patches\assignment-03-student.patch
 ```
 
-4. 把对应的说明文档发给学生。
-5. 学生完成后，运行对应测试：
+4. 学生完成后，运行对应测试：
 
 ```powershell
 cd backend
