@@ -65,6 +65,7 @@ public:
     void updateMeshData();
     void visiablility();
     void displayInfo();
+    void clearUI();
     void clear();
     std::vector<int> getSelectedEntities() { return selected_entities; }
     void setIsInputHandle(bool ih) { isInputHandle = ih; };

@@ -79,3 +79,10 @@ neo4j-plugins/
 *.sab
 *.step
 *.stp
+
+.gitignore
+*.vcxproj
+neo4j/
+postgres/
+reserved/
+*.conf

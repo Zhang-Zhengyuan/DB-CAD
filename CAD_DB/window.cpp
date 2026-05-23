@@ -249,20 +249,38 @@ void Window::closeEvent(QCloseEvent* event) {
 extern DELTA_STATE* lastsave_ds;
 extern std::unordered_map<void*, int64_t> ptr2nodeid;
 
-void Window::clear() {
+void Window::clearUI() {
     latest_index = 0;
     entity_tree.clear();
     input_handles.clear();
     selected_entities.clear();
     ptrCurrentTreeItem = nullptr;
-
-    api_delete_history();
-    HISTORY_STREAM* new_hs = new HISTORY_STREAM();
-    set_default_stream(new_hs);
-
     lastsave_ds = nullptr;
     ptr2nodeid.clear();
-
+    updateTreeWidget();
+    glWidget->clear();   // 假设 glWidget->clear() 只清理显示，不删几何
+}
+void Window::clear() {
+    // 删除所有实体
+    for (auto &e : entity_tree) {
+        if (e.ptrEntity) api_del_entity(e.ptrEntity);
+    }
+    // 清空历史流（保留默认流）
+    HISTORY_STREAM *hs = get_default_stream(false);
+    if (hs) {
+        delete_all_delta_states(hs, true);   // 删除所有 delta states
+        hs->clear();                         // 清空流内容
+        DELTA_STATE *root;
+        api_ensure_empty_root_state(hs, root);
+    }
+    // 清空应用数据
+    latest_index = 0;
+    entity_tree.clear();
+    input_handles.clear();
+    selected_entities.clear();
+    ptrCurrentTreeItem = nullptr;
+    lastsave_ds = nullptr;
+    ptr2nodeid.clear();
     updateTreeWidget();
     glWidget->clear();
 }
@@ -908,6 +926,7 @@ ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, i
 }
 
 void Window::updateMeshData() {
+    api_logging(FALSE);
     std::vector<GmeMesh::DisplayData*>& md = glWidget->getMeshData();
     md.clear();
     for (auto& e : entity_tree) {
@@ -927,6 +946,8 @@ void Window::updateMeshData() {
                 md.push_back(e.ptrDisplayData);
         }
     }
+    api_logging(TRUE);
+
     glWidget->updateMeshData();
 }
 
