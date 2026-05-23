@@ -249,6 +249,17 @@ void Window::closeEvent(QCloseEvent* event) {
 extern DELTA_STATE* lastsave_ds;
 extern std::unordered_map<void*, int64_t> ptr2nodeid;
 
+void Window::clearUI() {
+    latest_index = 0;
+    entity_tree.clear();
+    input_handles.clear();
+    selected_entities.clear();
+    ptrCurrentTreeItem = nullptr;
+    lastsave_ds = nullptr;
+    ptr2nodeid.clear();
+    updateTreeWidget();
+    glWidget->clear();   // 假设 glWidget->clear() 只清理显示，不删几何
+}
 void Window::clear() {
     // 删除所有实体
     for (auto &e : entity_tree) {

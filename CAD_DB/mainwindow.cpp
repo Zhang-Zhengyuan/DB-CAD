@@ -1333,12 +1333,11 @@ void MainWindow::open() {
 }
 
 void MainWindow::buildTreeFromHistroy(HISTORY_STREAM* hs) {
-    if (hs == nullptr) {
-        hs = get_default_stream();
-    }
-    
+    if (!hs) hs = get_default_stream();
+
     set_logging(false);
-    curWindow->clear();
+    curWindow->clearUI();
+
     DELTA_STATE *this_ds = hs->get_root_ds();
     while (this_ds) {
         GME_DELTA_STATE_user_data* delta_state_user_data = (GME_DELTA_STATE_user_data*)(this_ds->get_user_data());
@@ -1359,22 +1358,18 @@ void MainWindow::buildTreeFromHistroy(HISTORY_STREAM* hs) {
     curWindow->updateTreeWidget();
     curWindow->updateMeshData();
 
-    if (hs->current_ds) {
-        delete hs->current_ds;
-        hs->current_ds = nullptr;
-    }
+    //if (hs->current_ds) {
+        //delete hs->current_ds;
+        //hs->current_ds = nullptr;
+    //}
     set_logging(true);
 }
 
 void MainWindow::undo() {
-    HISTORY_STREAM* hs = get_default_stream();
+    HISTORY_STREAM *hs = get_default_stream();
     if (!hs) return;
-    abort_bb(hs);
+    // abortbb(hs);
 
-    
-
-    
-    
     int request_n = -1;
     int actual_n = 0;
 
@@ -1391,6 +1386,7 @@ void MainWindow::undo() {
 
 void MainWindow::redo() {
     HISTORY_STREAM* hs = get_default_stream();
+    if (!hs) return;
     int request_n = 1;
     int actual_n = 0;
 
@@ -1400,7 +1396,7 @@ void MainWindow::redo() {
     if (actual_n != request_n) {
         return;
     }
-
+    
     buildTreeFromHistroy(hs);
     return;
 }
