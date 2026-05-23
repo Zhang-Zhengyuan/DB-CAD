@@ -59,6 +59,8 @@ public:
     void changeEntity(ENTITY* ptrEntity, QVector3D v);
     void changeEntity(ENTITY* ptrEntity, SPAtransf t);
     void setCurrentEntity(ENTITY* ptrEntity) { glWidget->setPickedEntity(ptrEntity); }
+    GLWidget::ViewState getViewState() const { return glWidget->viewState(); }
+    void setViewState(const GLWidget::ViewState& state) { glWidget->setViewState(state); }
     ENTITY_TREE_ITEM* getEntityItemByIndex(int index);
     void updateMeshData();
     void visiablility();

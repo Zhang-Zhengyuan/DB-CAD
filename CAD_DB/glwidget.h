@@ -19,10 +19,19 @@ class GLWidget : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
 
 public:
+    struct ViewState {
+        int xRot = 0;
+        int yRot = 0;
+        int zRot = 0;
+        double scale = 1.0;
+    };
+
     GLWidget(Window* p = nullptr, int w = 800, int h = 600);
     ~GLWidget();
 
     void clear();
+    ViewState viewState() const;
+    void setViewState(const ViewState& state);
 
     std::vector<GmeMesh::DisplayData*>& getMeshData() { return display_data; }
     void updateMeshData();
@@ -74,6 +83,7 @@ private:
     void initializeEdge();
     void initializeShadersFace();
     void initializeShadersEdge();
+    void uploadMeshDataToGpu();
     void getSelectedEntites();
     bool pointInTriangle(QVector3D p, QVector3D tv1, QVector3D tv2, QVector3D tv3);
     bool pointInEdge(QVector3D p, QVector3D ev1, QVector3D ev2);
@@ -107,6 +117,7 @@ private:
 
     std::vector<GmeMesh::DisplayData*> display_data;
     double radius = 0.0;
+    bool pendingGpuUpload = false;
 
     QOpenGLVertexArrayObject vao_face;
     QOpenGLBuffer vbo_face;

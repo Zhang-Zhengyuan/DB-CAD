@@ -19,7 +19,15 @@ class ClientConnection:
 class ProjectSyncManager:
     def __init__(self) -> None:
         self._connections: dict[str, dict[str, ClientConnection]] = defaultdict(dict)
+        self._write_locks: dict[str, asyncio.Lock] = {}
         self._lock = asyncio.Lock()
+
+    def write_lock(self, project_id: str) -> asyncio.Lock:
+        lock = self._write_locks.get(project_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._write_locks[project_id] = lock
+        return lock
 
     async def connect(self, project_id: str, websocket: WebSocket, client_id: str, author: str) -> None:
         await websocket.accept()

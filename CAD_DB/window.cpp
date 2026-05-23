@@ -910,6 +910,7 @@ ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, i
     }
     this->updateTreeWidget();
     this->updateMeshData();
+    mainWindow->notifyModelChangedForCollaboration();
     return &entity_tree[eti.index];
 }
 
@@ -959,6 +960,7 @@ void Window::addHandle(ENTITY* ptrEntity, double* p) {
             if (eti.ptrDisplayData) delete eti.ptrDisplayData;
             eti.ptrDisplayData = nullptr;
             if (update) this->updateMeshData();
+            mainWindow->notifyModelChangedForCollaboration();
             return;
         }
     }
@@ -1009,6 +1011,7 @@ void Window::changeHandle(ENTITY* ptrEntity, SPAposition p, QVector3D v) {
             eti.ptrDisplayData = nullptr;
             updateEntites(eti.index_support);
             this->updateMeshData();
+            mainWindow->notifyModelChangedForCollaboration();
             return;
         }
     }
@@ -1046,6 +1049,7 @@ void Window::changeEntity(ENTITY* ptrEntity, SPAtransf t) {
             this->updateEntites(eti.index_support);
         }
     this->updateMeshData();
+    mainWindow->notifyModelChangedForCollaboration();
 }
 
 void Window::updateEntites(std::vector<int>& index) {

@@ -1,10 +1,13 @@
 import logging
+import json
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from . import crud, schemas
 from .config import settings
@@ -114,23 +117,60 @@ def get_project_by_name(
     return schemas.ProjectRead.model_validate(entity)
 
 
+def _model_saved_event(
+    project_id: str,
+    version: Any,
+    *,
+    trigger: str,
+    request_id: str | None = None,
+    source_client_id: str | None = None,
+) -> dict[str, Any]:
+    event = {
+        "type": "model_saved",
+        "project_id": project_id,
+        "version": version.version,
+        "author": version.author,
+        "created_at": version.created_at.isoformat(),
+        "trigger": trigger,
+        "content": version.content,
+    }
+    if request_id:
+        event["request_id"] = request_id
+    if source_client_id:
+        event["source_client_id"] = source_client_id
+    return event
+
+
+async def _create_model_version_serialized(
+    project_id: str,
+    payload: schemas.ModelVersionCreate,
+    *,
+    trigger: str,
+    request_id: str | None = None,
+    source_client_id: str | None = None,
+):
+    async with sync_manager.write_lock(project_id):
+        version = crud.create_model_version(project_id, payload)
+        await sync_manager.broadcast(
+            project_id,
+            _model_saved_event(
+                project_id,
+                version,
+                trigger=trigger,
+                request_id=request_id,
+                source_client_id=source_client_id,
+            ),
+        )
+    return version
+
+
 @app.post("/projects/{project_id}/models", response_model=schemas.SaveResult, status_code=201)
 async def save_model(
     project_id: str,
     payload: schemas.ModelVersionCreate,
     _: None = Depends(verify_api_password),
 ) -> schemas.SaveResult:
-    version = crud.create_model_version(project_id, payload)
-    await sync_manager.broadcast(
-        project_id,
-        {
-            "type": "model_saved",
-            "project_id": project_id,
-            "version": version.version,
-            "author": version.author,
-            "created_at": version.created_at.isoformat(),
-        },
-    )
+    version = await _create_model_version_serialized(project_id, payload, trigger="http_save")
     return schemas.SaveResult(version=version.version, created_at=version.created_at)
 
 
@@ -142,16 +182,7 @@ async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, 
             return
         raise
 
-    await websocket.send_json(
-        {
-            "type": "model_saved",
-            "project_id": project_id,
-            "version": latest.version,
-            "author": latest.author,
-            "created_at": latest.created_at.isoformat(),
-            "trigger": trigger,
-        }
-    )
+    await websocket.send_json(_model_saved_event(project_id, latest, trigger=trigger))
 
 
 @app.get("/projects/{project_id}/models/latest", response_model=schemas.ModelVersionRead)
@@ -182,6 +213,134 @@ def get_versions(
 ) -> list[schemas.ModelVersionRead]:
     versions = crud.list_versions(project_id, limit=limit, offset=offset)
     return [crud.deserialize_version(item) for item in versions]
+
+
+async def _send_submit_rejected(
+    websocket: WebSocket,
+    project_id: str,
+    *,
+    request_id: str | None,
+    reason: str,
+    detail: str,
+) -> None:
+    event: dict[str, Any] = {
+        "type": "submit_rejected",
+        "project_id": project_id,
+        "reason": reason,
+        "detail": detail,
+    }
+    if request_id:
+        event["request_id"] = request_id
+
+    try:
+        latest = crud.get_latest_version_or_404(project_id)
+    except HTTPException:
+        latest = None
+
+    if latest is not None:
+        event.update(
+            {
+                "latest_version": latest.version,
+                "author": latest.author,
+                "created_at": latest.created_at.isoformat(),
+                "content": latest.content,
+            }
+        )
+
+    await websocket.send_json(event)
+
+
+async def _handle_submit_model_message(
+    websocket: WebSocket,
+    project_id: str,
+    client_id: str,
+    author: str,
+    data: dict[str, Any],
+) -> None:
+    request_id = str(data.get("request_id") or uuid4().hex)
+    message_project_id = str(data.get("project_id") or project_id)
+    if message_project_id != project_id:
+        await _send_submit_rejected(
+            websocket,
+            project_id,
+            request_id=request_id,
+            reason="invalid_project",
+            detail="submit_model project_id does not match the WebSocket project",
+        )
+        return
+
+    payload_author = str(data.get("author") or author).strip() or author
+    payload = {
+        "author": payload_author,
+        "content": data.get("content"),
+        "base_version": data.get("base_version"),
+    }
+    try:
+        model_payload = schemas.ModelVersionCreate.model_validate(payload)
+    except ValidationError as ex:
+        await _send_submit_rejected(
+            websocket,
+            project_id,
+            request_id=request_id,
+            reason="invalid_payload",
+            detail=str(ex),
+        )
+        return
+
+    trigger = str(data.get("reason") or "submit_model").strip() or "submit_model"
+    try:
+        await _create_model_version_serialized(
+            project_id,
+            model_payload,
+            trigger=trigger,
+            request_id=request_id,
+            source_client_id=client_id,
+        )
+    except HTTPException as ex:
+        await _send_submit_rejected(
+            websocket,
+            project_id,
+            request_id=request_id,
+            reason="conflict" if ex.status_code == status.HTTP_409_CONFLICT else "save_failed",
+            detail=str(ex.detail),
+        )
+
+
+async def _handle_project_ws_message(
+    websocket: WebSocket,
+    project_id: str,
+    client_id: str,
+    author: str,
+    message: str,
+) -> None:
+    normalized = message.strip()
+    lowered = normalized.lower()
+    if lowered == "sync_now":
+        await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now")
+        return
+    if lowered == "ping":
+        await websocket.send_json({"type": "pong", "project_id": project_id})
+        return
+
+    try:
+        data = json.loads(normalized)
+    except json.JSONDecodeError:
+        await websocket.send_json({"type": "error", "project_id": project_id, "detail": "Unsupported WebSocket message"})
+        return
+
+    if not isinstance(data, dict):
+        await websocket.send_json({"type": "error", "project_id": project_id, "detail": "WebSocket JSON message must be an object"})
+        return
+
+    message_type = str(data.get("type") or "").strip()
+    if message_type == "submit_model":
+        await _handle_submit_model_message(websocket, project_id, client_id, author, data)
+    elif message_type == "sync_now":
+        await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now")
+    elif message_type == "ping":
+        await websocket.send_json({"type": "pong", "project_id": project_id})
+    else:
+        await websocket.send_json({"type": "error", "project_id": project_id, "detail": f"Unsupported WebSocket message type: {message_type}"})
 
 
 @app.websocket("/ws/projects/{project_id}")
@@ -218,11 +377,7 @@ async def ws_project_sync(websocket: WebSocket, project_id: str) -> None:
         await _send_latest_model_saved_event(project_id, websocket, trigger="snapshot")
         while True:
             message = await websocket.receive_text()
-            normalized = message.strip().lower()
-            if normalized == "sync_now":
-                await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now")
-            elif normalized == "ping":
-                await websocket.send_json({"type": "pong", "project_id": project_id})
+            await _handle_project_ws_message(websocket, project_id, client_id, author, message)
     except WebSocketDisconnect:
         disconnected = await sync_manager.disconnect(project_id, websocket)
         if disconnected is not None:

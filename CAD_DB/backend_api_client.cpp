@@ -88,8 +88,13 @@ QString BackendApiClient::lastError() const {
     return errorMessage;
 }
 
+int BackendApiClient::lastStatusCode() const {
+    return lastHttpStatusCode;
+}
+
 BackendApiClient::HttpResult BackendApiClient::sendJsonRequest(const QString& method, const QString& path, const QByteArray& payload) {
     HttpResult result;
+    lastHttpStatusCode = -1;
 
     if (baseUrl.isEmpty()) {
         result.error = QString::fromUtf8("FastAPI地址未配置，请先设置fastapi_connect_info.conf");
@@ -134,6 +139,7 @@ BackendApiClient::HttpResult BackendApiClient::sendJsonRequest(const QString& me
     timer.stop();
 
     result.statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    lastHttpStatusCode = result.statusCode;
     result.body = reply->readAll();
 
     if (reply->error() != QNetworkReply::NoError) {

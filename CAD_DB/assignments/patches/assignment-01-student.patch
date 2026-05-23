@@ -1,0 +1,39 @@
+diff --git a/backend/app/crud.py b/backend/app/crud.py
+--- a/backend/app/crud.py
++++ b/backend/app/crud.py
+@@ -19,6 +19,4 @@
+ def create_project(payload: schemas.ProjectCreate):
+-    existing = storage_bridge.get_project_by_name_or_none(payload.name)
+-    if existing is not None:
+-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Project name already exists")
+-    return storage_bridge.create_project(payload.name)
++    # TODO(assignment-01): implement duplicate-name check and project creation.
++    raise NotImplementedError("assignment-01: create_project is not implemented")
+ 
+@@ -40,9 +38,4 @@
+ def create_model_version(project_id: str, payload: schemas.ModelVersionCreate):
+-    latest = storage_bridge.get_latest_version_or_none(project_id)
+-    if latest is not None and payload.base_version is None:
+-        raise HTTPException(
+-            status_code=status.HTTP_409_CONFLICT,
+-            detail=f"base_version is required: latest version is {latest.version}",
+-        )
+-    return storage_bridge.create_model_version(project_id, payload.author, payload.content, payload.base_version)
++    # TODO(assignment-01): enforce base_version rules before saving.
++    raise NotImplementedError("assignment-01: create_model_version is not implemented")
+ 
+@@ -71,12 +64,3 @@
+ def deserialize_version(entity) -> schemas.ModelVersionRead:
+-    if isinstance(entity, VersionRecord):
+-        return schemas.ModelVersionRead(
+-            id=entity.id,
+-            project_id=entity.project_id,
+-            version=entity.version,
+-            author=entity.author,
+-            content=entity.content,
+-            created_at=entity.created_at,
+-        )
+-
+-    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invalid version entity type")
++    # TODO(assignment-01): convert VersionRecord -> ModelVersionRead, reject unknown types.
++    raise NotImplementedError("assignment-01: deserialize_version is not implemented")
