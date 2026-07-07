@@ -1,0 +1,71 @@
+diff --git a/backend/app/sync.py b/backend/app/sync.py
+--- a/backend/app/sync.py
++++ b/backend/app/sync.py
+@@ -42,61 +42,14 @@ class ProjectSyncManager:
+     async def disconnect(self, project_id: str, websocket: WebSocket) -> dict[str, Any] | None:
+-        async with self._lock:
+-            clients = self._connections.get(project_id)
+-            if not clients:
+-                return None
+-
+-            disconnected_client_id: str | None = None
+-            disconnected_author: str | None = None
+-            for client_id, connection in clients.items():
+-                if connection.websocket is websocket:
+-                    disconnected_client_id = client_id
+-                    disconnected_author = connection.author
+-                    break
+-
+-            if disconnected_client_id is None:
+-                return None
+-
+-            clients.pop(disconnected_client_id, None)
+-            if not clients:
+-                self._connections.pop(project_id, None)
+-
+-            return {
+-                "client_id": disconnected_client_id,
+-                "author": disconnected_author or "unknown",
+-            }
++        # TODO(assignment-02): remove a websocket from the project member table.
++        raise NotImplementedError("assignment-02: disconnect is not implemented")
+ 
+     async def list_members(self, project_id: str) -> list[dict[str, Any]]:
+-        async with self._lock:
+-            clients = list(self._connections.get(project_id, {}).values())
+-
+-        return [
+-            {
+-                "client_id": client.client_id,
+-                "author": client.author,
+-                "connected_at": client.connected_at.isoformat(),
+-            }
+-            for client in clients
+-        ]
++        # TODO(assignment-02): return a serializable member snapshot.
++        raise NotImplementedError("assignment-02: list_members is not implemented")
+ 
+     async def broadcast(self, project_id: str, event: dict[str, Any], exclude_client_id: str | None = None) -> None:
+-        message = json.dumps(event, ensure_ascii=False)
+-        async with self._lock:
+-            clients = list(self._connections.get(project_id, {}).values())
+-
+-        if not clients:
+-            return
+-
+-        disconnected: list[WebSocket] = []
+-        for client in clients:
+-            if exclude_client_id and client.client_id == exclude_client_id:
+-                continue
+-            try:
+-                await client.websocket.send_text(message)
+-            except Exception:
+-                disconnected.append(client.websocket)
+-
+-        for socket in disconnected:
+-            await self.disconnect(project_id, socket)
++        # TODO(assignment-02): broadcast JSON text to active sockets and clean failed ones.
++        raise NotImplementedError("assignment-02: broadcast is not implemented")
+ 
+ 
+ sync_manager = ProjectSyncManager()
