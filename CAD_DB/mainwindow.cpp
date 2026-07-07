@@ -238,14 +238,25 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
     connect(fastapiPublishTimer, &QTimer::timeout, this, &MainWindow::publishFastAPIAutoSnapshot);
 
     // PostgreSQL service — initialized once, reuses connection across all operations.
+    // Note: PgService::loaded is intentionally NOT connected here.
+    // `pgLoadFromDatabaseToCurrent()` uses a SingleShotConnection lambda to route the
+    // SAT text back into the calling flow; connecting a second handler here would
+    // double-render. `loadFailed` IS connected permanently as a safety net.
     m_pgService = std::make_unique<PgService>();
     connect(m_pgService.get(), &PgService::initFailed, this, [](const QString& err) {
         QMessageBox::warning(nullptr, tr("PostgreSQL 初始化失败"), err);
     });
     connect(m_pgService.get(), &PgService::saved, this, &MainWindow::onPgSaved);
+    connect(m_pgService.get(), &PgService::saveFailed, this, &MainWindow::onPgSaveFailed);
     connect(m_pgService.get(), &PgService::loadFailed, this, &MainWindow::onPgLoadFailed);
     connect(m_pgService.get(), &PgService::listed, this, &MainWindow::onPgListed);
     connect(m_pgService.get(), &PgService::listFailed, this, &MainWindow::onPgListFailed);
+    connect(m_pgService.get(), &PgService::counted, this, &MainWindow::onPgCounted);
+    connect(m_pgService.get(), &PgService::countFailed, this, &MainWindow::onPgCountFailed);
+    connect(m_pgService.get(), &PgService::deleted, this, &MainWindow::onPgDeleted);
+    connect(m_pgService.get(), &PgService::deleteFailed, this, &MainWindow::onPgDeleteFailed);
+    // Initial menu state is refreshed after createActions() runs and the menu
+    // actions exist; see updatePgMenuState() invocation at end of createActions().
 
     if (0 == initialize_acis()) {
         QMessageBox::warning(this, tr("异常"), tr("ACIS初始化失败"));
@@ -638,21 +649,26 @@ void MainWindow::setPGConnectInfo() {
         QMessageBox::warning(this, tr("DBCAD"), err);
         return;
     }
-    // Re-init PgService with new credentials.
     m_pgService = std::make_unique<PgService>();
     connect(m_pgService.get(), &PgService::initFailed, this, [](const QString& err) {
         QMessageBox::warning(nullptr, tr("PostgreSQL 初始化失败"), err);
     });
     connect(m_pgService.get(), &PgService::saved, this, &MainWindow::onPgSaved);
+    connect(m_pgService.get(), &PgService::saveFailed, this, &MainWindow::onPgSaveFailed);
     connect(m_pgService.get(), &PgService::loadFailed, this, &MainWindow::onPgLoadFailed);
     connect(m_pgService.get(), &PgService::listed, this, &MainWindow::onPgListed);
     connect(m_pgService.get(), &PgService::listFailed, this, &MainWindow::onPgListFailed);
+    connect(m_pgService.get(), &PgService::counted, this, &MainWindow::onPgCounted);
+    connect(m_pgService.get(), &PgService::countFailed, this, &MainWindow::onPgCountFailed);
+    connect(m_pgService.get(), &PgService::deleted, this, &MainWindow::onPgDeleted);
+    connect(m_pgService.get(), &PgService::deleteFailed, this, &MainWindow::onPgDeleteFailed);
 
     if (m_pgService->isInitialized()) {
         statusBar()->showMessage(tr("PostgreSQL 连接信息已更新"), 3000);
     } else {
         statusBar()->showMessage(tr("PostgreSQL 配置已保存，但初始化失败"), 4000);
     }
+    updatePgMenuState();
 }
 
 void MainWindow::pgSaveCurrentToDatabase() {
@@ -817,10 +833,36 @@ void MainWindow::onPgSaved(const QString& name, qint64 sizeBytes, qint64) {
     statusBar()->showMessage(tr("已保存到 PostgreSQL: %1").arg(name), 3000);
 }
 
+void MainWindow::onPgSaveFailed(const QString& error) {
+    QMessageBox::warning(this, tr("DBCAD"),
+        tr("保存到 PostgreSQL 失败:\n%1").arg(error));
+    statusBar()->showMessage(tr("保存到 PostgreSQL 失败"), 4000);
+}
+
 void MainWindow::onPgLoadFailed(const QString& error) {
     QMessageBox::warning(this, tr("DBCAD"),
         tr("从 PostgreSQL 加载失败:\n%1").arg(error));
     statusBar()->showMessage(tr("从 PostgreSQL 加载失败"), 4000);
+}
+
+void MainWindow::onPgCounted(qint64 count) {
+    statusBar()->showMessage(tr("PostgreSQL 已存零件数: %1").arg(count), 3000);
+}
+
+void MainWindow::onPgCountFailed(const QString& error) {
+    QMessageBox::warning(this, tr("DBCAD"),
+        tr("统计 PostgreSQL 零件数失败:\n%1").arg(error));
+    statusBar()->showMessage(tr("统计 PostgreSQL 零件数失败"), 4000);
+}
+
+void MainWindow::onPgDeleted(const QString& name) {
+    statusBar()->showMessage(tr("已从 PostgreSQL 删除: %1").arg(name), 3000);
+}
+
+void MainWindow::onPgDeleteFailed(const QString& error) {
+    QMessageBox::warning(this, tr("DBCAD"),
+        tr("从 PostgreSQL 删除失败:\n%1").arg(error));
+    statusBar()->showMessage(tr("从 PostgreSQL 删除失败"), 4000);
 }
 
 void MainWindow::onPgListed(const QVector<QString>& names,
@@ -845,6 +887,46 @@ void MainWindow::onPgListed(const QVector<QString>& names,
 void MainWindow::onPgListFailed(const QString& error) {
     QMessageBox::warning(this, tr("DBCAD"),
         tr("列出 PostgreSQL 零件失败:\n%1").arg(error));
+}
+
+void MainWindow::updatePgMenuState() {
+    const bool ready = (m_pgService != nullptr && m_pgService->isInitialized());
+    if (pgSaveAct != nullptr)   pgSaveAct->setEnabled(ready);
+    if (pgLoadAct != nullptr)   pgLoadAct->setEnabled(ready);
+    if (pgListAct != nullptr)   pgListAct->setEnabled(ready);
+    if (pgCountAct != nullptr)  pgCountAct->setEnabled(ready);
+    if (pgDeleteAct != nullptr) pgDeleteAct->setEnabled(ready);
+}
+
+void MainWindow::pgCountPartsInDatabase() {
+    if (m_pgService == nullptr || !m_pgService->isInitialized()) {
+        QMessageBox::warning(this, tr("DBCAD"), tr("PostgreSQL 未初始化，请检查连接配置。"));
+        return;
+    }
+    m_pgService->countParts();
+}
+
+void MainWindow::pgDeleteByNameFromDatabase() {
+    if (m_pgService == nullptr || !m_pgService->isInitialized()) {
+        QMessageBox::warning(this, tr("DBCAD"), tr("PostgreSQL 未初始化，请检查连接配置。"));
+        return;
+    }
+
+    bool ok = false;
+    const QString name = QInputDialog::getText(this,
+        tr("从 PostgreSQL 删除"),
+        tr("请输入要删除的零件名:"),
+        QLineEdit::Normal, QString(), &ok,
+        this->windowFlags() | Qt::MSWindowsFixedSizeDialogHint);
+    if (!ok || name.trimmed().isEmpty()) return;
+
+    if (QMessageBox::question(this, tr("从 PostgreSQL 删除"),
+            tr("确定删除 PostgreSQL 中的零件 “%1” 吗？此操作不可撤销。").arg(name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+
+    m_pgService->deleteByName(name);
 }
 
 bool MainWindow::restoreFastAPIModelFromSat(const QString& satContent) {
@@ -2125,20 +2207,26 @@ void MainWindow::createActions() {
     settingsMenu->addAction(toggleBridgeModeAct);
 
     // ----------------------------------------------------------------
-    // PostgreSQL 直存 SAT 文本（实验性 demo 入口）。
-    // 不会改动 storage_bridge_service 或 saveFile() —— 走独立 QProcess 调
-    // x64\Demo\pg_demo.exe。环境变量从 pg_connect_info.conf 与 OS env 读取。
+    // PostgreSQL 直存 SAT 文本（m_pgService 入口）。
+    // 不会改动 storage_bridge_service 或 saveFile() —— 走 Qt signal/slot 调
+    // m_pgService (PgService wrapping PgStore/libpq)。连接配置在 pg_connect_info.conf
+    // (host/port/user/password/dbname 五行)，运行时可通过"设置 PostgreSQL 连接信息"覆盖。
     // ----------------------------------------------------------------
     QMenu* pgMenu = menuBar()->addMenu(tr("PostgreSQL(&P)"));
-    QAction* pgSaveAct = pgMenu->addAction(tr("保存当前模型到 PostgreSQL"), this, &MainWindow::pgSaveCurrentToDatabase);
-    pgSaveAct->setStatusTip(tr("把当前窗口的 ACIS 实体导出为临时 SAT，调 pg_demo.exe save <name> <sat> 写入 dbcad_pg_demo 表。"));
-    QAction* pgLoadAct = pgMenu->addAction(tr("从 PostgreSQL 加载到当前窗口..."), this, &MainWindow::pgLoadFromDatabaseToCurrent);
-    pgLoadAct->setStatusTip(tr("弹框输入零件名，调 pg_demo.exe load <name> <sat> 拉到本地，再用 api_restore_entity_list 重建实体。"));
-    QAction* pgListAct = pgMenu->addAction(tr("列出已存零件"), this, &MainWindow::pgListPartsInDatabase);
-    pgListAct->setStatusTip(tr("调 pg_demo.exe list，在弹窗里看 id/name/bytes/updated_at。"));
+    pgSaveAct = pgMenu->addAction(tr("保存当前模型到 PostgreSQL"), this, &MainWindow::pgSaveCurrentToDatabase);
+    pgSaveAct->setStatusTip(tr("将当前 ACIS 实体导出为 SAT，调 PgService::saveSat 写入 dbcad_pg_demo 表。"));
+    pgLoadAct = pgMenu->addAction(tr("从 PostgreSQL 加载到当前窗口..."), this, &MainWindow::pgLoadFromDatabaseToCurrent);
+    pgLoadAct->setStatusTip(tr("弹框输入零件名，调 PgService::loadSat 拉到本地，再用 api_restore_entity_list 重建实体。"));
+    pgListAct = pgMenu->addAction(tr("列出已存零件"), this, &MainWindow::pgListPartsInDatabase);
+    pgListAct->setStatusTip(tr("调 PgService::listParts，在弹窗里看 id/name/bytes/updated_at。"));
+    pgCountAct = pgMenu->addAction(tr("统计已存零件数"), this, &MainWindow::pgCountPartsInDatabase);
+    pgCountAct->setStatusTip(tr("调 PgService::countParts，结果通过 statusBar 显示。"));
+    pgDeleteAct = pgMenu->addAction(tr("删除指定零件..."), this, &MainWindow::pgDeleteByNameFromDatabase);
+    pgDeleteAct->setStatusTip(tr("弹框输入零件名，二次确认后调 PgService::deleteByName 删除该零件（不可撤销）。"));
     pgMenu->addSeparator();
     QAction* setPGConnectInfoAct = pgMenu->addAction(tr("设置 PostgreSQL 连接信息"), this, &MainWindow::setPGConnectInfo);
-    setPGConnectInfoAct->setStatusTip(tr("读取/写入 pg_connect_info.conf（前 5 行：host/port/user/password/dbname），并同步到当前进程环境变量。"));
+    setPGConnectInfoAct->setStatusTip(tr("读取/写入 pg_connect_info.conf（前 5 行：host/port/user/password/dbname）；保存后会自动重建 PgService 并重连信号。"));
+    updatePgMenuState();
 
     QMenu* collabMenu = menuBar()->addMenu(tr("协作(&C)"));
     QAction* collabSyncNowAct = collabMenu->addAction(tr("立即同步最新版本"), this, &MainWindow::requestFastAPISyncNow);

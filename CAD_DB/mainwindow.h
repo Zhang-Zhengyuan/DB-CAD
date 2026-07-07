@@ -125,14 +125,21 @@ private slots:
     void pgSaveCurrentToDatabase();
     void pgLoadFromDatabaseToCurrent();
     void pgListPartsInDatabase();
+    void pgCountPartsInDatabase();
+    void pgDeleteByNameFromDatabase();
     void setPGConnectInfo();
     void onPgSaved(const QString& name, qint64 sizeBytes, qint64 id);
+    void onPgSaveFailed(const QString& error);
     void onPgLoadFailed(const QString& error);
     void onPgListed(const QVector<QString>& names,
                     const QVector<qint64>& ids,
                     const QVector<qint64>& sizes,
                     const QVector<QString>& updatedAts);
     void onPgListFailed(const QString& error);
+    void onPgCounted(qint64 count);
+    void onPgCountFailed(const QString& error);
+    void onPgDeleted(const QString& name);
+    void onPgDeleteFailed(const QString& error);
     void visiablility();
     void displayInfo();
 #ifndef QT_NO_SESSIONMANAGER
@@ -213,4 +220,12 @@ private:
     QPushButton* collabSyncNowButton = nullptr;
     QPushButton* collabReconnectButton = nullptr;
     std::unique_ptr<PgService> m_pgService;
+    // PG menu actions — kept as members so they can be enabled/disabled
+    // based on m_pgService->isInitialized().
+    QAction* pgSaveAct = nullptr;
+    QAction* pgLoadAct = nullptr;
+    QAction* pgListAct = nullptr;
+    QAction* pgCountAct = nullptr;
+    QAction* pgDeleteAct = nullptr;
+    void updatePgMenuState();
 };
