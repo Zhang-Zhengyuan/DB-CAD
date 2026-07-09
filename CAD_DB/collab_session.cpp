@@ -31,43 +31,58 @@ void CollabSession::bindLegacyFields(
     fastapiLocalDirtyDuringSubmit_ref_      = &fastapiLocalDirtyDuringSubmit;
     fastapiApplyingRemoteSnapshot_ref_      = &fastapiApplyingRemoteSnapshot;
     fastapiPublishingSnapshot_ref_          = &fastapiPublishingSnapshot;
+
+    snapshot_.modelVersion           = fastapi_model_version;
+    snapshot_.pendingRemoteVersion   = fastapi_pending_remote_version;
+    snapshot_.lastPublishReason     = fastapiLastPublishReason;
+    snapshot_.submitRequestId       = fastapiPendingSubmitRequestId;
+    snapshot_.submitInFlight        = fastapiSubmitInFlight;
+    snapshot_.localDirtyDuringSubmit= fastapiLocalDirtyDuringSubmit;
+    snapshot_.applyingRemoteSnapshot= fastapiApplyingRemoteSnapshot;
+    snapshot_.publishingSnapshot    = fastapiPublishingSnapshot;
+
+    emitDump(Event::Bound, true);
 }
 
 const char* CollabSession::stateName() const {
-    switch (state_) {
+    return stateNameFor(state_);
+}
+
+const char* CollabSession::stateNameFor(State s) {
+    switch (s) {
         case State::Disconnected:                   return "Disconnected";
         case State::Connected_NoProject:            return "Connected_NoProject";
         case State::Connected_Idle:                 return "Connected_Idle";
         case State::Connected_LocalDirty:           return "Connected_LocalDirty";
-        case State::Connected_SubmitInFlight:       return "Connected_SubmitInFlight";
-        case State::Connected_SubmitInFlight_Dirty: return "Connected_SubmitInFlight_Dirty";
-        case State::Connected_RemotePending:        return "Connected_RemotePending";
+        case State::Connected_SubmitInFlight:        return "Connected_SubmitInFlight";
+        case State::Connected_SubmitInFlight_Dirty:  return "Connected_SubmitInFlight_Dirty";
+        case State::Connected_RemotePending:         return "Connected_RemotePending";
         case State::Connected_RemotePending_Dirty:  return "Connected_RemotePending_Dirty";
-        case State::Connected_ApplyingRemote:       return "Connected_ApplyingRemote";
-        case State::Connected_PublishingDirect:     return "Connected_PublishingDirect";
+        case State::Connected_ApplyingRemote:        return "Connected_ApplyingRemote";
+        case State::Connected_PublishingDirect:      return "Connected_PublishingDirect";
     }
     return "?";
 }
 
 const char* CollabSession::eventName(Event e) const {
     switch (e) {
-        case Event::WsMessage:                return "ws_msg";
-        case Event::UserEdit:                return "userEdit";
-        case Event::UserEditDuringInFlight:  return "userEdit_inFlight";
-        case Event::SubmitStarted:           return "submitStart";
-        case Event::SubmitAccepted:          return "submitOk";
-        case Event::SubmitRejected:          return "submitReject";
-        case Event::RemotePending:           return "remotePending";
-        case Event::RemoteApplied:           return "remoteApply";
-        case Event::ApplyStart:              return "applyStart";
-        case Event::ApplyEnd:                return "applyEnd";
-        case Event::HttpPublishStart:        return "httpStart";
-        case Event::HttpPublishEnd:          return "httpEnd";
-        case Event::Reconnect:               return "reconnect";
-        case Event::ProjectOpened:           return "projectOpen";
-        case Event::ProjectCleared:          return "projectClear";
-        case Event::Disconnected:            return "disconnect";
-        case Event::Bound:                   return "bound";
+        case Event::WsMessage:              return "ws_msg";
+        case Event::UserEdit:               return "userEdit";
+        case Event::UserEditDuringInFlight: return "userEdit_inFlight";
+        case Event::SubmitStarted:          return "submitStart";
+        case Event::SubmitAccepted:         return "submitOk";
+        case Event::SubmitRejected:         return "submitReject";
+        case Event::RemotePending:          return "remotePending";
+        case Event::RemoteApplied:          return "remoteApply";
+        case Event::ApplyStart:            return "applyStart";
+        case Event::ApplyEnd:              return "applyEnd";
+        case Event::HttpPublishStart:      return "httpStart";
+        case Event::HttpPublishEnd:        return "httpEnd";
+        case Event::Reconnect:             return "reconnect";
+        case Event::ProjectOpened:         return "projectOpen";
+        case Event::ProjectCleared:        return "projectClear";
+        case Event::Disconnected:          return "disconnect";
+        case Event::Bound:                 return "bound";
     }
     return "other";
 }
@@ -94,11 +109,31 @@ bool CollabSession::isBound() const {
 }
 
 bool CollabSession::isLocalDirtyFromUI() {
-    // 由 mainwindow.cpp 的 updateCollabPanelUi 反映过来的"本地有未保存修改"指示
-    // 但 CollabSession 不知道具体 UI. 这里返回 false 作为保守默认.
-    // 真正的 dirty 检测在 mainwindow 里 (curWindow->getIsModified()),
-    // 我们通过 fastapiLocalDirtyDuringSubmit 已经知道 "submit 期间又改了".
     return false;
+}
+
+void CollabSession::mirrorToLegacy() const {
+    if (!isBound()) return;
+    *fastapi_model_version_ref_              = snapshot_.modelVersion;
+    *fastapi_pending_remote_version_ref_    = snapshot_.pendingRemoteVersion;
+    *fastapiLastPublishReason_ref_          = snapshot_.lastPublishReason;
+    *fastapiPendingSubmitRequestId_ref_      = snapshot_.submitRequestId;
+    *fastapiSubmitInFlight_ref_             = snapshot_.submitInFlight;
+    *fastapiLocalDirtyDuringSubmit_ref_     = snapshot_.localDirtyDuringSubmit;
+    *fastapiApplyingRemoteSnapshot_ref_     = snapshot_.applyingRemoteSnapshot;
+    *fastapiPublishingSnapshot_ref_         = snapshot_.publishingSnapshot;
+}
+
+void CollabSession::transition(State newState, Event event) {
+    if (state_ == newState) {
+        emitDump(event, true);
+        assertConsistent();
+        return;
+    }
+    state_ = newState;
+    mirrorToLegacy();
+    emitDump(event, true);
+    assertConsistent();
 }
 
 QString CollabSession::dump(Event event) const {
@@ -121,23 +156,14 @@ QString CollabSession::dump(Event event) const {
     parts << QString("[CollabSession]");
     parts << QString::fromUtf8(eventName(event));
     parts << QString::fromUtf8(stateName());
-    if (fastapi_model_version_ref_) {
-        parts << QString("v=%1").arg(*fastapi_model_version_ref_);
-    }
-    if (fastapi_pending_remote_version_ref_) {
-        parts << QString("pv=%1").arg(*fastapi_pending_remote_version_ref_);
-    }
-    if (fastapiSubmitInFlight_ref_) {
-        parts << QString("in_flight=%1").arg(*fastapiSubmitInFlight_ref_ ? "T" : "F");
-    }
-    if (fastapiLocalDirtyDuringSubmit_ref_) {
-        parts << QString("dirty_during=%1").arg(*fastapiLocalDirtyDuringSubmit_ref_ ? "T" : "F");
-    }
-    if (fastapiApplyingRemoteSnapshot_ref_) {
-        parts << QString("apply=%1").arg(*fastapiApplyingRemoteSnapshot_ref_ ? "T" : "F");
-    }
-    if (fastapiPublishingSnapshot_ref_) {
-        parts << QString("publish=%1").arg(*fastapiPublishingSnapshot_ref_ ? "T" : "F");
+    parts << QString("v=%1").arg(snapshot_.modelVersion);
+    parts << QString("pv=%1").arg(snapshot_.pendingRemoteVersion);
+    parts << QString("in_flight=%1").arg(snapshot_.submitInFlight ? "T" : "F");
+    parts << QString("dirty_during=%1").arg(snapshot_.localDirtyDuringSubmit ? "T" : "F");
+    parts << QString("apply=%1").arg(snapshot_.applyingRemoteSnapshot ? "T" : "F");
+    parts << QString("publish=%1").arg(snapshot_.publishingSnapshot ? "T" : "F");
+    if (!snapshot_.submitRequestId.isEmpty()) {
+        parts << QString("req=%1").arg(snapshot_.submitRequestId.left(8));
     }
     return parts.join(" | ");
 }
@@ -159,22 +185,14 @@ void CollabSession::emitDump(Event event, bool force) {
 }
 
 CollabSession::State CollabSession::inferStateFromLegacy() const {
-    // 不依赖 external project_id 字段 (不在 8 字段里).
-    // 这里只根据 6 个 bool/int 字段推算.
-    if (fastapiPublishingSnapshot_ref_ && *fastapiPublishingSnapshot_ref_) {
-        return State::Connected_PublishingDirect;
-    }
-    if (fastapiApplyingRemoteSnapshot_ref_ && *fastapiApplyingRemoteSnapshot_ref_) {
-        return State::Connected_ApplyingRemote;
-    }
-    if (fastapiSubmitInFlight_ref_ && *fastapiSubmitInFlight_ref_) {
-        if (fastapiLocalDirtyDuringSubmit_ref_ && *fastapiLocalDirtyDuringSubmit_ref_) {
-            return State::Connected_SubmitInFlight_Dirty;
-        }
+    if (!isBound()) return state_;
+    if (*fastapiPublishingSnapshot_ref_)              return State::Connected_PublishingDirect;
+    if (*fastapiApplyingRemoteSnapshot_ref_)          return State::Connected_ApplyingRemote;
+    if (*fastapiSubmitInFlight_ref_) {
+        if (*fastapiLocalDirtyDuringSubmit_ref_)      return State::Connected_SubmitInFlight_Dirty;
         return State::Connected_SubmitInFlight;
     }
-    if (fastapi_pending_remote_version_ref_ && *fastapi_pending_remote_version_ref_ > *fastapi_model_version_ref_) {
-        // 本地是否有脏需要外部信号 — 这里保守返回 _Dirty 让 caller 决定
+    if (*fastapi_pending_remote_version_ref_ > *fastapi_model_version_ref_) {
         return State::Connected_RemotePending_Dirty;
     }
     return State::Connected_Idle;
@@ -183,201 +201,351 @@ CollabSession::State CollabSession::inferStateFromLegacy() const {
 void CollabSession::assertConsistent() const {
     if (!isBound()) return;
     State inferred = inferStateFromLegacy();
+    if (state_ == State::Disconnected
+     || state_ == State::Connected_NoProject
+     || inferred == State::Disconnected) {
+        return;
+    }
     if (inferred != state_) {
         qWarning().noquote() << "[CollabSession] INCONSISTENT:"
-                             << "state=" << QString::fromUtf8(stateName())
-                             << "inferred=" << QString::fromUtf8([&]{
-                                    switch (inferred) {
-                                        case State::Disconnected:                   return "Disconnected";
-                                        case State::Connected_NoProject:            return "Connected_NoProject";
-                                        case State::Connected_Idle:                 return "Connected_Idle";
-                                        case State::Connected_LocalDirty:           return "Connected_LocalDirty";
-                                        case State::Connected_SubmitInFlight:       return "Connected_SubmitInFlight";
-                                        case State::Connected_SubmitInFlight_Dirty: return "Connected_SubmitInFlight_Dirty";
-                                        case State::Connected_RemotePending:        return "Connected_RemotePending";
-                                        case State::Connected_RemotePending_Dirty:  return "Connected_RemotePending_Dirty";
-                                        case State::Connected_ApplyingRemote:       return "Connected_ApplyingRemote";
-                                        case State::Connected_PublishingDirect:     return "Connected_PublishingDirect";
-                                    }
-                                    return "?";
-                                }());
+                             << "state=" << QString::fromUtf8(stateNameFor(state_))
+                             << "inferred=" << QString::fromUtf8(stateNameFor(inferred));
     }
+}
+
+CollabSession::SubmitDecision CollabSession::tryBeginSubmit(const QString& reason) {
+    SubmitDecision d;
+
+    if (state_ == State::Disconnected || state_ == State::Connected_NoProject) {
+        d.kind = SubmitDecision::RejectNoProject;
+        d.reason = tr("协作通道未连接或项目未打开");
+        emitDump(Event::SubmitStarted, true);
+        return d;
+    }
+    if (snapshot_.applyingRemoteSnapshot) {
+        d.kind = SubmitDecision::RejectApplyingRemote;
+        d.reason = tr("正在应用远程快照，无法提交");
+        emitDump(Event::SubmitStarted, true);
+        return d;
+    }
+    if (snapshot_.publishingSnapshot) {
+        d.kind = SubmitDecision::RejectPublishingDirect;
+        d.reason = tr("正在通过 HTTP 发布，无法提交");
+        emitDump(Event::SubmitStarted, true);
+        return d;
+    }
+    if (snapshot_.submitInFlight) {
+        snapshot_.localDirtyDuringSubmit = true;
+        mirrorToLegacy();
+        transition(State::Connected_SubmitInFlight_Dirty, Event::UserEditDuringInFlight);
+        d.kind = SubmitDecision::RejectAlreadyInFlight;
+        d.reason = tr("上一笔提交还在进行中，已标记为 dirty，待当前 ack 后重新发布");
+        return d;
+    }
+    if (snapshot_.pendingRemoteVersion > snapshot_.modelVersion) {
+        d.kind = SubmitDecision::RejectRemotePending;
+        d.reason = tr("有远程版本 %1 待同步，请先处理冲突").arg(snapshot_.pendingRemoteVersion);
+        d.remoteVersion = snapshot_.pendingRemoteVersion;
+        emitDump(Event::SubmitStarted, true);
+        return d;
+    }
+
+    snapshot_.submitRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    snapshot_.submitInFlight = true;
+    snapshot_.localDirtyDuringSubmit = false;
+    snapshot_.lastPublishReason = reason.isEmpty() ? QString::fromUtf8("local-change") : reason;
+    mirrorToLegacy();
+
+    if (state_ == State::Connected_Idle || state_ == State::Connected_LocalDirty) {
+        transition(State::Connected_SubmitInFlight, Event::SubmitStarted);
+    } else {
+        qWarning() << "[CollabSession] tryBeginSubmit from unexpected state"
+                   << QString::fromUtf8(stateName());
+        transition(State::Connected_SubmitInFlight, Event::SubmitStarted);
+    }
+
+    d.kind = SubmitDecision::Allow;
+    d.requestId = snapshot_.submitRequestId;
+    return d;
+}
+
+void CollabSession::rollbackSubmit() {
+    if (!snapshot_.submitInFlight) return;
+    snapshot_.submitInFlight = false;
+    snapshot_.submitRequestId.clear();
+    mirrorToLegacy();
+    if (snapshot_.localDirtyDuringSubmit) {
+        transition(State::Connected_LocalDirty, Event::SubmitStarted);
+    } else {
+        transition(State::Connected_Idle, Event::SubmitStarted);
+    }
+}
+
+CollabSession::ApplyDecision CollabSession::tryBeginApplyRemote(int remoteVersion, const QString&) {
+    Q_UNUSED(remoteVersion);
+    ApplyDecision d;
+
+    if (state_ == State::Disconnected || state_ == State::Connected_NoProject) {
+        d.kind = ApplyDecision::RejectNoProject;
+        d.reason = tr("协作通道未连接或项目未打开");
+        d.reasonTr = QString::fromUtf8("协作通道未连接或项目未打开");
+        return d;
+    }
+    if (snapshot_.applyingRemoteSnapshot) {
+        d.kind = ApplyDecision::RejectAlreadyApplying;
+        d.reason = tr("已经在应用远程快照");
+        d.reasonTr = QString::fromUtf8("已经在应用远程快照");
+        return d;
+    }
+    if (remoteVersion <= 0) {
+        d.kind = ApplyDecision::RejectNoContent;
+        d.reason = tr("远端版本号非法");
+        d.reasonTr = QString::fromUtf8("远端版本号非法");
+        return d;
+    }
+
+    snapshot_.applyingRemoteSnapshot = true;
+    snapshot_.pendingRemoteVersion = qMax(snapshot_.pendingRemoteVersion, remoteVersion);
+    mirrorToLegacy();
+    transition(State::Connected_ApplyingRemote, Event::ApplyStart);
+
+    d.kind = ApplyDecision::Allow;
+    return d;
+}
+
+void CollabSession::rollbackApply() {
+    if (!snapshot_.applyingRemoteSnapshot) return;
+    snapshot_.applyingRemoteSnapshot = false;
+    mirrorToLegacy();
+    if (snapshot_.pendingRemoteVersion > snapshot_.modelVersion) {
+        transition(State::Connected_RemotePending_Dirty, Event::ApplyEnd);
+    } else {
+        transition(State::Connected_Idle, Event::ApplyEnd);
+    }
+}
+
+CollabSession::PublishDecision CollabSession::tryBeginHttpPublish() {
+    PublishDecision d;
+    if (state_ == State::Disconnected || state_ == State::Connected_NoProject) {
+        d.kind = PublishDecision::RejectNoProject;
+        d.reason = tr("协作通道未连接或项目未打开");
+        emitDump(Event::HttpPublishStart, true);
+        return d;
+    }
+    if (snapshot_.publishingSnapshot) {
+        d.kind = PublishDecision::RejectAlreadyPublishing;
+        d.reason = tr("已经在 HTTP 发布中");
+        emitDump(Event::HttpPublishStart, true);
+        return d;
+    }
+    if (snapshot_.submitInFlight) {
+        d.kind = PublishDecision::RejectSubmitInFlight;
+        d.reason = tr("WS submit 还在进行中，无法 HTTP 直发");
+        emitDump(Event::HttpPublishStart, true);
+        return d;
+    }
+
+    snapshot_.publishingSnapshot = true;
+    mirrorToLegacy();
+    transition(State::Connected_PublishingDirect, Event::HttpPublishStart);
+
+    d.kind = PublishDecision::Allow;
+    return d;
+}
+
+void CollabSession::rollbackHttpPublish() {
+    if (!snapshot_.publishingSnapshot) return;
+    snapshot_.publishingSnapshot = false;
+    mirrorToLegacy();
+    if (snapshot_.pendingRemoteVersion > snapshot_.modelVersion) {
+        transition(State::Connected_RemotePending_Dirty, Event::HttpPublishEnd);
+    } else {
+        transition(State::Connected_Idle, Event::HttpPublishEnd);
+    }
+}
+
+void CollabSession::setLastPublishReason(const QString& reason) {
+    snapshot_.lastPublishReason = reason;
+    mirrorToLegacy();
+}
+
+void CollabSession::setModelVersion(int v) {
+    snapshot_.modelVersion = v;
+    mirrorToLegacy();
+}
+
+void CollabSession::setPendingRemoteVersion(int pv) {
+    snapshot_.pendingRemoteVersion = pv;
+    mirrorToLegacy();
 }
 
 void CollabSession::onUserEdit() {
     if (!isBound()) { emitDump(Event::UserEdit, true); return; }
 
-    if ((*fastapiApplyingRemoteSnapshot_ref_) || (*fastapiPublishingSnapshot_ref_)) {
+    if (snapshot_.applyingRemoteSnapshot || snapshot_.publishingSnapshot) {
         emitDump(Event::UserEdit, false);
         return;
     }
-    if (fastapiSubmitInFlight_ref_ && *fastapiSubmitInFlight_ref_) {
-        if (state_ != State::Connected_SubmitInFlight
-         && state_ != State::Connected_SubmitInFlight_Dirty
-         && state_ != State::Connected_RemotePending_Dirty) {
-            qWarning() << "[CollabSession] onUserEdit while in_flight but state is"
-                       << QString::fromUtf8(stateName());
-        }
-        state_ = State::Connected_SubmitInFlight_Dirty;
-        emitDump(Event::UserEditDuringInFlight, true);
-        assertConsistent();
+    if (snapshot_.submitInFlight) {
+        snapshot_.localDirtyDuringSubmit = true;
+        mirrorToLegacy();
+        transition(State::Connected_SubmitInFlight_Dirty, Event::UserEditDuringInFlight);
         return;
     }
-    state_ = State::Connected_LocalDirty;
-    emitDump(Event::UserEdit, true);
-    assertConsistent();
+    transition(State::Connected_LocalDirty, Event::UserEdit);
 }
 
 void CollabSession::onUserEditDuringInFlight() {
     if (!isBound()) { emitDump(Event::UserEditDuringInFlight, true); return; }
-    state_ = State::Connected_SubmitInFlight_Dirty;
-    emitDump(Event::UserEditDuringInFlight, true);
-    assertConsistent();
-}
-
-void CollabSession::onSubmitStarted() {
-    if (!isBound()) { emitDump(Event::SubmitStarted, true); return; }
-
-    if (*fastapiSubmitInFlight_ref_) {
-        state_ = (*fastapiLocalDirtyDuringSubmit_ref_)
-               ? State::Connected_SubmitInFlight_Dirty
-               : State::Connected_SubmitInFlight;
-        emitDump(Event::SubmitStarted, true);
-        assertConsistent();
+    if (!snapshot_.submitInFlight) {
+        qWarning() << "[CollabSession] onUserEditDuringInFlight while not in_flight";
         return;
     }
-    if (state_ == State::Connected_LocalDirty
-     || state_ == State::Connected_Idle
-     || state_ == State::Connected_RemotePending) {
-        state_ = State::Connected_SubmitInFlight;
-    } else {
-        qWarning() << "[CollabSession] onSubmitStarted from unexpected state"
-                   << QString::fromUtf8(stateName());
-        state_ = State::Connected_SubmitInFlight;
-    }
-    emitDump(Event::SubmitStarted, true);
-    assertConsistent();
+    snapshot_.localDirtyDuringSubmit = true;
+    mirrorToLegacy();
+    transition(State::Connected_SubmitInFlight_Dirty, Event::UserEditDuringInFlight);
 }
 
 void CollabSession::onSubmitAccepted(int newRemoteVersion) {
-    Q_UNUSED(newRemoteVersion);
     if (!isBound()) { emitDump(Event::SubmitAccepted, true); return; }
-    if (*fastapiLocalDirtyDuringSubmit_ref_) {
-        state_ = State::Connected_LocalDirty;
-    } else {
-        state_ = State::Connected_Idle;
+    if (snapshot_.submitInFlight) {
+        snapshot_.submitInFlight = false;
+        snapshot_.submitRequestId.clear();
+        snapshot_.modelVersion = newRemoteVersion;
+        snapshot_.pendingRemoteVersion = 0;
+        mirrorToLegacy();
     }
-    emitDump(Event::SubmitAccepted, true);
-    assertConsistent();
+    if (snapshot_.localDirtyDuringSubmit) {
+        transition(State::Connected_LocalDirty, Event::SubmitAccepted);
+    } else {
+        transition(State::Connected_Idle, Event::SubmitAccepted);
+    }
 }
 
-void CollabSession::onSubmitRejected() {
+void CollabSession::onSubmitRejected(int latestVersion) {
     if (!isBound()) { emitDump(Event::SubmitRejected, true); return; }
-    if (*fastapi_pending_remote_version_ref_ > *fastapi_model_version_ref_) {
-        state_ = State::Connected_RemotePending_Dirty;
-    } else {
-        state_ = State::Connected_Idle;
+    if (snapshot_.submitInFlight) {
+        snapshot_.submitInFlight = false;
+        snapshot_.submitRequestId.clear();
     }
-    emitDump(Event::SubmitRejected, true);
-    assertConsistent();
+    if (latestVersion > snapshot_.modelVersion) {
+        snapshot_.pendingRemoteVersion = qMax(snapshot_.pendingRemoteVersion, latestVersion);
+        mirrorToLegacy();
+        transition(State::Connected_RemotePending_Dirty, Event::SubmitRejected);
+    } else {
+        mirrorToLegacy();
+        if (snapshot_.localDirtyDuringSubmit) {
+            transition(State::Connected_LocalDirty, Event::SubmitRejected);
+        } else {
+            transition(State::Connected_Idle, Event::SubmitRejected);
+        }
+    }
 }
 
 void CollabSession::onRemotePending(int remoteVersion) {
-    Q_UNUSED(remoteVersion);
     if (!isBound()) { emitDump(Event::RemotePending, true); return; }
-    if (*fastapiSubmitInFlight_ref_) {
-        state_ = State::Connected_SubmitInFlight;
-    } else {
-        state_ = State::Connected_RemotePending_Dirty;
+    if (remoteVersion > snapshot_.modelVersion) {
+        snapshot_.pendingRemoteVersion = qMax(snapshot_.pendingRemoteVersion, remoteVersion);
+        mirrorToLegacy();
     }
-    emitDump(Event::RemotePending, true);
-    assertConsistent();
+    if (snapshot_.submitInFlight) {
+        transition(State::Connected_SubmitInFlight, Event::RemotePending);
+    } else if (snapshot_.localDirtyDuringSubmit) {
+        transition(State::Connected_SubmitInFlight_Dirty, Event::RemotePending);
+    } else {
+        transition(State::Connected_RemotePending_Dirty, Event::RemotePending);
+    }
 }
 
 void CollabSession::onRemoteApplied(int appliedVersion) {
-    Q_UNUSED(appliedVersion);
     if (!isBound()) { emitDump(Event::RemoteApplied, true); return; }
-    if (*fastapiSubmitInFlight_ref_) {
-        state_ = State::Connected_SubmitInFlight;
-    } else if (*fastapiLocalDirtyDuringSubmit_ref_) {
-        state_ = State::Connected_LocalDirty;
+    snapshot_.modelVersion = appliedVersion;
+    snapshot_.pendingRemoteVersion = 0;
+    mirrorToLegacy();
+    if (snapshot_.submitInFlight) {
+        transition(State::Connected_SubmitInFlight, Event::RemoteApplied);
+    } else if (snapshot_.localDirtyDuringSubmit) {
+        transition(State::Connected_LocalDirty, Event::RemoteApplied);
     } else {
-        state_ = State::Connected_Idle;
+        transition(State::Connected_Idle, Event::RemoteApplied);
     }
-    emitDump(Event::RemoteApplied, true);
-    assertConsistent();
 }
 
 void CollabSession::onApplyStart() {
     if (!isBound()) { emitDump(Event::ApplyStart, true); return; }
-    state_ = State::Connected_ApplyingRemote;
-    emitDump(Event::ApplyStart, true);
-    assertConsistent();
+    snapshot_.applyingRemoteSnapshot = true;
+    mirrorToLegacy();
+    transition(State::Connected_ApplyingRemote, Event::ApplyStart);
 }
 
 void CollabSession::onApplyEnd() {
     if (!isBound()) { emitDump(Event::ApplyEnd, true); return; }
-    if (*fastapiSubmitInFlight_ref_) {
-        state_ = State::Connected_SubmitInFlight;
-    } else if (*fastapiLocalDirtyDuringSubmit_ref_) {
-        state_ = State::Connected_LocalDirty;
+    snapshot_.applyingRemoteSnapshot = false;
+    mirrorToLegacy();
+    if (snapshot_.submitInFlight) {
+        transition(State::Connected_SubmitInFlight, Event::ApplyEnd);
+    } else if (snapshot_.localDirtyDuringSubmit) {
+        transition(State::Connected_LocalDirty, Event::ApplyEnd);
     } else {
-        state_ = State::Connected_Idle;
+        transition(State::Connected_Idle, Event::ApplyEnd);
     }
-    emitDump(Event::ApplyEnd, true);
-    assertConsistent();
 }
 
 void CollabSession::onHttpPublishStart() {
     if (!isBound()) { emitDump(Event::HttpPublishStart, true); return; }
-    state_ = State::Connected_PublishingDirect;
-    emitDump(Event::HttpPublishStart, true);
-    assertConsistent();
+    snapshot_.publishingSnapshot = true;
+    mirrorToLegacy();
+    transition(State::Connected_PublishingDirect, Event::HttpPublishStart);
 }
 
 void CollabSession::onHttpPublishEnd() {
     if (!isBound()) { emitDump(Event::HttpPublishEnd, true); return; }
-    if (*fastapi_pending_remote_version_ref_ > *fastapi_model_version_ref_) {
-        state_ = State::Connected_RemotePending_Dirty;
+    snapshot_.publishingSnapshot = false;
+    mirrorToLegacy();
+    if (snapshot_.pendingRemoteVersion > snapshot_.modelVersion) {
+        transition(State::Connected_RemotePending_Dirty, Event::HttpPublishEnd);
     } else {
-        state_ = State::Connected_Idle;
+        transition(State::Connected_Idle, Event::HttpPublishEnd);
     }
-    emitDump(Event::HttpPublishEnd, true);
-    assertConsistent();
 }
 
 void CollabSession::onReconnect(bool projectIdValid) {
     Q_UNUSED(projectIdValid);
     if (!isBound()) { emitDump(Event::Reconnect, true); return; }
-    state_ = (*fastapiSubmitInFlight_ref_)
-           ? State::Connected_SubmitInFlight
-           : State::Connected_Idle;
-    emitDump(Event::Reconnect, true);
-    assertConsistent();
+    if (snapshot_.submitInFlight) {
+        transition(State::Connected_SubmitInFlight, Event::Reconnect);
+    } else {
+        transition(State::Connected_Idle, Event::Reconnect);
+    }
 }
 
 void CollabSession::onProjectOpened() {
     if (!isBound()) { emitDump(Event::ProjectOpened, true); return; }
-    state_ = State::Connected_Idle;
-    emitDump(Event::ProjectOpened, true);
-    assertConsistent();
+    snapshot_.submitInFlight = false;
+    snapshot_.localDirtyDuringSubmit = false;
+    snapshot_.submitRequestId.clear();
+    snapshot_.publishingSnapshot = false;
+    snapshot_.applyingRemoteSnapshot = false;
+    mirrorToLegacy();
+    transition(State::Connected_Idle, Event::ProjectOpened);
 }
 
 void CollabSession::onProjectCleared() {
     if (!isBound()) { emitDump(Event::ProjectCleared, true); return; }
-    state_ = State::Disconnected;
-    emitDump(Event::ProjectCleared, true);
-    assertConsistent();
+    transition(State::Disconnected, Event::ProjectCleared);
 }
 
 void CollabSession::onDisconnected() {
     if (!isBound()) { emitDump(Event::Disconnected, true); return; }
-    state_ = State::Disconnected;
-    emitDump(Event::Disconnected, true);
-    assertConsistent();
+    snapshot_.submitInFlight = false;
+    snapshot_.localDirtyDuringSubmit = false;
+    snapshot_.submitRequestId.clear();
+    snapshot_.publishingSnapshot = false;
+    snapshot_.applyingRemoteSnapshot = false;
+    mirrorToLegacy();
+    transition(State::Disconnected, Event::Disconnected);
 }
 
-// RAII 守卫 (未使用, 保留兼容)
 CollabSessionApplyRemoteGuard::CollabSessionApplyRemoteGuard()  = default;
 CollabSessionApplyRemoteGuard::~CollabSessionApplyRemoteGuard() {}
 CollabSessionPublishGuard::CollabSessionPublishGuard()  = default;

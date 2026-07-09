@@ -347,7 +347,6 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
     DELTA_STATE *root_state = nullptr;
     api_ensure_empty_root_state(hs, root_state);
 
-    // 绑定协作状态机到 8 个旧字段（零行为变更：本阶段状态机只观测，不替代任何 if）
     CollabSession::instance().bindLegacyFields(
         fastapi_model_version,
         fastapi_pending_remote_version,
@@ -359,11 +358,9 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
         fastapiPublishingSnapshot
     );
     qDebug().noquote() << "[CollabSession] bound:" << CollabSession::instance().dump(CollabSession::Event::Bound);
-
     CollabSession::instance().setDebugEnabled(true);
     CollabSession::instance().setMinDumpIntervalMs(0);
     CollabSession::instance().setEventMinInterval(CollabSession::Event::WsMessage, 200);
-    qDebug().noquote() << "[CollabSession] ready: state machine active; ws_msg<=200ms.";
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -1011,9 +1008,6 @@ void MainWindow::disconnectFastAPISync() {
     if (fastapiPublishTimer != nullptr) {
         fastapiPublishTimer->stop();
     }
-    fastapiSubmitInFlight = false;
-    fastapiLocalDirtyDuringSubmit = false;
-    fastapiPendingSubmitRequestId.clear();
     fastapi_collaborators.clear();
     if (fastapiReconnectTimer != nullptr) {
         fastapiReconnectTimer->stop();
@@ -1036,7 +1030,9 @@ void MainWindow::requestFastAPISyncNow() {
 }
 
 void MainWindow::notifyModelChangedForCollaboration() {
-    if (fastapiApplyingRemoteSnapshot || fastapiPublishingSnapshot) {
+    auto& session = CollabSession::instance();
+
+    if (session.isApplyingRemoteSnapshot() || session.isPublishingSnapshot()) {
         return;
     }
 
@@ -1049,48 +1045,49 @@ void MainWindow::notifyModelChangedForCollaboration() {
         return;
     }
 
-    if (fastapiSubmitInFlight) {
-        fastapiLocalDirtyDuringSubmit = true;
-        fastapiLastPublishReason = tr("local-change");
-        CollabSession::instance().onUserEditDuringInFlight();
-        updateCollabPanelUi();
-        return;
-    }
-
-    if (fastapi_pending_remote_version > fastapi_model_version) {
+    if (session.pendingRemoteVersion() > session.modelVersion()) {
         statusBar()->showMessage(tr("Remote version pending; resolve it before submitting local changes."), 4000);
+        session.onRemotePending(session.pendingRemoteVersion());
         updateCollabPanelUi();
-        CollabSession::instance().onRemotePending(fastapi_pending_remote_version);
         return;
     }
 
-    CollabSession::instance().onUserEdit();
+    if (session.isSubmitInFlight()) {
+        session.setLastPublishReason(tr("local-change"));
+        session.onUserEditDuringInFlight();
+        updateCollabPanelUi();
+        return;
+    }
+
+    session.onUserEdit();
     scheduleFastAPIAutoPublish(tr("local-change"));
 }
 
 void MainWindow::scheduleFastAPIAutoPublish(const QString& reason) {
+    auto& session = CollabSession::instance();
+
     if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
         return;
     }
-    if (fastapiApplyingRemoteSnapshot || fastapiPublishingSnapshot) {
+    if (session.isApplyingRemoteSnapshot() || session.isPublishingSnapshot()) {
         return;
     }
     if (fastapiPublishTimer == nullptr) {
         return;
     }
-    if (fastapiSubmitInFlight) {
-        fastapiLocalDirtyDuringSubmit = true;
-        fastapiLastPublishReason = reason;
+    if (session.isSubmitInFlight()) {
+        // 提交中：标记 dirty，不重复提交
+        session.setLastPublishReason(reason);
         updateCollabPanelUi();
         return;
     }
-    if (fastapi_pending_remote_version > fastapi_model_version) {
+    if (session.pendingRemoteVersion() > session.modelVersion()) {
         statusBar()->showMessage(tr("Remote version pending; resolve it before submitting local changes."), 4000);
         updateCollabPanelUi();
         return;
     }
 
-    fastapiLastPublishReason = reason;
+    session.setLastPublishReason(reason);
     fastapiPublishTimer->start();
 }
 
@@ -1174,8 +1171,21 @@ bool MainWindow::exportCurrentModelToSat(QString* satContent, QString* errorMess
 }
 
 bool MainWindow::submitFastAPIModelOverSocket(const QString& satContent, const QString& reason, bool interactiveConflict) {
-    CollabSession::instance().onSubmitStarted();
+    auto& session = CollabSession::instance();
+    CollabSession::SubmitDecision decision = session.tryBeginSubmit(reason);
+
+    if (decision.kind != CollabSession::SubmitDecision::Allow) {
+        if (interactiveConflict) {
+            QMessageBox::warning(this, tr("DBCAD"), decision.reason);
+        } else {
+            statusBar()->showMessage(decision.reason, 5000);
+        }
+        updateCollabPanelUi();
+        return false;
+    }
+
     if (fastapiSyncSocket == nullptr || !fastapiSyncSocket->isValid()) {
+        session.rollbackSubmit();
         if (interactiveConflict) {
             QMessageBox::warning(this, tr("DBCAD"), tr("FastAPI WebSocket collaboration channel is not connected."));
         } else {
@@ -1183,24 +1193,9 @@ bool MainWindow::submitFastAPIModelOverSocket(const QString& satContent, const Q
         }
         return false;
     }
-    if (fastapiSubmitInFlight) {
-        fastapiLocalDirtyDuringSubmit = true;
-        return false;
-    }
-    if (fastapi_pending_remote_version > fastapi_model_version) {
-        if (interactiveConflict) {
-            QMessageBox::warning(this, tr("DBCAD"), tr("Remote version pending; resolve it before submitting local changes."));
-        } else {
-            statusBar()->showMessage(tr("Remote version pending; local changes were not submitted."), 5000);
-        }
-        updateCollabPanelUi();
-        return false;
-    }
 
     const QString author = QString::fromStdString(fastapi_author).trimmed();
-    fastapiPendingSubmitRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    fastapiSubmitInFlight = true;
-    fastapiLocalDirtyDuringSubmit = false;
+    const QString requestId = decision.requestId;
 
     QJsonObject content;
     content.insert("sat", satContent);
@@ -1208,12 +1203,12 @@ bool MainWindow::submitFastAPIModelOverSocket(const QString& satContent, const Q
     QJsonObject payload;
     payload.insert("type", "submit_model");
     payload.insert("project_id", fastapi_project_id);
-    payload.insert("request_id", fastapiPendingSubmitRequestId);
+    payload.insert("request_id", requestId);
     payload.insert("author", author.isEmpty() ? QString::fromUtf8("dbcad-exe") : author);
     payload.insert("content", content);
     payload.insert("reason", reason.isEmpty() ? QString::fromUtf8("local-change") : reason);
-    if (fastapi_model_version > 0) {
-        payload.insert("base_version", fastapi_model_version);
+    if (session.modelVersion() > 0) {
+        payload.insert("base_version", session.modelVersion());
     } else {
         payload.insert("base_version", QJsonValue::Null);
     }
@@ -1225,6 +1220,8 @@ bool MainWindow::submitFastAPIModelOverSocket(const QString& satContent, const Q
 }
 
 bool MainWindow::publishFastAPIModelSnapshot(bool interactiveConflict) {
+    auto& session = CollabSession::instance();
+
     if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
         return false;
     }
@@ -1253,36 +1250,38 @@ bool MainWindow::publishFastAPIModelSnapshot(bool interactiveConflict) {
         return submitFastAPIModelOverSocket(satContent, fastapiLastPublishReason, false);
     }
 
-    CollabSession::instance().onHttpPublishStart();
-    fastapiPublishingSnapshot = true;
+    CollabSession::PublishDecision pubDecision = session.tryBeginHttpPublish();
+    if (pubDecision.kind != CollabSession::PublishDecision::Allow) {
+        QMessageBox::warning(this, tr("DBCAD"), pubDecision.reason);
+        return false;
+    }
+
     std::optional<int> baseVersion;
-    if (fastapi_model_version > 0) {
-        baseVersion = fastapi_model_version;
+    if (session.modelVersion() > 0) {
+        baseVersion = session.modelVersion();
     }
 
     auto newVersion = client.saveModel(fastapi_project_id, satContent, baseVersion);
-    fastapiPublishingSnapshot = false;
-    CollabSession::instance().onHttpPublishEnd();
 
     if (!newVersion.has_value()) {
+        session.rollbackHttpPublish();
         if (client.lastStatusCode() == 409) {
             auto latest = client.getLatestModel(fastapi_project_id);
             if (latest.has_value()) {
-                fastapi_pending_remote_version =
-                    fastapi_pending_remote_version > latest->version ? fastapi_pending_remote_version : latest->version;
+                session.onSubmitRejected(latest->version);
+                QMessageBox::warning(this, tr("DBCAD"),
+                    tr("HTTP 发布冲突：远端版本 %1 已更新，请处理冲突后重试。").arg(latest->version));
             }
-        }
-        if (interactiveConflict) {
-            QMessageBox::warning(this, tr("DBCAD"), client.lastError());
         } else {
-            statusBar()->showMessage(tr("自动发布协作版本失败：%1").arg(client.lastError()), 5000);
+            QMessageBox::warning(this, tr("DBCAD"), client.lastError());
         }
         updateCollabPanelUi();
         return false;
     }
 
-    fastapi_model_version = *newVersion;
-    fastapi_pending_remote_version = 0;
+    session.onHttpPublishEnd();
+    fastapi_model_version = session.modelVersion();
+    fastapi_pending_remote_version = session.pendingRemoteVersion();
     curWindow->setIsModified(false);
     if (!fastapi_project_name.isEmpty()) {
         setCurrentPartName(fastapi_project_name);
@@ -1358,6 +1357,7 @@ bool MainWindow::syncFastAPIRemoteVersion(int remoteVersion, const QString& reas
         QString::fromStdString(fastapi_password));
     auto model = client.getModelVersion(fastapi_project_id, remoteVersion);
     if (!model.has_value()) {
+        CollabSession::instance().rollbackApply();
         statusBar()->showMessage(tr("远程同步失败：%1").arg(client.lastError()), 5000);
         return false;
     }
@@ -1365,13 +1365,13 @@ bool MainWindow::syncFastAPIRemoteVersion(int remoteVersion, const QString& reas
     const GLWidget::ViewState viewState = curWindow->getViewState();
     curWindow->clear();
     if (!restoreFastAPIModelFromSat(model->sat)) {
-        CollabSession::instance().onApplyEnd();
+        CollabSession::instance().rollbackApply();
         return false;
     }
     curWindow->setViewState(viewState);
     CollabSession::instance().onApplyEnd();
 
-    fastapi_model_version = model->version;
+    fastapi_model_version = CollabSession::instance().modelVersion();
     fastapi_pending_remote_version = 0;
     setCurrentPartName(fastapi_project_name);
     curWindow->setIsModified(false);
@@ -1380,6 +1380,7 @@ bool MainWindow::syncFastAPIRemoteVersion(int remoteVersion, const QString& reas
     }
     statusBar()->showMessage(tr("已同步远程版本%1（%2）").arg(fastapi_model_version).arg(reason), 4000);
     updateCollabPanelUi();
+    QApplication::processEvents();
     return true;
 }
 
@@ -1395,18 +1396,19 @@ bool MainWindow::applyFastAPIRemoteSat(int remoteVersion, const QString& satCont
     const GLWidget::ViewState viewState = curWindow->getViewState();
     curWindow->clear();
     if (!restoreFastAPIModelFromSat(satContent)) {
-        CollabSession::instance().onApplyEnd();
+        CollabSession::instance().rollbackApply();
         return false;
     }
     curWindow->setViewState(viewState);
     CollabSession::instance().onApplyEnd();
 
-    fastapi_model_version = remoteVersion;
+    fastapi_model_version = CollabSession::instance().modelVersion();
     fastapi_pending_remote_version = 0;
     setCurrentPartName(fastapi_project_name);
     curWindow->setIsModified(false);
     statusBar()->showMessage(tr("已同步远程版本%1（%2）").arg(fastapi_model_version).arg(reason), 4000);
     updateCollabPanelUi();
+    QApplication::processEvents();
     return true;
 }
 
@@ -1544,20 +1546,29 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
     }
 
     if (messageType == "submit_rejected") {
+        auto& session = CollabSession::instance();
         const QString requestId = root.value("request_id").toString();
-        if (!requestId.isEmpty() && requestId == fastapiPendingSubmitRequestId) {
-            fastapiSubmitInFlight = false;
-            fastapiLocalDirtyDuringSubmit = false;
-            fastapiPendingSubmitRequestId.clear();
+
+        if (!requestId.isEmpty() && requestId == session.submitRequestId()) {
+            session.rollbackSubmit();
         }
 
         const int latestVersion = root.value("latest_version").toInt(0);
-        if (latestVersion > fastapi_model_version) {
-            fastapi_pending_remote_version =
-                fastapi_pending_remote_version > latestVersion ? fastapi_pending_remote_version : latestVersion;
+        if (latestVersion > session.modelVersion()) {
+            session.onSubmitRejected(latestVersion);
+        } else {
+            session.onSubmitRejected(session.modelVersion());
         }
-        CollabSession::instance().onSubmitRejected();
-        statusBar()->showMessage(tr("Collaborative submit was rejected: %1").arg(root.value("detail").toString()), 6000);
+
+        const QJsonObject conflictContent = root.value("content").toObject();
+        const QString conflictSat = conflictContent.value("sat").toString();
+        if (!conflictSat.isEmpty()) {
+            statusBar()->showMessage(
+                tr("协作提交被拒绝：%1（冲突版本 %2）").arg(root.value("detail").toString()).arg(latestVersion),
+                6000);
+        } else {
+            statusBar()->showMessage(tr("Collaborative submit was rejected: %1").arg(root.value("detail").toString()), 6000);
+        }
         updateCollabPanelUi();
         return;
     }
@@ -1580,32 +1591,30 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
     if (remoteVersion <= 0) {
         return;
     }
+
+    auto& session = CollabSession::instance();
     const QString requestId = root.value("request_id").toString();
-    const bool acceptedOwnSubmit = !requestId.isEmpty() && requestId == fastapiPendingSubmitRequestId;
+    const bool acceptedOwnSubmit = !requestId.isEmpty() && requestId == session.submitRequestId();
 
     if (acceptedOwnSubmit) {
-        fastapiSubmitInFlight = false;
-        fastapiPendingSubmitRequestId.clear();
-        fastapi_model_version = remoteVersion;
-        fastapi_pending_remote_version = 0;
-        if (!fastapiLocalDirtyDuringSubmit && curWindow != nullptr) {
+        session.onSubmitAccepted(remoteVersion);
+        fastapi_model_version = session.modelVersion();
+        fastapi_pending_remote_version = session.pendingRemoteVersion();
+        if (!session.isLocalDirtyDuringSubmit() && curWindow != nullptr) {
             curWindow->setIsModified(false);
         }
         if (!fastapi_project_name.isEmpty()) {
             setCurrentPartName(fastapi_project_name);
         }
-        const bool publishAgain = fastapiLocalDirtyDuringSubmit;
-        fastapiLocalDirtyDuringSubmit = false;
-        CollabSession::instance().onSubmitAccepted(remoteVersion);
         updateCollabPanelUi();
         statusBar()->showMessage(tr("Collaborative snapshot accepted as version %1").arg(fastapi_model_version), 2500);
-        if (publishAgain) {
+        if (session.isLocalDirtyDuringSubmit()) {
             scheduleFastAPIAutoPublish(tr("local-change-after-ack"));
         }
         return;
     }
 
-    if (remoteVersion <= fastapi_model_version) {
+    if (remoteVersion <= session.modelVersion()) {
         return;
     }
 
@@ -1616,33 +1625,46 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
         return;
     }
 
-    if (fastapiSubmitInFlight || curWindow->getIsModified()) {
-        fastapi_pending_remote_version =
-            fastapi_pending_remote_version > remoteVersion ? fastapi_pending_remote_version : remoteVersion;
-        CollabSession::instance().onRemotePending(remoteVersion);
+    const bool windowDirty = curWindow->getIsModified();
+
+    if (session.isSubmitInFlight() || windowDirty) {
+        session.onRemotePending(remoteVersion);
+        fastapi_pending_remote_version = session.pendingRemoteVersion();
         statusBar()->showMessage(
-            tr("检测到远程新版本%1，当前有未保存修改，已进入待同步队列").arg(fastapi_pending_remote_version),
+            tr("检测到远程新版本%1，当前有未保存修改，已进入待同步队列").arg(session.pendingRemoteVersion()),
             5000);
         updateCollabPanelUi();
         return;
     }
 
     if (!fastapiAutoFollowRemote) {
-        fastapi_pending_remote_version =
-            fastapi_pending_remote_version > remoteVersion ? fastapi_pending_remote_version : remoteVersion;
-        CollabSession::instance().onRemotePending(remoteVersion);
-        statusBar()->showMessage(tr("检测到远程新版本%1，已等待你手动应用").arg(fastapi_pending_remote_version), 5000);
+        session.onRemotePending(remoteVersion);
+        fastapi_pending_remote_version = session.pendingRemoteVersion();
+        statusBar()->showMessage(tr("检测到远程新版本%1，已等待你手动应用").arg(session.pendingRemoteVersion()), 5000);
         updateCollabPanelUi();
         return;
     }
 
+    // 自动应用远端快照
     const QString reason = root.value("trigger").toString("broadcast");
+    CollabSession::ApplyDecision applyDecision = session.tryBeginApplyRemote(remoteVersion, reason);
+    if (applyDecision.kind != CollabSession::ApplyDecision::Allow) {
+        session.onRemotePending(remoteVersion);
+        statusBar()->showMessage(
+            tr("远端版本%1 到达但无法自动应用：%2").arg(remoteVersion).arg(applyDecision.reasonTr),
+            5000);
+        updateCollabPanelUi();
+        return;
+    }
+
     if (!satContent.isEmpty()) {
         applyFastAPIRemoteSat(remoteVersion, satContent, reason);
     } else {
         syncFastAPIRemoteVersion(remoteVersion, reason);
     }
-    CollabSession::instance().onRemoteApplied(remoteVersion);
+    session.onRemoteApplied(remoteVersion);
+    fastapi_model_version = session.modelVersion();
+    fastapi_pending_remote_version = session.pendingRemoteVersion();
 }
 
 void MainWindow::addWindow() {
@@ -2632,8 +2654,8 @@ void MainWindow::loadFile(const QString& fileName) {
                     } else {
                         fastapi_project_id = created->id;
                         fastapi_project_name = fileName;
-                        fastapi_model_version = 0;
                         reconnectFastAPISync();
+                        CollabSession::instance().setModelVersion(0);
                         setCurrentPartName(fileName);
                         statusBar()->showMessage(tr("已创建并加入协作项目（当前无版本，请先保存模型）"), 4000);
                         isRead = true;
@@ -2652,8 +2674,8 @@ void MainWindow::loadFile(const QString& fileName) {
                     if (client.lastStatusCode() == 404) {
                         fastapi_project_id = project->id;
                         fastapi_project_name = fileName;
-                        fastapi_model_version = 0;
                         reconnectFastAPISync();
+                        CollabSession::instance().setModelVersion(0);
                         setCurrentPartName(fileName);
                         statusBar()->showMessage(tr("已加入协作项目（当前无版本，请先保存模型）"), 4000);
                         isRead = true;
@@ -2663,8 +2685,8 @@ void MainWindow::loadFile(const QString& fileName) {
                 } else if (restoreFastAPIModelFromSat(model->sat)) {
                     fastapi_project_id = project->id;
                     fastapi_project_name = fileName;
-                    fastapi_model_version = model->version;
                     reconnectFastAPISync();
+                    CollabSession::instance().setModelVersion(model->version);
                     isRead = true;
                 }
             }
@@ -2676,23 +2698,23 @@ void MainWindow::loadFile(const QString& fileName) {
 #ifndef QT_NO_CURSOR
     QGuiApplication::restoreOverrideCursor();
 #endif
-    if (isRead) {
-        curWindow->setIsModified(false);
-        if (checkedAct == setACISModeAct) {
-            disconnectFastAPISync();
-            fastapi_project_id.clear();
-            fastapi_project_name.clear();
-            fastapi_model_version = 0;
-            setCurrentFile(fileName);
-            statusBar()->showMessage(tr("文件已导入"), 2000);
-        } else if (checkedAct == setNEO4JModeAct) {
-            disconnectFastAPISync();
-            fastapi_project_id.clear();
-            fastapi_project_name.clear();
-            fastapi_model_version = 0;
-            fastapi_pending_remote_version = 0;
-            setCurrentPartName(fileName);
-            statusBar()->showMessage(tr("零件已导入(neo4j)"), 2000);
+        if (isRead) {
+            curWindow->setIsModified(false);
+            if (checkedAct == setACISModeAct) {
+                disconnectFastAPISync();
+                fastapi_project_id.clear();
+                fastapi_project_name.clear();
+                CollabSession::instance().setModelVersion(0);
+                setCurrentFile(fileName);
+                statusBar()->showMessage(tr("文件已导入"), 2000);
+            } else if (checkedAct == setNEO4JModeAct) {
+                disconnectFastAPISync();
+                fastapi_project_id.clear();
+                fastapi_project_name.clear();
+                CollabSession::instance().setModelVersion(0);
+                CollabSession::instance().setPendingRemoteVersion(0);
+                setCurrentPartName(fileName);
+                statusBar()->showMessage(tr("零件已导入(neo4j)"), 2000);
         } else if (checkedAct == setFASTAPIModeAct) {
             setCurrentPartName(fileName);
             statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(fastapi_model_version), 3000);
@@ -2762,8 +2784,8 @@ void MainWindow::loadFile(const QString& partName, const int generation) {
                 } else if (restoreFastAPIModelFromSat(model->sat)) {
                     fastapi_project_id = project->id;
                     fastapi_project_name = partName;
-                    fastapi_model_version = model->version;
                     reconnectFastAPISync();
+                    CollabSession::instance().setModelVersion(model->version);
                     isRead = true;
                 }
             }
@@ -2779,13 +2801,13 @@ void MainWindow::loadFile(const QString& partName, const int generation) {
         curWindow->setIsModified(false);
         setCurrentPartName(partName);
         if (checkedAct == setFASTAPIModeAct) {
-            statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(fastapi_model_version), 3000);
+            statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(CollabSession::instance().modelVersion()), 3000);
         } else {
             disconnectFastAPISync();
             fastapi_project_id.clear();
             fastapi_project_name.clear();
-            fastapi_model_version = 0;
-            fastapi_pending_remote_version = 0;
+            CollabSession::instance().setModelVersion(0);
+            CollabSession::instance().setPendingRemoteVersion(0);
             statusBar()->showMessage(tr("零件已导入(neo4j)"), 2000);
         }
         updateCollabPanelUi();
@@ -2881,9 +2903,10 @@ bool MainWindow::saveFile(const QString& fileName) {
                             const QString satContent = QString::fromUtf8(satFile.readAll());
                             satFile.close();
 
+                            auto& session = CollabSession::instance();
                             std::optional<int> baseVersion;
-                            if (fastapi_project_id == project->id && fastapi_model_version > 0) {
-                                baseVersion = fastapi_model_version;
+                            if (fastapi_project_id == project->id && session.modelVersion() > 0) {
+                                baseVersion = session.modelVersion();
                             }
 
                             auto newVersion = client.saveModel(project->id, satContent, baseVersion);
@@ -2917,9 +2940,9 @@ bool MainWindow::saveFile(const QString& fileName) {
                                                 curWindow->setViewState(viewState);
                                                 fastapi_project_id = project->id;
                                                 fastapi_project_name = fileName;
-                                                fastapi_model_version = latest->version;
-                                                fastapi_pending_remote_version = 0;
                                                 reconnectFastAPISync();
+                                                session.setModelVersion(latest->version);
+                                                session.setPendingRemoteVersion(0);
                                                 errorMessage.clear();
                                             }
                                         }
@@ -2934,9 +2957,9 @@ bool MainWindow::saveFile(const QString& fileName) {
                                             } else {
                                                 fastapi_project_id = project->id;
                                                 fastapi_project_name = fileName;
-                                                fastapi_model_version = *retriedVersion;
-                                                fastapi_pending_remote_version = 0;
                                                 reconnectFastAPISync();
+                                                session.setModelVersion(*retriedVersion);
+                                                session.setPendingRemoteVersion(0);
                                                 errorMessage.clear();
                                             }
                                         }
@@ -2963,9 +2986,9 @@ bool MainWindow::saveFile(const QString& fileName) {
                                                 } else {
                                                     fastapi_project_id = forkProject->id;
                                                     fastapi_project_name = newProjectName.trimmed();
-                                                    fastapi_model_version = *forkVersion;
-                                                    fastapi_pending_remote_version = 0;
                                                     reconnectFastAPISync();
+                                                    session.setModelVersion(*forkVersion);
+                                                    session.setPendingRemoteVersion(0);
                                                     errorMessage.clear();
                                                 }
                                             }
@@ -2977,9 +3000,9 @@ bool MainWindow::saveFile(const QString& fileName) {
                             } else {
                                 fastapi_project_id = project->id;
                                 fastapi_project_name = fileName;
-                                fastapi_model_version = *newVersion;
-                                fastapi_pending_remote_version = 0;
                                 reconnectFastAPISync();
+                                session.setModelVersion(*newVersion);
+                                session.setPendingRemoteVersion(0);
                             }
                         }
                     }
@@ -3002,21 +3025,23 @@ bool MainWindow::saveFile(const QString& fileName) {
         disconnectFastAPISync();
         fastapi_project_id.clear();
         fastapi_project_name.clear();
-        fastapi_model_version = 0;
+        // session 状态已在 disconnectFastAPISync() → onDisconnected() 中清零
+        fastapi_model_version = CollabSession::instance().modelVersion();
         setCurrentFile(fileName);
         statusBar()->showMessage(tr("文件已保存"), 2000);
     } else if (checkedAct == setFASTAPIModeAct) {
+        auto& session = CollabSession::instance();
         setCurrentPartName(fileName);
-        statusBar()->showMessage(tr("零件已保存(FastAPI)，版本%1").arg(fastapi_model_version), 3000);
-        if (fastapiAutoFollowRemote && fastapi_pending_remote_version > fastapi_model_version && !curWindow->getIsModified()) {
+        statusBar()->showMessage(tr("零件已保存(FastAPI)，版本%1").arg(session.modelVersion()), 3000);
+        if (fastapiAutoFollowRemote && session.pendingRemoteVersion() > session.modelVersion() && !curWindow->getIsModified()) {
             applyPendingRemoteVersion();
         }
     } else if (checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct) {
         disconnectFastAPISync();
         fastapi_project_id.clear();
         fastapi_project_name.clear();
-        fastapi_model_version = 0;
-        fastapi_pending_remote_version = 0;
+        fastapi_model_version = CollabSession::instance().modelVersion();
+        fastapi_pending_remote_version = CollabSession::instance().pendingRemoteVersion();
         setCurrentPartName(fileName);
         statusBar()->showMessage(tr("零件已保存(neo4j)"), 2000);
     } else {

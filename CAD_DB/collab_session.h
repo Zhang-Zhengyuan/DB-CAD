@@ -2,36 +2,14 @@
 
 #include <QString>
 
+#include <QtGlobal>
+#include <QUuid>
+
 // CollabSession — 协作状态机
-// 
-// 转移入口:
-//   onUserEdit()              notifyModelChangedForCollaboration 入口
-//   onSubmitStarted()         submitFastAPIModelOverSocket 入口
-//   onSubmitAccepted()        ws_msg model_saved (自己的 request_id 匹配)
-//   onSubmitRejected()        ws_msg submit_rejected
-//   onRemotePending()         ws_msg model_saved (别人的,或 pv 落库)
-//   onRemoteApplied()         syncFastAPIRemoteVersion / applyFastAPIRemoteSat 完成
-//   onApplyStart()            restoreFastAPIModelFromSat 入口
-//   onApplyEnd()              restoreFastAPIModelFromSat RAII 退出
-//   onHttpPublishStart()      publishFastAPIModelSnapshot(true) 入口
-//   onHttpPublishEnd()        publishFastAPIModelSnapshot(true) 出口
-//   onReconnect()             reconnectFastAPISync 入口
-//   onProjectOpened()         fastapi_project_id 由空变非空
-//   onProjectCleared()        fastapi_project_id 由非空变空
-//   onDisconnected()          disconnectFastAPISync 入口
-//   onUserEditDuringInFlight() notifyChanged 在 in_flight=true 期间触发
 //
-// 状态:
-//   Disconnected                  初始; WS 未连; 或项目未开
-//   Connected_NoProject           WS 连, project_id 为空
-//   Connected_Idle                project_id 非空, v=server v, 无 pv, 无 in_flight
-//   Connected_LocalDirty          用户改了, publishTimer 启动中, 即将 submit
-//   Connected_SubmitInFlight      submit 已发出, 等 server ack
-//   Connected_SubmitInFlight_Dirty submit 期间用户又改了
-//   Connected_RemotePending       server 有更高 v, 本地没脏
-//   Connected_RemotePending_Dirty server 有更高 v, 本地有脏
-//   Connected_ApplyingRemote      SAT 反序列化中
-//   Connected_PublishingDirect    HTTP PUT 直发中
+// 状态机持有所有协作状态（版本号、提交中标记等），是协作状态的唯一真相源。
+// MainWindow 通过决策接口（tryBegin*）询问能否操作，通过转移函数（on*）上报事件。
+// 旧字段 fastapi_* 保留为 mirror，由 mirrorToLegacy() 同步，禁止直接写入。
 
 class CollabSession {
 public:
@@ -49,7 +27,7 @@ public:
     };
 
     enum class Event {
-        WsMessage,                 // ws_msg 入口 (限频 dump 用, 转移由 type 分支决定)
+        WsMessage,
         UserEdit,
         UserEditDuringInFlight,
         SubmitStarted,
@@ -68,37 +46,61 @@ public:
         Bound
     };
 
+    struct SubmitDecision {
+        enum Kind {
+            Allow,
+            RejectNoProject,
+            RejectAlreadyInFlight,
+            RejectRemotePending,
+            RejectApplyingRemote,
+            RejectPublishingDirect
+        };
+        Kind kind = RejectNoProject;
+        QString reason;
+        int remoteVersion = 0;
+        QString requestId;
+    };
+
+    struct ApplyDecision {
+        enum Kind {
+            Allow,
+            RejectNoProject,
+            RejectAlreadyApplying,
+            RejectNoContent
+        };
+        Kind kind = RejectNoProject;
+        QString reason;
+        QString reasonTr;
+    };
+
+    struct PublishDecision {
+        enum Kind {
+            Allow,
+            RejectNoProject,
+            RejectAlreadyPublishing,
+            RejectSubmitInFlight
+        };
+        Kind kind = RejectNoProject;
+        QString reason;
+    };
+
     State state() const { return state_; }
     const char* stateName() const;
     const char* eventName(Event e) const;
 
-    void bindLegacyFields(
-        int&    fastapi_model_version,
-        int&    fastapi_pending_remote_version,
-        QString& fastapiLastPublishReason,
-        QString& fastapiPendingSubmitRequestId,
-        bool&   fastapiSubmitInFlight,
-        bool&   fastapiLocalDirtyDuringSubmit,
-        bool&   fastapiApplyingRemoteSnapshot,
-        bool&   fastapiPublishingSnapshot
-    );
+    // 决策接口
+    SubmitDecision  tryBeginSubmit(const QString& reason);
+    void            rollbackSubmit();
+    ApplyDecision   tryBeginApplyRemote(int remoteVersion, const QString& reason);
+    void            rollbackApply();
+    PublishDecision tryBeginHttpPublish();
+    void            rollbackHttpPublish();
 
-    // dump() 强制输出当前快照
-    QString dump(Event event) const;
-
-    void setDebugEnabled(bool enabled);
-    bool isDebugEnabled() const;
-    void setMinDumpIntervalMs(int intervalMs);
-    int  minDumpIntervalMs() const;
-    void setEventMinInterval(Event e, int intervalMs);
-    int  eventMinInterval(Event e) const;
-
-    // 转移函数 — mainwindow.cpp 在每个事件边界调用一次
+    // 转移函数
     void onUserEdit();
     void onUserEditDuringInFlight();
-    void onSubmitStarted();
     void onSubmitAccepted(int newRemoteVersion);
-    void onSubmitRejected();
+    void onSubmitRejected(int latestVersion);
     void onRemotePending(int remoteVersion);
     void onRemoteApplied(int appliedVersion);
     void onApplyStart();
@@ -110,17 +112,67 @@ public:
     void onProjectCleared();
     void onDisconnected();
 
-    // 校验 state_ 和旧字段是否一致; 不一致 qWarning 但不崩
-    void assertConsistent() const;
+    // 只读访问器
+    int  modelVersion() const              { return snapshot_.modelVersion; }
+    int  pendingRemoteVersion() const      { return snapshot_.pendingRemoteVersion; }
+    bool isSubmitInFlight() const          { return snapshot_.submitInFlight; }
+    bool isLocalDirtyDuringSubmit() const { return snapshot_.localDirtyDuringSubmit; }
+    bool isApplyingRemoteSnapshot() const  { return snapshot_.applyingRemoteSnapshot; }
+    bool isPublishingSnapshot() const      { return snapshot_.publishingSnapshot; }
+    const QString& submitRequestId() const       { return snapshot_.submitRequestId; }
+    const QString& lastPublishReason() const    { return snapshot_.lastPublishReason; }
 
+    // 状态写入接口
+    void setModelVersion(int v);
+    void setPendingRemoteVersion(int pv);
+    void setLastPublishReason(const QString& reason);
+
+    // 旧字段绑定（兼容层）
+    void bindLegacyFields(
+        int&    fastapi_model_version,
+        int&    fastapi_pending_remote_version,
+        QString& fastapiLastPublishReason,
+        QString& fastapiPendingSubmitRequestId,
+        bool&   fastapiSubmitInFlight,
+        bool&   fastapiLocalDirtyDuringSubmit,
+        bool&   fastapiApplyingRemoteSnapshot,
+        bool&   fastapiPublishingSnapshot
+    );
+
+    // 调试接口
+    QString dump(Event event) const;
+    void setDebugEnabled(bool enabled);
+    bool isDebugEnabled() const;
+    void setMinDumpIntervalMs(int intervalMs);
+    int  minDumpIntervalMs() const;
+    void setEventMinInterval(Event e, int intervalMs);
+    int  eventMinInterval(Event e) const;
+
+    void assertConsistent() const;
     static CollabSession& instance();
 
 private:
     CollabSession() = default;
+
+    struct Snapshot {
+        int  modelVersion = 0;
+        int  pendingRemoteVersion = 0;
+        QString submitRequestId;
+        QString lastPublishReason;
+        bool submitInFlight = false;
+        bool localDirtyDuringSubmit = false;
+        bool applyingRemoteSnapshot = false;
+        bool publishingSnapshot = false;
+    };
+
+    void transition(State newState, Event event);
+    void mirrorToLegacy() const;
+
     State state_ = State::Disconnected;
-    bool  debug_enabled_ = true;
-    int   min_dump_interval_ms_ = 0;
-    int   event_min_interval_ms_[17] = {0};
+    Snapshot snapshot_;
+    bool debug_enabled_ = true;
+    int  min_dump_interval_ms_ = 0;
+    int  event_min_interval_ms_[17] = {0};
 
     int*     fastapi_model_version_ref_              = nullptr;
     int*     fastapi_pending_remote_version_ref_     = nullptr;
@@ -133,15 +185,14 @@ private:
 
     mutable qint64 last_dump_ms_[17] = {0};
 
-    // 内部: 计算 "如果 mainwindow 旧字段一致, 当前应该是哪个 state"
     CollabSession::State inferStateFromLegacy() const;
     void  emitDump(Event event, bool force);
     bool  isBound() const;
-    static bool isLocalDirtyFromUI();  // 由 mainwindow 通过 setIsLocalDirtyFromUI 设置
+    static bool isLocalDirtyFromUI();
+    static const char* stateNameFor(State s);
 };
 
 
-// RAII 守卫: 进入反序列化区间时设 apply 状态, 退出时回归
 class CollabSessionApplyRemoteGuard {
 public:
     CollabSessionApplyRemoteGuard();

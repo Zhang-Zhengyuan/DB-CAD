@@ -194,8 +194,18 @@ private:
     QString fastapi_project_id;
     QString fastapi_project_name;
     QString fastapi_client_id;
+    // 以下字段为 mirror，由 CollabSession::mirrorToLegacy() 同步，禁止直接写入
+    // @{
     int fastapi_model_version = 0;
     int fastapi_pending_remote_version = 0;
+    bool fastapiApplyingRemoteSnapshot = false;
+    bool fastapiPublishingSnapshot = false;
+    bool fastapiSubmitInFlight = false;
+    bool fastapiLocalDirtyDuringSubmit = false;
+    QString fastapiLastPublishReason;
+    QString fastapiPendingSubmitRequestId;
+    // @}
+    // 协作基础设施（非状态，不归 CollabSession 管）
     QHash<QString, QString> fastapi_collaborators;
     QWebSocket* fastapiSyncSocket = nullptr;
     QTimer* fastapiSyncTimer = nullptr;
@@ -203,12 +213,6 @@ private:
     QTimer* fastapiReconnectTimer = nullptr;
     QTimer* fastapiPublishTimer = nullptr;
     bool fastapiAutoFollowRemote = true;
-    bool fastapiApplyingRemoteSnapshot = false;
-    bool fastapiPublishingSnapshot = false;
-    bool fastapiSubmitInFlight = false;
-    bool fastapiLocalDirtyDuringSubmit = false;
-    QString fastapiLastPublishReason;
-    QString fastapiPendingSubmitRequestId;
 
     QDockWidget* collabDock = nullptr;
     QLabel* collabConnectionLabel = nullptr;
