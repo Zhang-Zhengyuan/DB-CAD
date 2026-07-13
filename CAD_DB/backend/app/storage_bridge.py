@@ -172,6 +172,12 @@ class StorageBridgeClient:
         base_version: int | None,
     ) -> VersionRecord:
         encoded = quote(project_id, safe="")
+        latest = self.get_latest_version_or_none(project_id)
+        print(f"[storage_bridge.create_model_version] project_id={project_id} base_version_in={base_version} latest_seen={latest.version if latest else None}", flush=True)
+        if base_version is None and latest is not None:
+            base_version = latest.version
+            print(f"[storage_bridge.create_model_version] project_id={project_id} auto-set base_version={base_version} from latest", flush=True)
+        print(f"[storage_bridge.create_model_version] POST /projects/{encoded}/models base_version={base_version} author={author}", flush=True)
         response = self._request(
             "POST",
             f"/projects/{encoded}/models",
@@ -181,6 +187,7 @@ class StorageBridgeClient:
                 "base_version": base_version,
             },
         )
+        print(f"[storage_bridge.create_model_version] POST /projects/{encoded}/models status={response.status_code}", flush=True)
         try:
             data = response.json()
         except Exception as ex:

@@ -9,7 +9,13 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
+#include <QThread>
+
+#include <cstdio>
+#include <exception>
+#include <stdexcept>
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QMenuBar>
@@ -19,6 +25,7 @@
 #include <QStringConverter>
 #include <QSettings>
 #include <QScopedValueRollback>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QStatusBar>
 #include <QTemporaryFile>
@@ -355,12 +362,18 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
         fastapiSubmitInFlight,
         fastapiLocalDirtyDuringSubmit,
         fastapiApplyingRemoteSnapshot,
-        fastapiPublishingSnapshot
+        fastapiPublishingSnapshot,
+        fastapiLocalDirty
     );
     qDebug().noquote() << "[CollabSession] bound:" << CollabSession::instance().dump(CollabSession::Event::Bound);
     CollabSession::instance().setDebugEnabled(true);
     CollabSession::instance().setMinDumpIntervalMs(0);
     CollabSession::instance().setEventMinInterval(CollabSession::Event::WsMessage, 200);
+
+    // 永久启用实体变更追踪：每次 addEntity/removeEntity/modifyEntity 都会记录到 pendingEntityChanges，
+    // 直到 publishFastAPIAutoSnapshot / submitEntityGraphIncremental 把变更推到服务器并清空列表。
+    // 这是 entity_graph 增量提交路径生效的前提。
+    beginEntityChangeTracking();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -981,6 +994,13 @@ bool MainWindow::restoreFastAPIModelFromSat(const QString& satContent) {
     API_END;
     fclose(f);
 
+    qDebug().noquote() << "[Collab] restoreFastAPIModelFromSat: after api_restore_entity_list el.count()=" << el.count();
+    for (int i = 0; i < el.count(); i++) {
+        ENTITY* e = el[i];
+        qDebug().noquote() << "[Collab] restoreFastAPIModelFromSat: entity[" << i << "] ptr=" << e
+                           << "isBODY=" << (e ? is_BODY(e) : 0);
+    }
+
     if (el.count() == 0) {
         acis_get_noattrib_toplevel_active_entities(el);
     }
@@ -994,6 +1014,97 @@ bool MainWindow::restoreFastAPIModelFromSat(const QString& satContent) {
         curWindow->addEntity(el[i], tr("导入(FastAPI)实体%1").arg(i).toStdString(), -1);
     }
     curWindow->updateMeshData();
+    return true;
+}
+
+// Pull apply 入口：clear 本地画布 + 整个 SAT 文本替换。
+// 跟 master 分支 applyFastAPIRemoteSat 完全等价（除了我们额外把版本号更新交给 caller）。
+// 冲突合并：submit_rejected 时会备份本地 SAT 到 fastapiConflictLocalSatBackup，
+// Pull 应答到达后，如果备份存在，在 restore 完成后弹出对话框让用户选择如何处理。
+bool MainWindow::applyRemoteSatSnapshot(const QString& satContent, const QString& reason) {
+    Q_UNUSED(reason);
+    if (curWindow == nullptr) {
+        return false;
+    }
+    // 保存视角，避免 apply 后镜头跳回原点。
+    const GLWidget::ViewState viewState = curWindow->getViewState();
+    curWindow->clear();
+
+    // 在 restore 之前把 fastapiApplyingRemoteSnapshot 设为 true，这样 restore 过程中
+    // 的一切 addEntity/removeEntity 都不会被记录到 pendingEntityChanges。
+    // 注意：restoreFastAPIModelFromSat 内部也会设一次（QScopedValueRollback），双重保险。
+    CollabSession::instance().onApplyStart();
+
+    if (!restoreFastAPIModelFromSat(satContent)) {
+        CollabSession::instance().onApplyEnd();
+        return false;
+    }
+    CollabSession::instance().onApplyEnd();
+
+    curWindow->setViewState(viewState);
+
+    // 冲突合并：submit_rejected 时备份了本地 SAT，Pull 到达后 offer 给用户。
+    if (!fastapiConflictLocalSatBackup.isEmpty() && !isShowingConflictMergeDialog) {
+        isShowingConflictMergeDialog = true;
+        QString backup = fastapiConflictLocalSatBackup;
+        fastapiConflictLocalSatBackup.clear();
+
+        int choice = QMessageBox::question(
+            this,
+            tr("冲突合并"),
+            tr("您的本地修改与远端版本冲突（远端已被其他客户端更新）。\n\n"
+               "是否将您本地的修改合并到最新版本？\n"
+               "  • 选择「Yes」：将本地修改追加到远端最新版本\n"
+               "  • 选择「No」：丢弃本地修改，只保留远端最新版本"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::Yes);
+
+        isShowingConflictMergeDialog = false;
+
+        if (choice == QMessageBox::Yes) {
+            // 把本地备份的 body 追加到 restore 后的画布中。
+            // 此时 isTrackingEntityChanges=true 但 CollabSession::isApplyingRemoteSnapshot()=false
+            // (apply 已结束)，所以 recordEntityAdded 会正常记录追加的 body 为新 ADD 变更。
+            // 但不要在这里触发 scheduleFastAPIAutoPublish，留给用户下一步操作。
+            if (!backup.isEmpty()) {
+                // 用和 restoreFastAPIModelFromSat 一样的模式：保持 QTemporaryFile 在作用域内，
+                // 避免 autoRemove 在 fopen 之前就把文件删了。
+                QScopedPointer<QTemporaryFile> tf(new QTemporaryFile(QDir::tempPath() + "/dbcad_merge_backup_XXXXXX.sat"));
+                tf->setAutoRemove(true);
+                if (tf->open()) {
+                    QByteArray backupBytes = backup.toUtf8();
+                    if (tf->write(backupBytes) == backupBytes.size()) {
+                        tf->flush();
+                        FILE* f = fopen(tf->fileName().toStdString().c_str(), "r");
+                        if (f) {
+                            ENTITY_LIST backupEl;
+                            API_BEGIN;
+                            api_save_version(2, 0);
+                            result = api_restore_entity_list(f, true, backupEl);
+                            API_END;
+                            fclose(f);
+                            if (backupEl.count() > 0) {
+                                for (int i = 0; i < backupEl.count(); i++) {
+                                    curWindow->addEntity(backupEl[i],
+                                        tr("冲突合并(本地)实体%1").arg(i).toStdString(), -1);
+                                }
+                                curWindow->updateMeshData();
+                                qDebug().noquote() << "[Collab] Conflict merge: added" << backupEl.count()
+                                                   << "backup bodies, total now:" << curWindow->getEntityTree().size();
+                            }
+                        }
+                    }
+                }
+            }
+            // 合并后的画布与远端版本不再一致，标记为 modified，这样用户下一步 Ctrl+S
+            // 或 Push 时会把合并结果推上去。
+            curWindow->setIsModified(true);
+        } else {
+            // 用户选择丢弃本地修改，保持 clear+restore 后的状态。
+            curWindow->setIsModified(false);
+        }
+    }
+
     return true;
 }
 
@@ -1022,10 +1133,459 @@ void MainWindow::disconnectFastAPISync() {
     updateCollabPanelUi();
 }
 
+// ========== 增量协作支持实现 ==========
+
+void MainWindow::beginEntityChangeTracking() {
+    isTrackingEntityChanges = true;
+    entityChangeTrackingStartTime = QDateTime::currentMSecsSinceEpoch();
+    pendingEntityChanges.clear();
+}
+
+void MainWindow::recordEntityAdded(const QString& uuid, const QString& name, const QString& entityType, int index, const QString& sat) {
+    if (!isTrackingEntityChanges) return;
+    MainWindow::EntityChange change;
+    change.uuid = uuid;
+    change.name = name;
+    change.entityType = entityType;
+    change.changeType = MainWindow::EntityChangeType::ADD;
+    change.entityIndex = index;
+    change.timestamp = QDateTime::currentMSecsSinceEpoch();
+    change.sat = sat;
+    pendingEntityChanges.append(change);
+    entityIndexToUuid[index] = uuid;
+}
+
+void MainWindow::recordEntityRemoved(int index) {
+    if (!isTrackingEntityChanges) return;
+    // apply remote snapshot 期间 Window::clear() 会触发本函数，需要过滤掉，避免
+    // 把"远端实体在 apply 时被 clear"错误地记成本地 REMOVE 变更。
+    auto& session = CollabSession::instance();
+    if (session.isApplyingRemoteSnapshot() || session.isPublishingSnapshot()) {
+        return;
+    }
+    QString uuid = entityIndexToUuid.value(index, "");
+    MainWindow::EntityChange change;
+    change.uuid = uuid;
+    change.name = "";
+    change.entityType = "";
+    change.changeType = MainWindow::EntityChangeType::REMOVE;
+    change.entityIndex = index;
+    change.timestamp = QDateTime::currentMSecsSinceEpoch();
+    pendingEntityChanges.append(change);
+    entityIndexToUuid.remove(index);
+}
+
+void MainWindow::recordEntityModified(int index) {
+    if (!isTrackingEntityChanges) return;
+    auto& session = CollabSession::instance();
+    if (session.isApplyingRemoteSnapshot() || session.isPublishingSnapshot()) {
+        return;
+    }
+    QString uuid = entityIndexToUuid.value(index, "");
+    if (uuid.isEmpty()) return;
+    MainWindow::EntityChange change;
+    change.uuid = uuid;
+    change.name = "";
+    change.entityType = "";
+    change.changeType = MainWindow::EntityChangeType::MODIFY;
+    change.entityIndex = index;
+    change.timestamp = QDateTime::currentMSecsSinceEpoch();
+    pendingEntityChanges.append(change);
+}
+
+QList<MainWindow::EntityChange> MainWindow::endEntityChangeTracking() {
+    isTrackingEntityChanges = false;
+    return pendingEntityChanges;
+}
+
+void MainWindow::clearEntityChanges() {
+    pendingEntityChanges.clear();
+    isTrackingEntityChanges = false;
+}
+
+QString MainWindow::exportEntityGraphToJson() {
+    if (curWindow == nullptr) return "{}";
+
+    QJsonObject root;
+    QJsonArray nodesArray;
+    QJsonArray relsArray;
+
+    const auto& entityTree = curWindow->getEntityTree();
+    for (const auto& eti : entityTree) {
+        QJsonObject node;
+        node["id"] = QString::fromStdString(eti.uuid);
+        QString entityType = QString::fromStdString(eti.name);
+        QJsonArray labels;
+        labels.append(entityType);
+        node["labels"] = labels;
+
+        // 实体属性
+        QJsonObject props;
+        props["index"] = eti.index;
+        props["name"] = QString::fromStdString(eti.name);
+        props["operatorType"] = static_cast<int>(eti.operatorType);
+        props["subOperatorType"] = eti.subOperatorType;
+
+        // 变换信息：SPAtransf 序列化。
+        // 这里只导出 translation 分量（3 个标量），接收端用 entity_graph 重建几何时不需要完整 4x4 矩阵。
+        QJsonArray transArr;
+        SPAvector tVec = eti.trans.translation();
+        transArr.append(tVec.x());
+        transArr.append(tVec.y());
+        transArr.append(tVec.z());
+        props["transform"] = transArr;
+
+        // 依赖信息
+        QJsonArray depsArr;
+        for (int dep : eti.index_base) {
+            depsArr.append(dep);
+        }
+        props["index_base"] = depsArr;
+
+        // 支持该实体的其他实体
+        QJsonArray supportArr;
+        for (int sup : eti.index_support) {
+            supportArr.append(sup);
+        }
+        props["index_support"] = supportArr;
+
+        props["visible"] = eti.visible;
+        props["displayType"] = static_cast<int>(eti.displayType);
+
+        node["props"] = props;
+        nodesArray.append(node);
+
+        // 记录索引到UUID的映射
+        entityIndexToUuid[eti.index] = QString::fromStdString(eti.uuid);
+    }
+
+    // 生成关系（基于依赖）
+    for (const auto& eti : entityTree) {
+        for (int depIdx : eti.index_base) {
+            QString depUuid = entityIndexToUuid.value(depIdx, "");
+            if (!depUuid.isEmpty() && !eti.uuid.empty()) {
+                QJsonObject rel;
+                rel["type"] = "DEPENDS_ON";
+                rel["start"] = QString::fromStdString(eti.uuid);
+                rel["end"] = depUuid;
+                relsArray.append(rel);
+            }
+        }
+    }
+
+    root["nodes"] = nodesArray;
+    root["rels"] = relsArray;
+
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+QString MainWindow::exportEntityChangesToJson(const QList<MainWindow::EntityChange>& changes) {
+    QJsonArray changesArray;
+    for (const auto& change : changes) {
+        QJsonObject obj;
+        obj["uuid"] = change.uuid;
+        obj["name"] = change.name;
+        obj["entityType"] = change.entityType;
+        switch (change.changeType) {
+            case MainWindow::EntityChangeType::ADD: obj["changeType"] = "ADD"; break;
+            case MainWindow::EntityChangeType::REMOVE: obj["changeType"] = "REMOVE"; break;
+            case MainWindow::EntityChangeType::MODIFY: obj["changeType"] = "MODIFY"; break;
+        }
+        obj["entityIndex"] = change.entityIndex;
+        obj["timestamp"] = change.timestamp;
+        // ADD 变更附带该 body 的 SAT 文本；接收端用 acis_restore_entity_list 重建后 addEntity。
+        // REMOVE/MODIFY 没有 sat 段。
+        if (!change.sat.isEmpty()) {
+            obj["sat"] = change.sat;
+        }
+        changesArray.append(obj);
+    }
+    QJsonObject root;
+    root["changes"] = changesArray;
+    root["trackingStartTime"] = entityChangeTrackingStartTime;
+    root["exportTime"] = QDateTime::currentMSecsSinceEpoch();
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+bool MainWindow::submitEntityGraphIncremental(const QString& entityGraphJson, const QString& changesJson, const QString& reason) {
+    auto& session = CollabSession::instance();
+    CollabSession::SubmitDecision decision = session.tryBeginSubmit(reason);
+
+    if (decision.kind != CollabSession::SubmitDecision::Allow) {
+        statusBar()->showMessage(decision.reason, 5000);
+        return false;
+    }
+
+    if (fastapiSyncSocket == nullptr || !fastapiSyncSocket->isValid()) {
+        session.rollbackSubmit();
+        statusBar()->showMessage(tr("协作通道未连接"), 5000);
+        return false;
+    }
+
+    const QString author = QString::fromStdString(fastapi_author).trimmed();
+    const QString requestId = decision.requestId;
+
+    // 后端持久化走 storage_bridge，bridge 端校验 content.sat 必须存在
+    // （与 submit_model 共享同一持久化路径）。所以即便走 entity_graph 增量提交，
+    // 也必须带一份完整的 SAT 全量文本作为 content.sat；接收端用 entity_graph 增量合并。
+    QString fullSat;
+    if (!exportCurrentModelToSat(&fullSat, nullptr) || fullSat.isEmpty()) {
+        session.rollbackSubmit();
+        statusBar()->showMessage(tr("导出本地模型 SAT 失败，无法推送"), 5000);
+        return false;
+    }
+    qDebug().noquote() << "[Collab] submitEntityGraphIncremental: fullSat.size=" << fullSat.size()
+                       << "entityGraphJson.size=" << entityGraphJson.size()
+                       << "changesJson.size=" << changesJson.size();
+
+    QJsonObject content;
+    content.insert("sat", fullSat);
+    const QJsonDocument entityGraphDoc = QJsonDocument::fromJson(entityGraphJson.toUtf8());
+    const QJsonDocument changesDoc = QJsonDocument::fromJson(changesJson.toUtf8());
+    if (entityGraphDoc.isObject()) {
+        content.insert("entity_graph", entityGraphDoc.object());
+    }
+    if (changesDoc.isObject()) {
+        content.insert("changes", changesDoc.object());
+    }
+
+    QJsonObject payload;
+    payload.insert("type", "submit_entity_graph");
+    payload.insert("project_id", fastapi_project_id);
+    payload.insert("request_id", requestId);
+    payload.insert("author", author.isEmpty() ? QString::fromUtf8("dbcad-exe") : author);
+    payload.insert("content", content);
+    payload.insert("reason", reason.isEmpty() ? QString::fromUtf8("local-change") : reason);
+    if (session.modelVersion() > 0) {
+        payload.insert("base_version", session.modelVersion());
+    } else {
+        payload.insert("base_version", QJsonValue::Null);
+    }
+
+    fastapiSyncSocket->sendTextMessage(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact)));
+    statusBar()->showMessage(tr("正在提交增量协作变更..."), 1500);
+    updateCollabPanelUi();
+    return true;
+}
+
+bool MainWindow::applyRemoteEntityGraphIncremental(const QString& remoteEntityGraphJson, const QString& remoteChangesJson, const QString& reason) {
+    qDebug().noquote() << "[Collab][DEBUG] >>> applyRemoteEntityGraphIncremental ENTER reason=" << reason
+                       << "entityGraphJson.size=" << remoteEntityGraphJson.size()
+                       << "changesJson.size=" << remoteChangesJson.size();
+    if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
+        qDebug().noquote() << "[Collab][DEBUG] <<< applyRemoteEntityGraphIncremental EXIT (no curWindow/project)";
+        return false;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(remoteEntityGraphJson.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        statusBar()->showMessage(tr("远端实体图解析失败"), 5000);
+        qDebug().noquote() << "[Collab][DEBUG] <<< applyRemoteEntityGraphIncremental EXIT (json parse fail)";
+        return false;
+    }
+
+    // 增量合并关键策略：
+    // - 收集本地所有 body uuid
+    // - 对每个远端 ADD 变更：如果 uuid 不在本地 → 用变更携带的 sat 文本 acis_restore 后 addEntity
+    // - 对每个远端 REMOVE 变更：保留本地新增（不删除本地未上传的实体）
+    // - 不 clear 本地画布
+    const auto& localTree = curWindow->getEntityTree();
+    QSet<QString> localUuids;
+    for (const auto& eti : localTree) {
+        localUuids.insert(QString::fromStdString(eti.uuid));
+    }
+    qDebug().noquote() << "[Collab][DEBUG] apply: localEntityCount=" << localTree.size();
+
+    int appliedAdd = 0;
+    int skippedAdd = 0;
+    int skippedRemoteRemove = 0;
+    int failedAdd = 0;
+
+    // 解析 changes（如果有）
+    if (!remoteChangesJson.isEmpty()) {
+        QJsonDocument cdoc = QJsonDocument::fromJson(remoteChangesJson.toUtf8());
+        if (cdoc.isObject()) {
+            const QJsonArray changes = cdoc.object().value("changes").toArray();
+            qDebug().noquote() << "[Collab][DEBUG] apply: changes.size=" << changes.size();
+            int changeIdx = 0;
+            for (const QJsonValue& v : changes) {
+                const QJsonObject ch = v.toObject();
+                const QString uuid = ch.value("uuid").toString();
+                const QString changeType = ch.value("changeType").toString();
+                qDebug().noquote() << "[Collab][DEBUG] apply: change[" << changeIdx << "] type=" << changeType << "uuid=" << uuid;
+                if (changeType == "ADD") {
+                    if (uuid.isEmpty() || localUuids.contains(uuid)) {
+                        // 本地已有该 uuid（可能是之前 apply 时加入的），跳过。
+                        qDebug().noquote() << "[Collab][DEBUG] apply: change[" << changeIdx << "] skip (uuid empty or local has it)";
+                        ++skippedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    const QString sat = ch.value("sat").toString();
+                    if (sat.isEmpty()) {
+                        // ADD 但没有 SAT 文本（提交方忘记塞），无法重建。
+                        qWarning() << "[Collab] ADD change missing 'sat' for uuid=" << uuid;
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    // 把 SAT 文本写到临时文件并恢复为 ENTITY_LIST，然后从 BODY 提取 top-level body addEntity。
+                    // 注意：之前用 QTemporaryFile + QFile out + acis_restore_entity_list(filename, ...) 三步，
+                    // 在 Windows 临时目录里 fopen_s 偶发失败 —— 怀疑是 OneDrive/防病毒扫描临时文件时短暂占用。
+                    // 现在改用一次性 fopen("wb") 写入 + fflush + fclose + fopen("rb") 再传给 acis_restore_entity_list(FILE*, ...)，
+                    // 减少文件状态被外部干扰的概率。
+                    QTemporaryFile satTmp(QDir::tempPath() + "/dbcad_apply_XXXXXX.sat");
+                    satTmp.setAutoRemove(true);
+                    if (!satTmp.open()) {
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    const QString satPath = satTmp.fileName();
+                    satTmp.close();
+                    // satTmp 在本 frame 结束前不会析构 → 文件不会被删除，但为了绕开 satTmp 的句柄关联
+                    // 直接用 C stdio 自己开。
+                    std::string satPathStd = satPath.toStdString();
+                    FILE* writeFile = nullptr;
+                    if (fopen_s(&writeFile, satPathStd.c_str(), "wb") != 0 || writeFile == nullptr) {
+                        qWarning().noquote() << "[Collab] fopen_s(wb) failed for path=" << satPath;
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    const QByteArray satBytes = sat.toUtf8();
+                    const size_t wroteBytes = std::fwrite(satBytes.constData(), 1, satBytes.size(), writeFile);
+                    std::fflush(writeFile);
+                    std::fclose(writeFile);
+                    writeFile = nullptr;
+                    if (wroteBytes != static_cast<size_t>(satBytes.size())) {
+                        qWarning().noquote() << "[Collab] sat fwrite short for uuid=" << uuid
+                                             << "wrote=" << wroteBytes << "expected=" << satBytes.size();
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    // 写完后立即显式校验文件确实存在且大小正确；line 35 log 提示可能存在 OneDrive
+                    // / 防病毒等外部进程短暂占用，给文件 SIZE 校验加一个短暂重试来容忍这种瞬态。
+                    bool fileReady = false;
+                    for (int attempt = 0; attempt < 20; ++attempt) {
+                        QFileInfo fi(satPath);
+                        if (fi.exists() && static_cast<size_t>(fi.size()) == static_cast<size_t>(satBytes.size())) {
+                            fileReady = true;
+                            break;
+                        }
+                        // Sleep 50ms 后重试（最多 1 秒容忍临时文件被防病毒扫描占用）。
+                        QThread::msleep(50);
+                    }
+                    if (!fileReady) {
+                        QFileInfo fi(satPath);
+                        qWarning().noquote() << "[Collab] sat temp file not ready for uuid=" << uuid
+                                             << "exists=" << fi.exists() << "size=" << fi.size()
+                                             << "expected=" << satBytes.size() << "path=" << satPath;
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    qDebug().noquote() << "[Collab][DEBUG] apply: change[" << changeIdx << "] before acis_restore, sat.size=" << sat.size();
+                    ENTITY_LIST restored;
+                    bool restoreOk = false;
+                    // 包裹 try/catch：acis_restore_entity_list 内部用 myerror() 抛 std::runtime_error
+                    // (例如打开临时 SAT 文件失败)，API_BEGIN/END 在 DBCAD 当前实现下不会捕获
+                    // std::exception，异常会一路穿透到 Qt WS 回调并触发 std::terminate → abort()。
+                    // 这里吞掉异常并计入 failedAdd，避免一个失败的 ADD 变更把整个客户端拖崩。
+                    FILE* readFile = nullptr;
+                    // 同样给"rb 打开"加短暂重试，Windows 上偶尔第一发 fopen_s 失败但第二发就能成功。
+                    bool opened = false;
+                    for (int attempt = 0; attempt < 20; ++attempt) {
+                        errno_t err = fopen_s(&readFile, satPathStd.c_str(), "rb");
+                        if (err == 0 && readFile != nullptr) { opened = true; break; }
+                        QThread::msleep(50);
+                    }
+                    if (!opened) {
+                        qWarning().noquote() << "[Collab] fopen_s(rb) failed after retries for path=" << satPath;
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    try {
+                        acis_restore_entity_list(restored, readFile, 2, 0, true);
+                        restoreOk = true;
+                    } catch (const std::exception& e) {
+                        qWarning().noquote() << "[Collab] acis_restore_entity_list threw for uuid=" << uuid
+                                             << "what=" << e.what();
+                        restored.clear();
+                    } catch (...) {
+                        qWarning().noquote() << "[Collab] acis_restore_entity_list threw unknown exception for uuid=" << uuid;
+                        restored.clear();
+                    }
+                    if (readFile != nullptr) {
+                        std::fclose(readFile);
+                    }
+                    qDebug().noquote() << "[Collab][DEBUG] apply: change[" << changeIdx << "] after acis_restore, count=" << restored.count();
+                    if (!restoreOk) {
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    if (restored.count() == 0) {
+                        qWarning() << "[Collab] acis_restore_entity_list produced 0 entities for uuid=" << uuid;
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    // 取第一个 top-level body 调 addEntity，让 ETI 注册到本地 tree。
+                    ENTITY* restoredEntity = restored[0];
+                    const QString name = ch.value("name").toString();
+                    qDebug().noquote() << "[Collab][DEBUG] apply: change[" << changeIdx << "] before addEntity, name=" << name;
+                    // 同样保护 addEntity：内部会调 updateMeshData → CreateMeshFromEntity → 任何
+                    // ACIS API 失败抛 std::exception 都可能穿透 WS 回调触发 abort。
+                    try {
+                        curWindow->addEntity(restoredEntity, name.toStdString(), 0);
+                    } catch (const std::exception& e) {
+                        qWarning().noquote() << "[Collab] addEntity threw for uuid=" << uuid
+                                             << "what=" << e.what();
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    } catch (...) {
+                        qWarning().noquote() << "[Collab] addEntity threw unknown exception for uuid=" << uuid;
+                        ++failedAdd;
+                        ++changeIdx;
+                        continue;
+                    }
+                    qDebug().noquote() << "[Collab][DEBUG] apply: change[" << changeIdx << "] after addEntity OK";
+                    localUuids.insert(uuid);
+                    ++appliedAdd;
+                } else if (changeType == "REMOVE") {
+                    // 永远保留本地新增（用户在本地加的、还没 push 的实体不能被远端强制删除）。
+                    ++skippedRemoteRemove;
+                }
+                ++changeIdx;
+                // MODIFY 当前不处理：接收端不需要实时同步属性变更（同步后会变 stale 但不影响显示）。
+            }
+        }
+    }
+
+    QString msg = tr("已应用远端增量：ADD=%1 跳过=%2 远端REMOVE保留本地=%3 失败=%4")
+        .arg(appliedAdd).arg(skippedAdd).arg(skippedRemoteRemove).arg(failedAdd);
+    statusBar()->showMessage(msg, 4000);
+    qDebug().noquote() << "[Collab][DEBUG] <<< applyRemoteEntityGraphIncremental EXIT:" << msg;
+    // 关键修复：只有真正至少成功 addEntity 了一个 ADD 变更才返回 true。返回 true 会让
+    // 上层 tryBeginApplyRemote 把 modelVersion 推到 remoteVersion；返回 false 则让上层
+    // 走 rollbackApply + onRemotePending，这样后续相同 remoteVersion 的 sync_now 应答
+    // 仍能被再次尝试（之前 failedAdd>0 但返回 true 导致 v 直接被推到 1，Pull 永远进不来）。
+    return appliedAdd > 0;
+}
+
 void MainWindow::requestFastAPISyncNow() {
+    qDebug().noquote() << "[Collab][DEBUG] >>> requestFastAPISyncNow socket=" << (fastapiSyncSocket ? "exists" : "null")
+                       << "valid=" << (fastapiSyncSocket && fastapiSyncSocket->isValid() ? "yes" : "no");
     if (fastapiSyncSocket != nullptr && fastapiSyncSocket->isValid()) {
         fastapiSyncSocket->sendTextMessage("sync_now");
         statusBar()->showMessage(tr("已请求服务器返回最新版本"), 1500);
+    } else {
+        qDebug().noquote() << "[Collab][DEBUG] <<< requestFastAPISyncNow EXIT (socket not valid, cannot send sync_now)";
     }
 }
 
@@ -1045,34 +1605,30 @@ void MainWindow::notifyModelChangedForCollaboration() {
         return;
     }
 
+    // 不再自动 publish / 自动 schedule：用户改动时只标记 LocalDirty，
+    // 由协作面板的「Push」按钮手动触发。详见 COLLABORATION_TECHNICAL_ROADMAP。
     if (session.pendingRemoteVersion() > session.modelVersion()) {
-        statusBar()->showMessage(tr("Remote version pending; resolve it before submitting local changes."), 4000);
+        statusBar()->showMessage(tr("远端有未拉取版本，请先点击「拉取(Pull)」再「推送(Push)」本地修改"), 4000);
         session.onRemotePending(session.pendingRemoteVersion());
-        updateCollabPanelUi();
-        return;
     }
-
     if (session.isSubmitInFlight()) {
         session.setLastPublishReason(tr("local-change"));
         session.onUserEditDuringInFlight();
-        updateCollabPanelUi();
-        return;
+    } else {
+        session.onUserEdit();
     }
-
-    session.onUserEdit();
-    scheduleFastAPIAutoPublish(tr("local-change"));
+    updateCollabPanelUi();
 }
 
 void MainWindow::scheduleFastAPIAutoPublish(const QString& reason) {
+    // 已废弃：不再使用 900ms 防抖定时器自动发布，保留此函数仅为兼容既有调用点，
+    // 内部直接转交给 publishFastAPIAutoSnapshot 即时执行（仅由 Push 按钮调用）。
     auto& session = CollabSession::instance();
 
     if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
         return;
     }
     if (session.isApplyingRemoteSnapshot() || session.isPublishingSnapshot()) {
-        return;
-    }
-    if (fastapiPublishTimer == nullptr) {
         return;
     }
     if (session.isSubmitInFlight()) {
@@ -1082,13 +1638,56 @@ void MainWindow::scheduleFastAPIAutoPublish(const QString& reason) {
         return;
     }
     if (session.pendingRemoteVersion() > session.modelVersion()) {
-        statusBar()->showMessage(tr("Remote version pending; resolve it before submitting local changes."), 4000);
+        statusBar()->showMessage(tr("远端有未拉取版本，请先点击「拉取(Pull)」再「推送(Push)」"), 4000);
         updateCollabPanelUi();
         return;
     }
 
     session.setLastPublishReason(reason);
-    fastapiPublishTimer->start();
+    publishFastAPIAutoSnapshot();
+}
+
+void MainWindow::onCollabPushButtonClicked() {
+    if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
+        statusBar()->showMessage(tr("未连接或未打开项目，无法推送"), 3000);
+        return;
+    }
+    auto& session = CollabSession::instance();
+    if (session.pendingRemoteVersion() > session.modelVersion()) {
+        QMessageBox::warning(this, tr("协作推送"), tr("远端有未拉取的版本（v%1 → v%2），请先点击「拉取(Pull)」再「推送(Push)」")
+            .arg(session.modelVersion()).arg(session.pendingRemoteVersion()));
+        return;
+    }
+    if (pendingEntityChanges.isEmpty()) {
+        statusBar()->showMessage(tr("没有未推送的本地修改"), 2000);
+        return;
+    }
+    // 直接调 publishFastAPIAutoSnapshot：它会优先用 entity_graph 路径，
+    // 把每个 ADD body 的独立 SAT 文本一并发出。
+    scheduleFastAPIAutoPublish(tr("manual-push"));
+}
+
+void MainWindow::onCollabPullButtonClicked() {
+    qDebug().noquote() << "[Collab][DEBUG] >>> onCollabPullButtonClicked ENTER curWindow=" << (curWindow ? "ok" : "null")
+                       << "fastapi_project_id=" << fastapi_project_id
+                       << "socket=" << (fastapiSyncSocket ? "exists" : "null")
+                       << "socketValid=" << (fastapiSyncSocket && fastapiSyncSocket->isValid() ? "yes" : "no");
+    if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
+        statusBar()->showMessage(tr("未连接或未打开项目，无法拉取"), 3000);
+        return;
+    }
+    auto& session = CollabSession::instance();
+    // 注意：不要在这里用 pendingRemoteVersion 判断"已是最新"。
+    // 用户主动点 Pull = "把 server 上当前最新的 entity_graph 拉下来"，即便本地
+    // pending == model == 0（首次进来没收到任何推送），也允许 Pull 去 server 取一次最新版本。
+    // 收到 entity_graph_saved 后若 remoteVersion <= modelVersion 自然会被忽略。
+    if (session.isSubmitInFlight()) {
+        statusBar()->showMessage(tr("本地正在提交，无法拉取，请稍后再试"), 3000);
+        return;
+    }
+    requestFastAPISyncNow();
+    statusBar()->showMessage(tr("已请求远端最新版本，请等待 entity_graph_saved 到达"), 3000);
+    qDebug().noquote() << "[Collab][DEBUG] <<< onCollabPullButtonClicked EXIT (sync_now sent)";
 }
 
 void MainWindow::publishFastAPIAutoSnapshot() {
@@ -1101,6 +1700,19 @@ void MainWindow::publishFastAPIAutoSnapshot() {
         return;
     }
 
+    // 优先使用增量模式
+    if (!pendingEntityChanges.isEmpty()) {
+        QString entityGraphJson = exportEntityGraphToJson();
+        QString changesJson = exportEntityChangesToJson(pendingEntityChanges);
+        QString reason = fastapiLastPublishReason.isEmpty() ? QString::fromUtf8("local-change") : fastapiLastPublishReason;
+        if (submitEntityGraphIncremental(entityGraphJson, changesJson, reason)) {
+            pendingEntityChanges.clear();
+            return;
+        }
+        // 如果增量提交失败，回退到SAT模式
+    }
+
+    // 回退到SAT全量模式
     publishFastAPIModelSnapshot(false);
 }
 
@@ -1110,8 +1722,25 @@ bool MainWindow::exportCurrentModelToSat(QString* satContent, QString* errorMess
     }
     satContent->clear();
 
-    ENTITY_LIST el;
-    acis_get_noattrib_toplevel_active_entities(el);
+    if (curWindow == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = tr("当前窗口为空。");
+        }
+        return false;
+    }
+
+    // 直接从 Window 的 entity_tree 获取实体列表，不再依赖 acis_get_noattrib_toplevel_active_entities()。
+    // 原因：api_restore_entity_list() 读取 SAT 后实体进入了 ACIS，但 acis_get_noattrib_toplevel_active_entities
+    // 仍然找不到已 restore 的实体（ACIS 内部状态不一致），导致协作 pull 后的实体在 export 时丢失。
+    // entity_tree 是 Qt 层维护的实体列表，始终准确。
+    ENTITY_LIST el = curWindow->getEntityList();
+    qDebug().noquote() << "[Collab] exportCurrentModelToSat: el.count()=" << el.count()
+                       << "(from entity_tree, not ACIS API)";
+    for (int i = 0; i < el.count(); i++) {
+        ENTITY* e = el[i];
+        qDebug().noquote() << "[Collab] exportCurrentModelToSat: entity[" << i << "] ptr=" << e
+                           << "isBODY=" << (e ? is_BODY(e) : 0);
+    }
     if (el.count() == 0) {
         if (errorMessage != nullptr) {
             *errorMessage = tr("当前无顶级活跃实体。");
@@ -1334,86 +1963,33 @@ void MainWindow::updateCollabPanelUi() {
 }
 
 void MainWindow::applyPendingRemoteVersion() {
-    if (fastapi_pending_remote_version <= fastapi_model_version) {
-        statusBar()->showMessage(tr("当前没有待同步版本"), 2000);
-        return;
-    }
-    if (curWindow != nullptr && curWindow->getIsModified()) {
-        QMessageBox::warning(this, tr("协作同步"), tr("当前有未保存修改，请先保存或放弃本地修改后再应用待同步版本。"));
-        return;
-    }
-    syncFastAPIRemoteVersion(fastapi_pending_remote_version, tr("manual-apply"));
-    updateCollabPanelUi();
+    // 已废弃：旧的 "待同步版本" 走的是 clear+restore 全量同步路径，与新的增量同步语义冲突。
+    // 保留此函数仅为兼容既有菜单项 / 信号连接，实际调用将引导用户改用 Pull 按钮。
+    statusBar()->showMessage(tr("请改用协作面板的「拉取(Pull)」按钮获取远端增量变更"), 4000);
 }
 
 bool MainWindow::syncFastAPIRemoteVersion(int remoteVersion, const QString& reason) {
-    if (curWindow == nullptr || remoteVersion <= 0 || fastapi_project_id.isEmpty()) {
-        return false;
-    }
-
-    BackendApiClient client(
-        QString::fromStdString(fastapi_base_url),
-        QString::fromStdString(fastapi_author),
-        QString::fromStdString(fastapi_password));
-    auto model = client.getModelVersion(fastapi_project_id, remoteVersion);
-    if (!model.has_value()) {
-        CollabSession::instance().rollbackApply();
-        statusBar()->showMessage(tr("远程同步失败：%1").arg(client.lastError()), 5000);
-        return false;
-    }
-
-    const GLWidget::ViewState viewState = curWindow->getViewState();
-    curWindow->clear();
-    if (!restoreFastAPIModelFromSat(model->sat)) {
-        CollabSession::instance().rollbackApply();
-        return false;
-    }
-    curWindow->setViewState(viewState);
-    CollabSession::instance().onApplyEnd();
-
-    fastapi_model_version = CollabSession::instance().modelVersion();
-    fastapi_pending_remote_version = 0;
-    setCurrentPartName(fastapi_project_name);
-    curWindow->setIsModified(false);
-    if (fastapiPublishTimer != nullptr) {
-        fastapiPublishTimer->stop();
-    }
-    statusBar()->showMessage(tr("已同步远程版本%1（%2）").arg(fastapi_model_version).arg(reason), 4000);
-    updateCollabPanelUi();
-    QApplication::processEvents();
-    return true;
+    // 已废弃：clear+restore 全量同步会清空本地所有未 push 的修改，与增量语义冲突。
+    // 同步被替换为 Pull 按钮驱动的 entity_graph 增量合并。
+    Q_UNUSED(remoteVersion);
+    Q_UNUSED(reason);
+    statusBar()->showMessage(tr("全量同步已禁用，请改用「拉取(Pull)」按钮"), 4000);
+    return false;
 }
 
 bool MainWindow::applyFastAPIRemoteSat(int remoteVersion, const QString& satContent, const QString& reason) {
-    if (curWindow == nullptr || remoteVersion <= 0 || fastapi_project_id.isEmpty() || satContent.isEmpty()) {
-        return false;
-    }
-
-    if (fastapiPublishTimer != nullptr) {
-        fastapiPublishTimer->stop();
-    }
-
-    const GLWidget::ViewState viewState = curWindow->getViewState();
-    curWindow->clear();
-    if (!restoreFastAPIModelFromSat(satContent)) {
-        CollabSession::instance().rollbackApply();
-        return false;
-    }
-    curWindow->setViewState(viewState);
-    CollabSession::instance().onApplyEnd();
-
-    fastapi_model_version = CollabSession::instance().modelVersion();
-    fastapi_pending_remote_version = 0;
-    setCurrentPartName(fastapi_project_name);
-    curWindow->setIsModified(false);
-    statusBar()->showMessage(tr("已同步远程版本%1（%2）").arg(fastapi_model_version).arg(reason), 4000);
-    updateCollabPanelUi();
-    QApplication::processEvents();
-    return true;
+    // 已废弃：见 syncFastAPIRemoteVersion 注释。
+    Q_UNUSED(remoteVersion);
+    Q_UNUSED(satContent);
+    Q_UNUSED(reason);
+    statusBar()->showMessage(tr("全量同步已禁用，请改用「拉取(Pull)」按钮"), 4000);
+    return false;
 }
 
 void MainWindow::reconnectFastAPISync() {
-    CollabSession::instance().onReconnect(!fastapi_project_id.isEmpty());
+    // 注意：不要在这里调 onReconnect —— 紧接着的 disconnectFastAPISync() 会通过
+    // onDisconnected() 把 state 又打回 Disconnected。state 转 Connected_Idle 的真正时机
+    // 是下面 connected lambda（socket 真连上时）。
     disconnectFastAPISync();
 
     if (fastapi_project_id.isEmpty() || fastapi_base_url.empty()) {
@@ -1450,24 +2026,27 @@ void MainWindow::reconnectFastAPISync() {
 
     connect(fastapiSyncSocket, &QWebSocket::textMessageReceived, this, &MainWindow::handleFastAPISyncMessage);
     connect(fastapiSyncSocket, &QWebSocket::connected, this, [this]() {
+        qDebug().noquote() << "[Collab][DEBUG] >>> WS connected lambda FIRED";
         statusBar()->showMessage(tr("FastAPI实时同步已连接"), 2000);
         if (fastapiReconnectTimer != nullptr) {
             fastapiReconnectTimer->stop();
         }
+        // onReconnect(true) 把 CollabSession state 转 Connected_Idle，确保 Pull 触发 sync_now
+        // 应答后 tryBeginApplyRemote 不会因 state_ == Disconnected 被拒。
+        // disconnectFastAPISync() 在 reconnectFastAPISync 入口处把它打回了 Disconnected，
+        // 这里必须重新转 Connected_Idle。
+        CollabSession::instance().onReconnect(!fastapi_project_id.isEmpty());
+        qDebug().noquote() << "[Collab][DEBUG] WS connected: onReconnect done, state=" << CollabSession::instance().dump(CollabSession::Event::WsMessage);
         setCollabConnectionState(tr("已连接"));
-        requestFastAPISyncNow();
-        if (fastapiSyncTimer != nullptr) {
-            fastapiSyncTimer->start();
-        }
+        // Git 语义：重连后不主动 sync_now，避免一连接就把远端的 entity_graph_saved 自动 apply 下来。
+        // 远端历史版本应等待用户主动点 Pull 才合并到本地画布。
+        // （详见 COLLABORATION_TECHNICAL_ROADMAP 的 Git-like 同步策略。）
         if (fastapiHeartbeatTimer != nullptr) {
             fastapiHeartbeatTimer->start();
         }
         updateCollabPanelUi();
     });
     connect(fastapiSyncSocket, &QWebSocket::disconnected, this, [this]() {
-        if (fastapiSyncTimer != nullptr) {
-            fastapiSyncTimer->stop();
-        }
         if (fastapiHeartbeatTimer != nullptr) {
             fastapiHeartbeatTimer->stop();
         }
@@ -1488,12 +2067,29 @@ void MainWindow::reconnectFastAPISync() {
 
 void MainWindow::handleFastAPISyncMessage(const QString& message) {
     qDebug().noquote() << CollabSession::instance().dump(CollabSession::Event::WsMessage);
+    qDebug().noquote() << "[Collab][DEBUG] >>> handleFastAPISyncMessage message.size=" << message.size();
+    // 最外层 try/catch 守卫：WS 回调里任何 C++ 异常如果穿透到 Qt event loop，
+    // 都会触发 std::terminate → abort()（参见 log_B.txt 中"打开文件失败"导致 B.exe crash 的根因）。
+    try {
+        handleFastAPISyncMessageImpl(message);
+    } catch (const std::exception& e) {
+        qWarning().noquote() << "[Collab] handleFastAPISyncMessage threw:" << e.what();
+        statusBar()->showMessage(tr("协作消息处理失败：%1").arg(QString::fromUtf8(e.what())), 5000);
+    } catch (...) {
+        qWarning().noquote() << "[Collab] handleFastAPISyncMessage threw unknown exception";
+        statusBar()->showMessage(tr("协作消息处理失败（未知异常）"), 5000);
+    }
+}
+
+void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
     if (fastapi_project_id.isEmpty()) {
+        qDebug().noquote() << "[Collab][DEBUG] <<< handleFastAPISyncMessage EXIT (empty fastapi_project_id)";
         return;
     }
 
     QAction* checkedAct = setModeActGroup ? setModeActGroup->checkedAction() : nullptr;
     if (checkedAct != setFASTAPIModeAct) {
+        qDebug().noquote() << "[Collab][DEBUG] <<< handleFastAPISyncMessage EXIT (not FASTAPI mode)";
         return;
     }
 
@@ -1545,36 +2141,225 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
         return;
     }
 
+    if (messageType == "submit_accepted") {
+        // Server 在 broadcast entity_graph_saved 时会 exclude_client_id=client_id，
+        // 然后单独给提交者发 submit_accepted { request_id, version }。client 必须
+        // 处理这条消息，否则 SubmitInFlight 状态永远清不掉。
+        auto& session = CollabSession::instance();
+        const QString requestId = root.value("request_id").toString();
+        const int acceptedVersion = root.value("version").toInt(0);
+        if (requestId.isEmpty() || requestId == session.submitRequestId()) {
+            session.onSubmitAccepted(acceptedVersion);
+            fastapi_model_version = session.modelVersion();
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            pendingEntityChanges.clear();
+            if (curWindow != nullptr) {
+                curWindow->setIsModified(false);
+            }
+            if (!fastapi_project_name.isEmpty()) {
+                setCurrentPartName(fastapi_project_name);
+            }
+            updateCollabPanelUi();
+            statusBar()->showMessage(tr("增量实体图已提交，版本 %1").arg(fastapi_model_version), 2500);
+        } else {
+            // 不匹配的 requestId：通常是别的客户端的 ack 被错误地投递到了这条 socket 上，
+            // 静默忽略，不改本地状态。
+            qDebug().noquote() << "[Collab] submit_accepted ignored (requestId mismatch) local="
+                                << session.submitRequestId() << "incoming=" << requestId;
+        }
+        return;
+    }
+
     if (messageType == "submit_rejected") {
         auto& session = CollabSession::instance();
         const QString requestId = root.value("request_id").toString();
+        const int latestVersion = root.value("latest_version").toInt(0);
 
         if (!requestId.isEmpty() && requestId == session.submitRequestId()) {
             session.rollbackSubmit();
         }
 
-        const int latestVersion = root.value("latest_version").toInt(0);
         if (latestVersion > session.modelVersion()) {
             session.onSubmitRejected(latestVersion);
         } else {
             session.onSubmitRejected(session.modelVersion());
         }
 
-        const QJsonObject conflictContent = root.value("content").toObject();
-        const QString conflictSat = conflictContent.value("sat").toString();
+        // 冲突自动处理：备份本地 SAT → Pull 最新版本 → 用户选择是否 merge 回来。
+        // 这样 A 的修改不会在 Pull 时被 clear() 永久丢失。
+        QString localSatBackup;
+        if (curWindow != nullptr) {
+            // 无论本地是否 dirty，都把当前 ACIS 模型内容备份出来。
+            // isLocalDirtyDuringSubmit=true 说明提交之后用户又做了改动（不在 pendingEntityChanges 里），
+            // 也应该一并备份，否则 Pull 后那些改动会丢失。
+            ENTITY_LIST el;
+            acis_get_noattrib_toplevel_active_entities(el);
+            if (el.count() > 0) {
+                exportCurrentModelToSat(&localSatBackup, nullptr);
+            }
+        }
+        fastapiConflictLocalSatBackup = localSatBackup;
+        const QString conflictDetail = root.value("detail").toString();
+        const QString conflictSat = root.value("content").toObject().value("sat").toString();
+
         if (!conflictSat.isEmpty()) {
             statusBar()->showMessage(
-                tr("协作提交被拒绝：%1（冲突版本 %2）").arg(root.value("detail").toString()).arg(latestVersion),
+                tr("协作提交被拒绝：%1（冲突版本 %2），正在拉取最新版本...").arg(conflictDetail).arg(latestVersion),
                 6000);
         } else {
-            statusBar()->showMessage(tr("Collaborative submit was rejected: %1").arg(root.value("detail").toString()), 6000);
+            statusBar()->showMessage(
+                tr("协作提交被拒绝：%1（冲突版本 %2），正在拉取最新版本...").arg(conflictDetail).arg(latestVersion),
+                6000);
         }
         updateCollabPanelUi();
+
+        // 自动 Pull 最新版本。注意：Pull 应答到达后 applyRemoteSatSnapshot 会检查
+        // fastapiConflictLocalSatBackup，如果有备份会在 clear() 后弹出合并对话框。
+        if (fastapiSyncSocket != nullptr && fastapiSyncSocket->isValid()) {
+            fastapiSyncSocket->sendTextMessage("sync_now");
+        }
         return;
     }
 
     if (messageType == "error") {
         statusBar()->showMessage(tr("Collaboration channel error: %1").arg(root.value("detail").toString()), 5000);
+        return;
+    }
+
+    // 支持增量实体图消息
+    if (messageType == "entity_graph_saved") {
+        qDebug().noquote() << "[Collab][DEBUG] handleFastAPISyncMessage: entity_graph_saved RECEIVED, projectId=" << root.value("project_id").toString()
+                            << "requestId=" << root.value("request_id").toString();
+        const QString projectId = root.value("project_id").toString();
+        if (projectId != fastapi_project_id) {
+            return;
+        }
+
+        const QJsonObject content = root.value("content").toObject();
+        const int remoteVersion = root.value("version").toInt(0);
+        if (remoteVersion <= 0) {
+            return;
+        }
+
+        auto& session = CollabSession::instance();
+
+        // Pull 应答 / 远端广播 entity_graph_saved：直接用 content.sat 整个替换本地画布。
+        // 后端 entity_graph_saved 消息的 content 同时携带了 entity_graph/changes（git-like 增量元数据）
+        // 以及 sat（整个 ACIS 顶级 body 的 SAT 文本，由 submitEntityGraphIncremental 在 push 时随 payload
+        // 一起发出；详见 mainwindow.cpp:1223 `fullSat = exportCurrentModelToSat(...)`）。
+        // 跟 master 分支的 applyFastAPIRemoteSat 完全一致：clear() → restore → addEntity，比对
+        // entity_graph 增量合并简单无数倍，而且不出错（增量合并需要对每个 ADD 做 acis_restore_entity_list
+        // → addEntity，里面很容易在临时 SAT 文件 / ACIS API 异常时炸）。
+        const QString satContent = content.value("sat").toString();
+        const QString reason = root.value("trigger").toString("broadcast");
+        const bool isPullResponse = (reason == QStringLiteral("sync_now"));
+        qDebug().noquote() << "[Collab] entity_graph_saved v=" << remoteVersion
+                           << "trigger=" << reason
+                           << "isPull=" << isPullResponse
+                           << "state=" << session.dump(CollabSession::Event::WsMessage)
+                           << "content.hasSat=" << (!satContent.isEmpty())
+                           << "sat.size=" << satContent.size();
+
+        // 仅在自己提交的请求应答时走 submit-accept 路径（保留原语义）。
+        const QString requestId = root.value("request_id").toString();
+        const bool acceptedOwnSubmit = !requestId.isEmpty() && requestId == session.submitRequestId();
+        if (acceptedOwnSubmit) {
+            session.onSubmitAccepted(remoteVersion);
+            fastapi_model_version = session.modelVersion();
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            if (!session.isLocalDirtyDuringSubmit() && curWindow != nullptr) {
+                curWindow->setIsModified(false);
+            }
+            pendingEntityChanges.clear();
+            if (!fastapi_project_name.isEmpty()) {
+                setCurrentPartName(fastapi_project_name);
+            }
+            updateCollabPanelUi();
+            statusBar()->showMessage(tr("增量实体图已提交，版本 %1").arg(fastapi_model_version), 2500);
+            if (session.isLocalDirtyDuringSubmit()) {
+                scheduleFastAPIAutoPublish(tr("local-change-after-ack"));
+            }
+            return;
+        }
+
+        if (remoteVersion <= session.modelVersion()) {
+            return;
+        }
+
+        if (curWindow == nullptr) {
+            return;
+        }
+
+        if (session.isSubmitInFlight()) {
+            // 本地正在提交，不要在这条响应里 apply；放到 pending，等下一轮 Pull 再合并。
+            session.onRemotePending(remoteVersion);
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            statusBar()->showMessage(
+                tr("检测到远程增量版本%1，当前正在提交中，已加入待同步队列").arg(session.pendingRemoteVersion()),
+                5000);
+            updateCollabPanelUi();
+            return;
+        }
+
+        // Git-like 语义：远端 broadcast（其他客户端提交触发）默认不自动 apply 整个替换，
+        // 否则可能打断本地编辑。只有用户主动 Pull 才真正 clear+restore。
+        // 唯一例外：远端 reply 的 trigger == "sync_now" 是 Pull 的应答，立即合并。
+        const bool shouldApply = isPullResponse;
+        if (!shouldApply) {
+            session.onRemotePending(remoteVersion);
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            const QString tip = tr("远端版本%1已推送（git-like 语义），请在协作面板点「拉取(Pull)」合并").arg(remoteVersion);
+            statusBar()->showMessage(tip, 5000);
+            updateCollabPanelUi();
+            return;
+        }
+
+        if (satContent.isEmpty()) {
+            // 极端情况：远端没有 SAT 文本（很老的 model_saved 格式），降级为只更新版本号，
+            // 让用户重新拉一次完整 SAT。
+            session.onRemotePending(remoteVersion);
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            statusBar()->showMessage(tr("远端版本%1不包含SAT文本，请刷新后重试Pull").arg(remoteVersion), 5000);
+            updateCollabPanelUi();
+            return;
+        }
+
+        CollabSession::ApplyDecision applyDecision = session.tryBeginApplyRemote(remoteVersion, reason);
+        qDebug().noquote() << "[Collab] Pull tryBeginApplyRemote kind=" << (int)applyDecision.kind
+                           << "reason=" << applyDecision.reasonTr;
+        if (applyDecision.kind != CollabSession::ApplyDecision::Allow) {
+            qWarning() << "[Collab] Pull apply rejected:" << applyDecision.reasonTr
+                       << "— version parked as pending, retry Pull later.";
+            session.onRemotePending(remoteVersion);
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            updateCollabPanelUi();
+            return;
+        }
+
+        qDebug().noquote() << "[Collab] Pull applyRemoteSat start, sat.size=" << satContent.size();
+        // 调用 master 同款的 clear() + restoreFastAPIModelFromSat() 全量替换路径。
+        const bool ok = applyRemoteSatSnapshot(satContent, reason);
+        qDebug().noquote() << "[Collab] Pull applyRemoteSat done, ok=" << ok;
+        if (ok) {
+            session.onRemoteApplied(remoteVersion);
+            fastapi_model_version = session.modelVersion();
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            // 远端 apply 后清空本地未 push 的变更（它们已经在远端版本里）。
+            pendingEntityChanges.clear();
+            if (!fastapi_project_name.isEmpty()) {
+                setCurrentPartName(fastapi_project_name);
+            }
+            updateCollabPanelUi();
+            statusBar()->showMessage(tr("已拉取远端版本 %1").arg(fastapi_model_version), 3000);
+        } else {
+            // apply 失败时回滚 applying 标志，让用户再点 Pull 还能重试。
+            session.rollbackApply();
+            session.onRemotePending(remoteVersion);
+            fastapi_model_version = session.modelVersion();
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            updateCollabPanelUi();
+            qWarning() << "[Collab] Pull applyRemoteSatSnapshot failed, parked as pending for retry. v=" << remoteVersion;
+        }
         return;
     }
 
@@ -1618,53 +2403,17 @@ void MainWindow::handleFastAPISyncMessage(const QString& message) {
         return;
     }
 
-    const QJsonObject content = root.value("content").toObject();
-    const QString satContent = content.value("sat").toString();
-
+    // model_saved 是老格式提交（不含 entity_graph）：不 clear 本地画布，
+    // 把远端版本号标到 pendingRemoteVersion，用户在协作菜单点 Pull 时再处理。
     if (curWindow == nullptr) {
         return;
     }
-
-    const bool windowDirty = curWindow->getIsModified();
-
-    if (session.isSubmitInFlight() || windowDirty) {
-        session.onRemotePending(remoteVersion);
-        fastapi_pending_remote_version = session.pendingRemoteVersion();
-        statusBar()->showMessage(
-            tr("检测到远程新版本%1，当前有未保存修改，已进入待同步队列").arg(session.pendingRemoteVersion()),
-            5000);
-        updateCollabPanelUi();
-        return;
-    }
-
-    if (!fastapiAutoFollowRemote) {
-        session.onRemotePending(remoteVersion);
-        fastapi_pending_remote_version = session.pendingRemoteVersion();
-        statusBar()->showMessage(tr("检测到远程新版本%1，已等待你手动应用").arg(session.pendingRemoteVersion()), 5000);
-        updateCollabPanelUi();
-        return;
-    }
-
-    // 自动应用远端快照
-    const QString reason = root.value("trigger").toString("broadcast");
-    CollabSession::ApplyDecision applyDecision = session.tryBeginApplyRemote(remoteVersion, reason);
-    if (applyDecision.kind != CollabSession::ApplyDecision::Allow) {
-        session.onRemotePending(remoteVersion);
-        statusBar()->showMessage(
-            tr("远端版本%1 到达但无法自动应用：%2").arg(remoteVersion).arg(applyDecision.reasonTr),
-            5000);
-        updateCollabPanelUi();
-        return;
-    }
-
-    if (!satContent.isEmpty()) {
-        applyFastAPIRemoteSat(remoteVersion, satContent, reason);
-    } else {
-        syncFastAPIRemoteVersion(remoteVersion, reason);
-    }
-    session.onRemoteApplied(remoteVersion);
-    fastapi_model_version = session.modelVersion();
+    session.onRemotePending(remoteVersion);
     fastapi_pending_remote_version = session.pendingRemoteVersion();
+    statusBar()->showMessage(
+        tr("远端模型版本%1到达（model_saved格式），请在协作菜单中点击拉取(Pull)").arg(session.pendingRemoteVersion()),
+        5000);
+    updateCollabPanelUi();
 }
 
 void MainWindow::addWindow() {
@@ -2289,10 +3038,12 @@ void MainWindow::createActions() {
     updatePgMenuState();
 
     QMenu* collabMenu = menuBar()->addMenu(tr("协作(&C)"));
-    QAction* collabSyncNowAct = collabMenu->addAction(tr("立即同步最新版本"), this, &MainWindow::requestFastAPISyncNow);
-    collabSyncNowAct->setStatusTip(tr("主动请求服务器返回最新版本并同步。"));
-    QAction* collabApplyPendingAct = collabMenu->addAction(tr("应用待同步版本"), this, &MainWindow::applyPendingRemoteVersion);
-    collabApplyPendingAct->setStatusTip(tr("当本地有未保存修改导致挂起时，手动应用待同步版本。"));
+    QAction* collabPushAct = collabMenu->addAction(tr("推送(Push)"), this, &MainWindow::onCollabPushButtonClicked);
+    collabPushAct->setStatusTip(tr("把本地未推送的实体图增量推送到服务器。"));
+    QAction* collabPullAct = collabMenu->addAction(tr("拉取(Pull)"), this, &MainWindow::onCollabPullButtonClicked);
+    collabPullAct->setStatusTip(tr("从服务器拉取最新增量：远端新增的 body 会加到本地画布，远端删除的 body 会被跳过（保留本地未推送的新增）。"));
+    QAction* collabSyncNowAct = collabMenu->addAction(tr("刷新连接"), this, &MainWindow::requestFastAPISyncNow);
+    collabSyncNowAct->setStatusTip(tr("主动请求服务器返回最新版本（仅刷新版本号，不修改画布）。"));
     QAction* collabReconnectAct = collabMenu->addAction(tr("重连协作通道"), this, &MainWindow::reconnectFastAPISync);
     collabReconnectAct->setStatusTip(tr("重建WebSocket协作连接。"));
 
@@ -2310,17 +3061,18 @@ void MainWindow::createActions() {
     collabMembersList->setToolTip(tr("当前在线协作者列表"));
     collabAutoFollowCheckBox = new QCheckBox(tr("自动跟随远程最新版本"), collabBody);
     collabAutoFollowCheckBox->setChecked(true);
-    collabSyncNowButton = new QPushButton(tr("立即同步"), collabBody);
+    collabSyncNowButton = new QPushButton(tr("刷新"), collabBody);
+    collabPushButton = new QPushButton(tr("推送(Push)"), collabBody);
+    collabPullButton = new QPushButton(tr("拉取(Pull)"), collabBody);
     collabReconnectButton = new QPushButton(tr("重连"), collabBody);
 
     connect(collabAutoFollowCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
         fastapiAutoFollowRemote = checked;
-        if (checked && fastapi_pending_remote_version > fastapi_model_version && curWindow != nullptr && !curWindow->getIsModified()) {
-            applyPendingRemoteVersion();
-        }
         updateCollabPanelUi();
     });
     connect(collabSyncNowButton, &QPushButton::clicked, this, &MainWindow::requestFastAPISyncNow);
+    connect(collabPushButton, &QPushButton::clicked, this, &MainWindow::onCollabPushButtonClicked);
+    connect(collabPullButton, &QPushButton::clicked, this, &MainWindow::onCollabPullButtonClicked);
     connect(collabReconnectButton, &QPushButton::clicked, this, &MainWindow::reconnectFastAPISync);
 
     collabLayout->addWidget(new QLabel(tr("连接状态"), collabBody));
@@ -2331,6 +3083,8 @@ void MainWindow::createActions() {
     collabLayout->addWidget(new QLabel(tr("在线协作者"), collabBody));
     collabLayout->addWidget(collabMembersList);
     collabLayout->addWidget(collabAutoFollowCheckBox);
+    collabLayout->addWidget(collabPushButton);
+    collabLayout->addWidget(collabPullButton);
     collabLayout->addWidget(collabSyncNowButton);
     collabLayout->addWidget(collabReconnectButton);
     collabLayout->addStretch();
@@ -2909,7 +3663,30 @@ bool MainWindow::saveFile(const QString& fileName) {
                                 baseVersion = session.modelVersion();
                             }
 
-                            auto newVersion = client.saveModel(project->id, satContent, baseVersion);
+                            // 协作模式下：如果本地有待发的 entity_graph 改动，Ctrl+S 必须也走 entity_graph 增量提交，
+                            // 而不是 HTTP POST 全量 SAT 路径。否则 server 的 _create_model_version_serialized
+                            // 会创建一个没有 entity_graph 字段的版本，broadcast model_saved 给所有 client，
+                            // 接收端会走 clear+restore 把画布清空，丢失对齐信息。
+                            // 只有在 pendingEntityChanges 为空时（例如 fork / 首次保存）才退化走 HTTP POST。
+                            std::optional<int> newVersion;
+                            if (!pendingEntityChanges.isEmpty() && fastapiSyncSocket != nullptr && fastapiSyncSocket->isValid()) {
+                                std::fprintf(stderr, "[saveFile FASTAPI] Ctrl+S intercept: %d pending entity changes, routing to submitEntityGraphIncremental instead of HTTP POST\n",
+                                             (int)pendingEntityChanges.size());
+                                QString entityGraphJson = exportEntityGraphToJson();
+                                QString changesJson = exportEntityChangesToJson(pendingEntityChanges);
+                                const QString egReason = fastapiLastPublishReason.isEmpty() ? QString::fromUtf8("ctrl-s") : fastapiLastPublishReason;
+                                if (submitEntityGraphIncremental(entityGraphJson, changesJson, egReason)) {
+                                    pendingEntityChanges.clear();
+                                    // 用 session.modelVersion()+1 作为占位版本号，让下面那段"成功"分支正常执行；
+                                    // 真正的最新版本号会在收到 entity_graph_saved 事件时由 CollabSession 更新。
+                                    newVersion = session.modelVersion() + 1;
+                                    errorMessage.clear();
+                                } else {
+                                    errorMessage = tr("协作增量提交失败");
+                                }
+                            } else {
+                                newVersion = client.saveModel(project->id, satContent, baseVersion);
+                            }
                             if (!newVersion.has_value()) {
                                 if (client.lastStatusCode() == 409) {
                                     QMessageBox msg(this);

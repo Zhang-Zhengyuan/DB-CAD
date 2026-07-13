@@ -371,6 +371,9 @@ std::optional<BackendApiClient::ModelPayload> BackendApiClient::getModelVersion(
     payload.projectId = root.value("project_id").toString();
     payload.version = root.value("version").toInt(0);
     payload.sat = content.value("sat").toString();
+    // 把整个 content 序列化为 JSON 字符串，便于上游调用方走 entity_graph 增量合并路径
+    // 而不是 clear+restore 全量替换。
+    payload.contentJson = QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Compact));
 
     if (payload.projectId.isEmpty() || payload.version <= 0 || payload.sat.isEmpty()) {
         errorMessage = QString::fromUtf8("获取指定版本模型返回数据缺少必要字段");

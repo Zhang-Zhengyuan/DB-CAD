@@ -170,6 +170,12 @@ bool saveSatToPart(
 
     try {
         acis_restore_entity_list(entityList, satStream, 2, 0, true);
+        std::fprintf(stderr, "[storage_bridge saveSatToPart] partName=%s satBytes=%d entityListCount=%d\n",
+                     partName.toStdString().c_str(), satBytes.size(), entityList.count());
+        if (entityList.count() == 0) {
+            fprintf(stderr, "[storage_bridge saveSatToPart] WARNING: empty entityList, dumping first 200 chars of SAT:\n%.200s\n",
+                    satBytes.constData());
+        }
         Neo4jPart conn(
             host.toStdString().c_str(),
             port,
@@ -177,6 +183,19 @@ bool saveSatToPart(
             password.toStdString().c_str(),
             partName.toStdString());
         api_save_entity_list_neo4j_part(conn, entityList);
+
+        // 兜底：把原始 SAT 文本也存到 Part 节点的 sat_text 属性上。
+        // loadSatFromPart 会优先读这个字段，避免依赖 storage_bridge 子进程里的 ACIS round-trip。
+        {
+            mg_map* satParams = mg_map_make_empty(2);
+            mg_map_append(satParams, mg_string_make("Y"), mg_value_make_string(partName.toUtf8().constData()));
+            mg_map_append(satParams, mg_string_make("S"), mg_value_make_string(satBytes.constData()));
+            conn.execute_bolt(
+                "MATCH (n:part {b:$Y}) SET n.sat_text = $S",
+                satParams);
+            mg_map_destroy(satParams);
+            conn.discard_all_results();
+        }
     } catch (const std::exception& ex) {
         error = QString::fromUtf8(ex.what());
         closeSatStream();
@@ -226,12 +245,49 @@ bool loadSatFromPart(
 
         if (count_partnode(conn) <= 0) {
             error = QString::fromUtf8("Model version not found");
+            std::fprintf(stderr, "[storage_bridge loadSatFromPart] partName=%s partNodeNotFound\n",
+                         partName.toStdString().c_str());
             return false;
+        }
+
+        // 优先读 Part 节点上的 sat_text 兜底属性（saveSatToPart 写入）。
+        // 如果存在就直接返回原始 SAT，避免 ACIS round-trip 在 storage_bridge 子进程里丢数据。
+        {
+            mg_map* satParams = mg_map_make_empty(1);
+            mg_map_append(satParams, mg_string_make("Y"), mg_value_make_string(partName.toUtf8().constData()));
+            conn.execute_bolt("MATCH (n:part {b:$Y}) RETURN n.sat_text", satParams);
+            mg_map_destroy(satParams);
+
+            mg_result* satResult = nullptr;
+            bool satTextUsed = false;
+            while (mg_session_fetch(conn.session, &satResult) == 1) {
+                const mg_list* row = mg_result_row(satResult);
+                if (row == nullptr || mg_list_size(row) < 1) continue;
+                const mg_value* v = mg_list_at(row, 0);
+                if (v == nullptr || mg_value_get_type(v) != MG_VALUE_TYPE_STRING) continue;
+                const QByteArray raw = asUtf8(mg_value_string(v));
+                if (raw.isEmpty()) continue;
+                sat = QString::fromUtf8(raw);
+                satTextUsed = true;
+                std::fprintf(stderr, "[storage_bridge loadSatFromPart] partName=%s sat_text present, satLen=%d\n",
+                             partName.toStdString().c_str(), raw.size());
+                break;
+            }
+            if (satTextUsed) {
+                closeSatStream();
+                return true;
+            }
+            std::fprintf(stderr, "[storage_bridge loadSatFromPart] partName=%s sat_text missing, falling back to ACIS round-trip\n",
+                         partName.toStdString().c_str());
         }
 
         ENTITY_LIST entityList;
         api_restore_entity_list_neo4j_part(conn, entityList);
+        std::fprintf(stderr, "[storage_bridge loadSatFromPart] partName=%s entityListCount=%d\n",
+                     partName.toStdString().c_str(), entityList.count());
         acis_save_entity_list(satStream, entityList, 2, 0, true);
+        std::fprintf(stderr, "[storage_bridge loadSatFromPart] partName=%s acis_save_entity_list done\n",
+                     partName.toStdString().c_str());
     } catch (const std::exception& ex) {
         error = QString::fromUtf8(ex.what());
         closeSatStream();
@@ -666,6 +722,9 @@ QByteArray StorageBridgeService::handleGetProjectByName(const QString& projectNa
 QByteArray StorageBridgeService::handleCreateModel(const QString& projectId, const QByteArray& body, int& statusCode, QString& error) {
     statusCode = 201;
 
+    std::fprintf(stderr, "[storage_bridge handleCreateModel] ENTER projectId=%s bodyBytes=%d\n",
+                 projectId.toStdString().c_str(), (int)body.size());
+
     const QJsonDocument doc = QJsonDocument::fromJson(body);
     if (!doc.isObject()) {
         statusCode = 400;
@@ -679,6 +738,13 @@ QByteArray StorageBridgeService::handleCreateModel(const QString& projectId, con
     const QString sat = content.value("sat").toString();
     const bool hasBaseVersion = !root.value("base_version").isNull();
     const int baseVersion = root.value("base_version").toInt(0);
+
+    std::fprintf(stderr, "[storage_bridge handleCreateModel] projectId=%s author=%s satLen=%d hasBaseVersion=%d baseVersion=%d\n",
+                 projectId.toStdString().c_str(),
+                 author.toStdString().c_str(),
+                 (int)sat.size(),
+                 (int)hasBaseVersion,
+                 baseVersion);
 
     if (author.isEmpty() || sat.isEmpty()) {
         statusCode = 400;
@@ -715,6 +781,15 @@ QByteArray StorageBridgeService::handleCreateModel(const QString& projectId, con
     const int64_t latestVersionValue = toInt64(lookup.front()[1], &latestOk);
     const int latestVersion = latestOk ? static_cast<int>(latestVersionValue) : 0;
 
+    std::fprintf(stderr, "[storage_bridge handleCreateModel] projectId=%s latestVersion=%d hasBaseVersion=%d baseVersion=%d -> branch=%s\n",
+                 projectId.toStdString().c_str(),
+                 latestVersion,
+                 (int)hasBaseVersion,
+                 baseVersion,
+                 (!hasBaseVersion && latestVersion > 0) ? "409-need-base"
+                 : (hasBaseVersion && baseVersion != latestVersion) ? "409-conflict"
+                 : "create");
+
     if (!hasBaseVersion && latestVersion > 0) {
         statusCode = 409;
         error = QString::fromUtf8("base_version is required: latest version is %1").arg(latestVersion);
@@ -737,21 +812,36 @@ QByteArray StorageBridgeService::handleCreateModel(const QString& projectId, con
     }
 
     const QString now = nowIsoUtc();
-    params = mg_map_make_empty(5);
+    // 把客户端传入的完整 content 序列化为 JSON 字符串存到 BridgeVersion.content_text 属性，
+    // 否则后续 GET /projects/.../models/{version} 时拿不到 entity_graph / changes / sat_format
+    // 等字段，server 端就无法把这个版本识别为 entity_graph 类型，
+    // 所有接收端都会走 model_saved 路径触发清空+restore，丢失节点对齐信息。
+    const QByteArray contentJsonBytes = QJsonDocument(content).toJson(QJsonDocument::Compact);
+    const QString contentText = QString::fromUtf8(contentJsonBytes);
+
+    params = mg_map_make_empty(6);
     mg_map_append(params, mg_string_make("project_id"), mg_value_make_string(projectId.toUtf8().constData()));
     mg_map_append(params, mg_string_make("version"), mg_value_make_integer(nextVersion));
     mg_map_append(params, mg_string_make("author"), mg_value_make_string(author.toUtf8().constData()));
     mg_map_append(params, mg_string_make("created_at"), mg_value_make_string(now.toUtf8().constData()));
     mg_map_append(params, mg_string_make("part_name"), mg_value_make_string(partName.toUtf8().constData()));
+    mg_map_append(params, mg_string_make("content_text"), mg_value_make_string(contentText.toUtf8().constData()));
 
     const auto rows = runQuery(
         neo4jHost,
         neo4jPort,
         neo4jUser,
         neo4jPassword,
+        // 用 OPTIONAL MATCH 先检查 version 是否已存在：如果存在则 v 字段非空，
+        // 此时不要 CREATE，直接返回空结果让上层走 409 冲突路径。
+        // 这样可以避免两个并发请求都"看到"latest=v=1、都计算 nextVersion=v=2、
+        // 然后都执行 CREATE 写入两个 version=2 的节点。
         "MATCH (p:BridgeProject {id:$project_id}) "
+        "OPTIONAL MATCH (p)-[:HAS_VERSION]->(existing:BridgeVersion {version:$version}) "
+        "WITH p, existing "
+        "WHERE existing IS NULL "
         "SET p.updated_at=$created_at "
-        "CREATE (v:BridgeVersion {project_id:$project_id,version:$version,author:$author,created_at:$created_at,part_name:$part_name}) "
+        "CREATE (v:BridgeVersion {project_id:$project_id,version:$version,author:$author,created_at:$created_at,part_name:$part_name,content_text:$content_text}) "
         "CREATE (p)-[:HAS_VERSION]->(v) "
         "RETURN id(v),v.project_id,v.version,v.author,v.created_at",
         params,
@@ -763,7 +853,16 @@ QByteArray StorageBridgeService::handleCreateModel(const QString& projectId, con
         error = dbError;
         return {};
     }
-    if (rows.empty() || rows.front().size() < 5) {
+    if (rows.empty()) {
+        // version 冲突：另一个并发请求已经写入了相同 version 号。
+        // 返回 409 让上层 fastapi 重试逻辑拉最新 latest 后重新提交。
+        std::fprintf(stderr, "[storage_bridge handleCreateModel] projectId=%s nextVersion=%d CREATE returned empty (concurrent conflict)\n",
+                     projectId.toStdString().c_str(), nextVersion);
+        statusCode = 409;
+        error = QString::fromUtf8("Version %1 already exists (concurrent write conflict)").arg(nextVersion);
+        return {};
+    }
+    if (rows.front().size() < 5) {
         statusCode = 500;
         error = QString::fromUtf8("Failed to create model version metadata");
         return {};
@@ -777,15 +876,20 @@ QByteArray StorageBridgeService::handleCreateModel(const QString& projectId, con
         return {};
     }
 
+    std::fprintf(stderr, "[storage_bridge handleCreateModel] projectId=%s CREATED v=%d dbId=%lld author=%s\n",
+                 projectId.toStdString().c_str(), nextVersion, (long long)dbId, author.toStdString().c_str());
+
     QJsonObject response;
     response.insert("id", static_cast<double>(dbId));
     response.insert("project_id", toQString(rows.front()[1]));
     response.insert("version", static_cast<int>(toInt64(rows.front()[2])));
     response.insert("author", toQString(rows.front()[3]));
     response.insert("created_at", toQString(rows.front()[4]));
-    QJsonObject outContent;
-    outContent.insert("sat", sat);
-    response.insert("content", outContent);
+    // 返回客户端传入的完整 content（包括 entity_graph / changes / sat / sat_format 等），
+    // 不能只把 sat 字段透传——因为 entity_graph 是协作接收端用来做增量合并的关键数据，
+    // 丢了 entity_graph 后服务端检测不到这个版本是 entity_graph 类型，
+    // 后续 broadcast 会按 model_saved 路径走清空+restore，丢失所有节点对齐信息。
+    response.insert("content", content);
     return QJsonDocument(response).toJson(QJsonDocument::Compact);
 }
 
@@ -802,7 +906,7 @@ QByteArray StorageBridgeService::handleGetLatestModel(const QString& projectId, 
         neo4jUser,
         neo4jPassword,
         "MATCH (p:BridgeProject {id:$project_id})-[:HAS_VERSION]->(v:BridgeVersion) "
-        "RETURN id(v),v.project_id,v.version,v.author,v.created_at,v.part_name "
+        "RETURN id(v),v.project_id,v.version,v.author,v.created_at,v.part_name,v.content_text "
         "ORDER BY v.version DESC LIMIT 1",
         params,
         dbError);
@@ -833,8 +937,24 @@ QByteArray StorageBridgeService::handleGetLatestModel(const QString& projectId, 
     response.insert("version", static_cast<int>(toInt64(rows.front()[2])));
     response.insert("author", toQString(rows.front()[3]));
     response.insert("created_at", toQString(rows.front()[4]));
+    // 从 BridgeVersion.content_text 反序列化回完整 content（包含 entity_graph / changes / sat_format）。
+    // 旧数据可能没有 content_text 字段，回退到只塞 sat（兼容老版本）。
     QJsonObject content;
-    content.insert("sat", sat);
+    if (rows.front().size() >= 7) {
+        const QString contentText = toQString(rows.front()[6]);
+        if (!contentText.isEmpty()) {
+            const QJsonDocument contentDoc = QJsonDocument::fromJson(contentText.toUtf8());
+            if (contentDoc.isObject()) {
+                content = contentDoc.object();
+            }
+        }
+    }
+    if (content.isEmpty()) {
+        content.insert("sat", sat);
+    } else if (!content.contains("sat") || content.value("sat").toString().isEmpty()) {
+        // 兜底：如果存的内容里没有 sat，从 part 节点补上
+        content.insert("sat", sat);
+    }
     response.insert("content", content);
     return QJsonDocument(response).toJson(QJsonDocument::Compact);
 }
@@ -853,7 +973,7 @@ QByteArray StorageBridgeService::handleGetModelVersion(const QString& projectId,
         neo4jUser,
         neo4jPassword,
         "MATCH (p:BridgeProject {id:$project_id})-[:HAS_VERSION]->(v:BridgeVersion {version:$version}) "
-        "RETURN id(v),v.project_id,v.version,v.author,v.created_at,v.part_name LIMIT 1",
+        "RETURN id(v),v.project_id,v.version,v.author,v.created_at,v.part_name,v.content_text LIMIT 1",
         params,
         dbError);
     mg_map_destroy(params);
@@ -882,8 +1002,23 @@ QByteArray StorageBridgeService::handleGetModelVersion(const QString& projectId,
     response.insert("version", static_cast<int>(toInt64(rows.front()[2])));
     response.insert("author", toQString(rows.front()[3]));
     response.insert("created_at", toQString(rows.front()[4]));
+    // 从 BridgeVersion.content_text 反序列化回完整 content（包含 entity_graph / changes / sat_format）。
+    // 旧数据可能没有 content_text 字段，回退到只塞 sat（兼容老版本）。
     QJsonObject content;
-    content.insert("sat", sat);
+    if (rows.front().size() >= 7) {
+        const QString contentText = toQString(rows.front()[6]);
+        if (!contentText.isEmpty()) {
+            const QJsonDocument contentDoc = QJsonDocument::fromJson(contentText.toUtf8());
+            if (contentDoc.isObject()) {
+                content = contentDoc.object();
+            }
+        }
+    }
+    if (content.isEmpty()) {
+        content.insert("sat", sat);
+    } else if (!content.contains("sat") || content.value("sat").toString().isEmpty()) {
+        content.insert("sat", sat);
+    }
     response.insert("content", content);
     return QJsonDocument(response).toJson(QJsonDocument::Compact);
 }
@@ -903,7 +1038,7 @@ QByteArray StorageBridgeService::handleListVersions(const QString& projectId, in
         neo4jUser,
         neo4jPassword,
         "MATCH (p:BridgeProject {id:$project_id})-[:HAS_VERSION]->(v:BridgeVersion) "
-        "RETURN id(v),v.project_id,v.version,v.author,v.created_at,v.part_name "
+        "RETURN id(v),v.project_id,v.version,v.author,v.created_at,v.part_name,v.content_text "
         "ORDER BY v.version DESC SKIP $offset LIMIT $limit",
         params,
         dbError);
@@ -934,8 +1069,23 @@ QByteArray StorageBridgeService::handleListVersions(const QString& projectId, in
         item.insert("version", static_cast<int>(toInt64(row[2])));
         item.insert("author", toQString(row[3]));
         item.insert("created_at", toQString(row[4]));
+        // 从 content_text 反序列化回完整 content（包含 entity_graph / changes / sat_format）。
+        // 旧数据可能没有 content_text，回退到只塞 sat。
         QJsonObject content;
-        content.insert("sat", sat);
+        if (row.size() >= 7) {
+            const QString contentText = toQString(row[6]);
+            if (!contentText.isEmpty()) {
+                const QJsonDocument contentDoc = QJsonDocument::fromJson(contentText.toUtf8());
+                if (contentDoc.isObject()) {
+                    content = contentDoc.object();
+                }
+            }
+        }
+        if (content.isEmpty()) {
+            content.insert("sat", sat);
+        } else if (!content.contains("sat") || content.value("sat").toString().isEmpty()) {
+            content.insert("sat", sat);
+        }
         item.insert("content", content);
         response.append(item);
     }

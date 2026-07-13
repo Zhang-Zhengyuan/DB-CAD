@@ -38,10 +38,35 @@ def get_project_by_name_or_404(project_name: str):
 
 
 def create_model_version(project_id: str, payload: schemas.ModelVersionCreate):
-    latest_version = storage_bridge.get_latest_version_or_none(project_id)
-    if latest_version and payload.base_version == None:
-        raise HTTPException(status_code=409, detail=f"base_version is required: latest version is {latest_version.version}")
-    return storage_bridge.create_model_version(project_id, payload.author, payload.content, payload.base_version)
+    # 重试循环：storage_bridge 端会在 base_version != latest 时返回 409。
+    # 真实的并发场景下两个请求可能都"看到"同一个 latest，都传同一个 base_version，
+    # 第二个请求到达 storage_bridge 时 latest 已经被第一个请求改了。
+    # 这里最多重试 3 次，每次重新拉 latest 来设置 base_version。
+    print(f"[crud create_model_version] ENTER project_id={project_id} payload.base_version={payload.base_version}", flush=True)
+    last_error: Exception | None = None
+    for attempt in range(3):
+        latest_version = storage_bridge.get_latest_version_or_none(project_id)
+        print(f"[crud create_model_version] attempt={attempt} latest={latest_version.version if latest_version else None} project_id={project_id}", flush=True)
+        if latest_version and payload.base_version is None:
+            payload.base_version = latest_version.version
+            print(f"[crud create_model_version] attempt={attempt} set payload.base_version={payload.base_version} from latest", flush=True)
+        try:
+            result = storage_bridge.create_model_version(
+                project_id, payload.author, payload.content, payload.base_version
+            )
+            print(f"[crud create_model_version] attempt={attempt} SUCCESS v={result.version} project_id={project_id}", flush=True)
+            return result
+        except HTTPException as ex:
+            print(f"[crud create_model_version] attempt={attempt} HTTPException status={ex.status_code} detail={ex.detail} project_id={project_id}", flush=True)
+            if ex.status_code != status.HTTP_409_CONFLICT:
+                raise
+            # 冲突：清掉 base_version，让下一次循环重新读 latest
+            last_error = ex
+            payload.base_version = None
+            continue
+    # 3 次都冲突，抛出最后一次的错误
+    assert last_error is not None
+    raise last_error
     
 
 def get_latest_version_or_404(project_id: str):

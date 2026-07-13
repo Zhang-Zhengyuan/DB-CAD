@@ -1,8 +1,11 @@
 #pragma once
 
-#include <QMainWindow>
 #include <QHash>
+#include <QList>
+#include <QMainWindow>
 #include <QSessionManager>
+#include <QString>
+#include <QtGlobal>
 #include <memory>
 #include "pg_service.h"
 
@@ -73,31 +76,44 @@ extern std::unordered_map<std::string, std::vector<menu_map>> menus_example;
 
 const QStringList colorNames = QColor::colorNames();
 
-// 备用：默认提供12种颜色用于显示区分不同的输入体
-// double colors[12][3] = {
-//  {166 / 255.0, 206 / 255.0, 227 / 255.0},
-//  {31 / 255.0,  120 / 255.0, 180 / 255.0},
-//  {178 / 255.0, 223 / 255.0, 138 / 255.0},
-//  {51 / 255.0,  160 / 255.0, 44 / 255.0 },
-//  {251 / 255.0, 154 / 255.0, 153 / 255.0},
-//  {227 / 255.0, 26 / 255.0,  28 / 255.0 },
-//  {253 / 255.0, 191 / 255.0, 111 / 255.0},
-//  {255 / 255.0, 127 / 255.0, 0 / 255.0  },
-//  {202 / 255.0, 178 / 255.0, 214 / 255.0},
-//  {106 / 255.0, 61 / 255.0,  154 / 255.0},
-//  {255 / 255.0, 255 / 255.0, 153 / 255.0},
-//  {177 / 255.0, 89 / 255.0,  40 / 255.0 }
-//};
-
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
     explicit MainWindow(QWidget* parent = nullptr, Qt::WindowFlags flags = {});
+
+    // ========== 增量协作支持 ==========
+    // 变更类型枚举
+    enum class EntityChangeType { ADD, REMOVE, MODIFY };
+
+    // 实体变更结构体
+    struct EntityChange {
+        QString uuid;
+        QString name;
+        QString entityType;
+        EntityChangeType changeType;
+        int entityIndex;
+        qint64 timestamp;
+        // 仅 ADD 变更有效：把该 body 单独序列化的 SAT 文本，供接收端 acis_restore_entity_list 后 addEntity。
+        QString sat;
+    };
+
+    // 增量协作方法
+    void beginEntityChangeTracking();
+    void recordEntityAdded(const QString& uuid, const QString& name, const QString& entityType, int index, const QString& sat = QString());
+    void recordEntityRemoved(int index);
+    void recordEntityModified(int index);
+    QList<EntityChange> endEntityChangeTracking();
+    void clearEntityChanges();
+    QString exportEntityGraphToJson();
+    QString exportEntityChangesToJson(const QList<EntityChange>& changes);
+    bool submitEntityGraphIncremental(const QString& entityGraphJson, const QString& changesJson, const QString& reason);
+    bool applyRemoteEntityGraphIncremental(const QString& remoteEntityGraphJson, const QString& remoteChangesJson, const QString& reason);
+
+    // ========== 其他 public 方法 ==========
     void setCurWindow(Window* w) { curWindow = w; }
     void showMessage(const QString s, int duration = -1);
     void notifyModelChangedForCollaboration();
-
     void buildTreeFromHistroy(HISTORY_STREAM* hs = nullptr);
 
 protected:
@@ -155,6 +171,7 @@ private:
     bool maybeSave();
     bool saveFile(const QString& fileName);
     bool restoreFastAPIModelFromSat(const QString& satContent);
+    bool applyRemoteSatSnapshot(const QString& satContent, const QString& reason);
     bool syncFastAPIRemoteVersion(int remoteVersion, const QString& reason);
     bool applyFastAPIRemoteSat(int remoteVersion, const QString& satContent, const QString& reason);
     void updateCollabPanelUi();
@@ -162,6 +179,7 @@ private:
     void reconnectFastAPISync();
     void disconnectFastAPISync();
     void handleFastAPISyncMessage(const QString& message);
+    void handleFastAPISyncMessageImpl(const QString& message);
     void requestFastAPISyncNow();
     void updateFastAPICollaboratorsStatus();
     void applyPendingRemoteVersion();
@@ -172,6 +190,8 @@ private:
     bool exportCurrentModelToSat(QString* satContent, QString* errorMessage);
     void setCurrentFile(const QString& fileName);
     void setCurrentPartName(const QString& partName);
+    void onCollabPushButtonClicked();
+    void onCollabPullButtonClicked();
 
     Window* curWindow;
     QAction* setACISModeAct;
@@ -194,18 +214,21 @@ private:
     QString fastapi_project_id;
     QString fastapi_project_name;
     QString fastapi_client_id;
-    // 以下字段为 mirror，由 CollabSession::mirrorToLegacy() 同步，禁止直接写入
-    // @{
+    // Mirror fields — synced from CollabSession via mirrorToLegacy(). Do not write directly.
     int fastapi_model_version = 0;
     int fastapi_pending_remote_version = 0;
     bool fastapiApplyingRemoteSnapshot = false;
     bool fastapiPublishingSnapshot = false;
     bool fastapiSubmitInFlight = false;
     bool fastapiLocalDirtyDuringSubmit = false;
+    bool fastapiLocalDirty = false;
     QString fastapiLastPublishReason;
     QString fastapiPendingSubmitRequestId;
-    // @}
     // 协作基础设施（非状态，不归 CollabSession 管）
+    // Conflict resolution 备份：submit_rejected 时备份本地 SAT 内容，Pull 后 offer 给用户恢复。
+    QString fastapiConflictLocalSatBackup;
+    // 防止 Pull 期间重复弹出 merge 对话框。
+    bool isShowingConflictMergeDialog = false;
     QHash<QString, QString> fastapi_collaborators;
     QWebSocket* fastapiSyncSocket = nullptr;
     QTimer* fastapiSyncTimer = nullptr;
@@ -222,6 +245,8 @@ private:
     QListWidget* collabMembersList = nullptr;
     QCheckBox* collabAutoFollowCheckBox = nullptr;
     QPushButton* collabSyncNowButton = nullptr;
+    QPushButton* collabPushButton = nullptr;
+    QPushButton* collabPullButton = nullptr;
     QPushButton* collabReconnectButton = nullptr;
     std::unique_ptr<PgService> m_pgService;
     // PG menu actions — kept as members so they can be enabled/disabled
@@ -232,4 +257,10 @@ private:
     QAction* pgCountAct = nullptr;
     QAction* pgDeleteAct = nullptr;
     void updatePgMenuState();
+
+    // 增量协作成员变量
+    QHash<int, QString> entityIndexToUuid;
+    QList<EntityChange> pendingEntityChanges;
+    bool isTrackingEntityChanges = false;
+    qint64 entityChangeTrackingStartTime = 0;
 };

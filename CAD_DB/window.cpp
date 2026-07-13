@@ -3,6 +3,9 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDebug>
+#include <QDir>
+#include <QFile>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -11,10 +14,15 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QTemporaryFile>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <QUuid>
+#include <cstdio>
 #include <set>
 #include <unordered_map>
+
+#include "collab_session.h"
 
 #include "gme_dump_object.hxx"
 #include "acis/include/alltop.hxx"
@@ -251,6 +259,11 @@ DELTA_STATE* lastsave_ds = nullptr;
 std::unordered_map<void*, int64_t> ptr2nodeid;
 
 void Window::clear() {
+    // 记录所有删除的实体（用于增量同步）
+    for (auto& e : entity_tree) {
+        mainWindow->recordEntityRemoved(e.index);
+    }
+
     // 删除所有实体
     for (auto &e : entity_tree) {
         if (e.ptrEntity) api_del_entity(e.ptrEntity);
@@ -893,8 +906,14 @@ ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, i
 }
 
 ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, int sot, std::vector<std::vector<SPAposition>>& handles, std::vector<int> index_base, OPERATOR_TYPES ot) {
-    if (nullptr == ptrEntity) return new ENTITY_TREE_ITEM();
+    std::fprintf(stderr, "[Collab][DEBUG] >>> Window::addEntity ENTER name=%s ptrEntity=%p sot=%d index_base.size=%zu ot=%d\n",
+                 name.c_str(), (void*)ptrEntity, sot, index_base.size(), (int)ot);
+    if (nullptr == ptrEntity) {
+        std::fprintf(stderr, "[Collab][DEBUG] <<< Window::addEntity EXIT (null ptrEntity)\n");
+        return new ENTITY_TREE_ITEM();
+    }
     ENTITY_TREE_ITEM eti;
+    eti.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     eti.name = name;
     eti.index = entity_tree.size();
     eti.ptrEntity = ptrEntity;
@@ -909,16 +928,63 @@ ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, i
             if (e.index == index) e.index_support.push_back(eti.index);
         }
     }
+    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity before updateTreeWidget, entity_tree.size=%zu\n", entity_tree.size());
     this->updateTreeWidget();
+    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity before updateMeshData\n");
     this->updateMeshData();
+    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity after updateMeshData\n");
     mainWindow->notifyModelChangedForCollaboration();
+
+    // 只有在"非 apply remote snapshot / 非 publishing snapshot"时才记录增量变更，
+    // 否则会把远端实体的"添加"动作记录成本地 ADD change，下次提交造成回环上传。
+    auto& session = CollabSession::instance();
+    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity isApplyingRemote=%d isPublishing=%d\n",
+                 session.isApplyingRemoteSnapshot() ? 1 : 0, session.isPublishingSnapshot() ? 1 : 0);
+    if (!session.isApplyingRemoteSnapshot() && !session.isPublishingSnapshot()) {
+        // 把这个 body 单独序列化为 SAT 文本，让远端可以 acis_restore_entity_list 重建后 addEntity。
+        QString bodySat;
+        ENTITY_LIST singleBody;
+        singleBody.add(ptrEntity);
+        QTemporaryFile satTmp(QDir::tempPath() + "/dbcad_addsat_XXXXXX.sat");
+        satTmp.setAutoRemove(true);
+        if (satTmp.open()) {
+            const QString satPath = satTmp.fileName();
+            satTmp.close();
+            FILE* satFile = fopen(satPath.toStdString().c_str(), "wb");
+            if (satFile != nullptr) {
+                API_NOP_BEGIN;
+                api_save_version(2, 0);
+                FileInfo fi;
+                fi.set_units(1.0);
+                fi.set_product_id("dbcad_collaboration");
+                api_set_file_info((FileIdent | FileUnits), fi);
+                api_save_entity_list(satFile, true, singleBody);
+                API_NOP_END;
+                fclose(satFile);
+                QFile in(satPath);
+                if (in.open(QIODevice::ReadOnly)) {
+                    bodySat = QString::fromUtf8(in.readAll());
+                }
+            }
+        }
+        mainWindow->recordEntityAdded(
+            QString::fromStdString(eti.uuid),
+            QString::fromStdString(eti.name),
+            QString::fromStdString(eti.name),
+            eti.index,
+            bodySat);
+    }
+
+    std::fprintf(stderr, "[Collab][DEBUG] <<< Window::addEntity EXIT OK\n");
     return &entity_tree[eti.index];
 }
 
 void Window::updateMeshData() {
+    std::fprintf(stderr, "[Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=%zu\n", entity_tree.size());
     api_logging(FALSE);
     std::vector<GmeMesh::DisplayData*>& md = glWidget->getMeshData();
     md.clear();
+    size_t entitiesWithNoMesh = 0;
     for (auto& e : entity_tree) {
         if (e.visible) {
             if (e.ptrDisplayData == nullptr) {
@@ -929,6 +995,7 @@ void Window::updateMeshData() {
                     e.ptrDisplayData = dd;
                     md.push_back(dd);
                 } else {
+                    ++entitiesWithNoMesh;
                     delete dd;
                 }
                 isModified = true;
@@ -936,9 +1003,21 @@ void Window::updateMeshData() {
                 md.push_back(e.ptrDisplayData);
         }
     }
+    if (entitiesWithNoMesh > 0) {
+        std::fprintf(stderr, "[Window::updateMeshData] entities without mesh: %zu / total entities=%zu\n",
+                     entitiesWithNoMesh, entity_tree.size());
+    }
+    size_t totalFaces = 0, totalEdges = 0;
+    for (auto dd : md) {
+        totalFaces += dd->faceMesh.size();
+        totalEdges += dd->edgeMesh.size();
+    }
+    std::fprintf(stderr, "[Window::updateMeshData] display_data=%zu totalFaces=%zu totalEdges=%zu no-mesh entities=%zu\n",
+                 md.size(), totalFaces, totalEdges, entitiesWithNoMesh);
     api_logging(TRUE);
 
     glWidget->updateMeshData();
+    std::fprintf(stderr, "[Collab][DEBUG] <<< Window::updateMeshData EXIT\n");
 }
 
 void Window::addHandle(ENTITY* ptrEntity, double* p) {
@@ -1039,6 +1118,8 @@ void Window::changeEntity(ENTITY* ptrEntity, SPAtransf t) {
                 for (auto& h : h_u) {
                     h += t.translation();
                 }
+            // 记录实体被修改（用于增量同步）
+            mainWindow->recordEntityModified(eti.index);
         }
     }
     //if (is_BODY(ptrEntity)) api_change_body_trans((BODY*)ptrEntity, nullptr);

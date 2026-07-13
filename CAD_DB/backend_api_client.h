@@ -16,6 +16,7 @@ public:
         QString projectId;
         int version = 0;
         QString sat;
+        QString contentJson;  // 完整 content JSON（含 entity_graph/changes/sat），便于走 entity_graph 合并路径
     };
 
     BackendApiClient(QString baseUrl, QString author, QString apiPassword = {});

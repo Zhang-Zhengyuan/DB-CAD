@@ -23,8 +23,9 @@ QT_END_NAMESPACE
 class MainWindow;
 
 struct ENTITY_TREE_ITEM {
-    std::string name = "Unknown";                                        // ENTITY名称
-    int index = 0;                                                       // 索引
+    std::string uuid;                                                      // 实体唯一标识符（用于协作增量同步）
+    std::string name = "Unknown";                                          // ENTITY名称
+    int index = 0;                                                        // 索引
     ENTITY* ptrEntity = nullptr;                                         // ENTITY本身
     OPERATOR_TYPES operatorType = OPERATOR_TYPES::OPERATOR_CONSTRUCTOR;  // 生成ENTITY的操作类型
     SPAtransf trans = SPAtransf();                                       // 记录基本体的变换操作

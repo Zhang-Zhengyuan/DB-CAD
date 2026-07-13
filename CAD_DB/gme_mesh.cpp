@@ -1,14 +1,18 @@
 #include "gme_mesh.hxx"
 
 #include <cassert>
+#include <cstdio>
 #include "acis/include/acistype.hxx"
+#include "acis/include/body.hxx"
 #include "acis/include/edge.hxx"
 #include "acis/include/face.hxx"
 #include "acis/include/fct_utl.hxx"
 #include "acis/include/getowner.hxx"
 #include "acis/include/kernapi.hxx"
+#include "acis/include/lump.hxx"
 #include "acis/include/point.hxx"
 #include "acis/include/rnd_api.hxx"
+#include "acis/include/shell.hxx"
 #include "acis/include/transf.hxx"
 #include "acis/include/vertex.hxx"
 
@@ -172,7 +176,6 @@ bool CreateMeshFromEntityList(ENTITY_LIST& el, GmeMesh::DisplayData& dd) {
         }
         for (ENTITY* ent = el.first(); ent; ent = el.next()) {
             outcome out = api_facet_entity(ent);
-            // outcome out = gme_api_facet_entity(ent);
             if (!out.ok()) {
                 success = false;
                 goto exit;
@@ -307,10 +310,20 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
     API_NOP_BEGIN
     {
         if (nullptr == e) {
+            std::fprintf(stderr, "[CreateMeshFromEntity] e==nullptr\n");
             success = false;
             goto exit;
         }
+        const char* ek = "?";
+        if (is_BODY(e)) ek = "BODY";
+        else if (is_LUMP(e)) ek = "LUMP";
+        else if (is_SHELL(e)) ek = "SHELL";
+        else if (is_FACE(e)) ek = "FACE";
+        else if (is_EDGE(e)) ek = "EDGE";
+        else if (is_VERTEX(e)) ek = "VERTEX";
+        std::fprintf(stderr, "[CreateMeshFromEntity] e=%s\n", ek);
         if (is_VERTEX(e)) {
+            std::fprintf(stderr, "[CreateMeshFromEntity] e is VERTEX\n");
             GmeMesh::VertexMesh vm = GmeMesh::VertexMesh();
             vm.numIndices = 0;
             vm.ptrVertex = (VERTEX *)e;
@@ -321,16 +334,48 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
             success = true;
             goto exit;
         }
-        // 调用 facet API（这些 API 产生的 bulletins 会被 NOP 丢弃）
+        // facet 该 entity；NOP scope 结束后 facet 数据会被丢弃，但 get_triangles_from_faceted_faces
+        // 仍能拿到本次 scope 内生成的 mesh 数据。
         outcome out = api_facet_entity(e);
+        std::fprintf(stderr, "[CreateMeshFromEntity] api_facet_entity ok=%d err#=%d\n",
+                     out.ok() ? 1 : 0, (int)out.error_number());
         if (!out.ok()) {
             success = false;
             goto exit;
         }
 
+        // ====== 深度诊断：直接遍历 BODY/LUMP 的拓扑，看子实体是否齐全 ======
+        if (is_BODY(e)) {
+            BODY* body = (BODY*)e;
+            int nLumps = 0, nShells = 0, nFaces = 0;
+            for (LUMP* lump = body->lump(); lump; lump = lump->next()) {
+                ++nLumps;
+                for (SHELL* shell = lump->shell(); shell; shell = shell->next()) {
+                    ++nShells;
+                    ENTITY_LIST f;
+                    api_get_faces(shell, f);
+                    nFaces += f.iteration_count();
+                }
+            }
+            std::fprintf(stderr, "[CreateMeshFromEntity] direct topology: lumps=%d shells=%d faces=%d\n",
+                         nLumps, nShells, nFaces);
+            ENTITY_LIST directFaces;
+            api_get_faces(body, directFaces, PAT_IGNORE);
+            std::fprintf(stderr, "[CreateMeshFromEntity] PAT_IGNORE faces=%d\n",
+                         directFaces.iteration_count());
+        } else if (is_LUMP(e)) {
+            LUMP* lump = (LUMP*)e;
+            int nShells = 0;
+            for (SHELL* shell = lump->shell(); shell; shell = shell->next()) ++nShells;
+            std::fprintf(stderr, "[CreateMeshFromEntity] direct LUMP: shells=%d\n", nShells);
+        }
+        // ====== 诊断结束 ======
+
         ENTITY_LIST faces;
         if (!is_EDGE(e)) {
             out = api_get_faces(e, faces);
+            std::fprintf(stderr, "[CreateMeshFromEntity] api_get_faces ok=%d numFaces=%d\n",
+                         out.ok() ? 1 : 0, faces.iteration_count());
             if (!out.ok()) {
                 success = false;
                 goto exit;
@@ -341,6 +386,8 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
 
         ENTITY_LIST edges;
         out = api_get_edges(e, edges);
+        std::fprintf(stderr, "[CreateMeshFromEntity] api_get_edges ok=%d numEdges=%d\n",
+                     out.ok() ? 1 : 0, edges.iteration_count());
         if (!out.ok()) {
             success = false;
             goto exit;
@@ -349,12 +396,15 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
         dd.edgeMesh.resize(numEdges);
 
         if (0 == numEdges + numFaces) {
+            std::fprintf(stderr, "[CreateMeshFromEntity] numFaces+numEdges==0\n");
             success = false;
             goto exit;
         }
 
         get_triangles_from_faceted_faces(faces, dd.faceMesh, dd.faceCoords, dd.triangles, dd.normalCoords);
         get_polylines_from_faceted_edges(edges, dd.edgeMesh, dd.edgeCoords);
+        std::fprintf(stderr, "[CreateMeshFromEntity] after fill: faceCoords.size=%zu triangles.size=%zu edgeCoords.size=%zu\n",
+                     dd.faceCoords.size(), dd.triangles.size(), dd.edgeCoords.size());
         success = true;
     }
     exit:

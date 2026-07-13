@@ -21,7 +21,8 @@ void CollabSession::bindLegacyFields(
     bool&    fastapiSubmitInFlight,
     bool&    fastapiLocalDirtyDuringSubmit,
     bool&    fastapiApplyingRemoteSnapshot,
-    bool&    fastapiPublishingSnapshot
+    bool&    fastapiPublishingSnapshot,
+    bool&    fastapiLocalDirty
 ) {
     fastapi_model_version_ref_              = &fastapi_model_version;
     fastapi_pending_remote_version_ref_     = &fastapi_pending_remote_version;
@@ -31,6 +32,7 @@ void CollabSession::bindLegacyFields(
     fastapiLocalDirtyDuringSubmit_ref_      = &fastapiLocalDirtyDuringSubmit;
     fastapiApplyingRemoteSnapshot_ref_      = &fastapiApplyingRemoteSnapshot;
     fastapiPublishingSnapshot_ref_          = &fastapiPublishingSnapshot;
+    fastapiLocalDirty_ref_                  = &fastapiLocalDirty;
 
     snapshot_.modelVersion           = fastapi_model_version;
     snapshot_.pendingRemoteVersion   = fastapi_pending_remote_version;
@@ -56,9 +58,8 @@ const char* CollabSession::stateNameFor(State s) {
         case State::Connected_LocalDirty:           return "Connected_LocalDirty";
         case State::Connected_SubmitInFlight:        return "Connected_SubmitInFlight";
         case State::Connected_SubmitInFlight_Dirty:  return "Connected_SubmitInFlight_Dirty";
-        case State::Connected_RemotePending:         return "Connected_RemotePending";
         case State::Connected_RemotePending_Dirty:  return "Connected_RemotePending_Dirty";
-        case State::Connected_ApplyingRemote:        return "Connected_ApplyingRemote";
+        case State::Connected_ApplyingRemote:       return "Connected_ApplyingRemote";
         case State::Connected_PublishingDirect:      return "Connected_PublishingDirect";
     }
     return "?";
@@ -108,10 +109,6 @@ bool CollabSession::isBound() const {
         && fastapiPublishingSnapshot_ref_ != nullptr;
 }
 
-bool CollabSession::isLocalDirtyFromUI() {
-    return false;
-}
-
 void CollabSession::mirrorToLegacy() const {
     if (!isBound()) return;
     *fastapi_model_version_ref_              = snapshot_.modelVersion;
@@ -122,6 +119,7 @@ void CollabSession::mirrorToLegacy() const {
     *fastapiLocalDirtyDuringSubmit_ref_     = snapshot_.localDirtyDuringSubmit;
     *fastapiApplyingRemoteSnapshot_ref_     = snapshot_.applyingRemoteSnapshot;
     *fastapiPublishingSnapshot_ref_         = snapshot_.publishingSnapshot;
+    *fastapiLocalDirty_ref_ = (state_ == State::Connected_LocalDirty);
 }
 
 void CollabSession::transition(State newState, Event event) {
@@ -195,6 +193,7 @@ CollabSession::State CollabSession::inferStateFromLegacy() const {
     if (*fastapi_pending_remote_version_ref_ > *fastapi_model_version_ref_) {
         return State::Connected_RemotePending_Dirty;
     }
+    if (*fastapiLocalDirty_ref_)                      return State::Connected_LocalDirty;
     return State::Connected_Idle;
 }
 
@@ -281,8 +280,7 @@ void CollabSession::rollbackSubmit() {
     }
 }
 
-CollabSession::ApplyDecision CollabSession::tryBeginApplyRemote(int remoteVersion, const QString&) {
-    Q_UNUSED(remoteVersion);
+CollabSession::ApplyDecision CollabSession::tryBeginApplyRemote(int remoteVersion, const QString& /*reason*/) {
     ApplyDecision d;
 
     if (state_ == State::Disconnected || state_ == State::Connected_NoProject) {
@@ -307,7 +305,6 @@ CollabSession::ApplyDecision CollabSession::tryBeginApplyRemote(int remoteVersio
     snapshot_.applyingRemoteSnapshot = true;
     snapshot_.pendingRemoteVersion = qMax(snapshot_.pendingRemoteVersion, remoteVersion);
     mirrorToLegacy();
-    transition(State::Connected_ApplyingRemote, Event::ApplyStart);
 
     d.kind = ApplyDecision::Allow;
     return d;
@@ -408,14 +405,16 @@ void CollabSession::onUserEditDuringInFlight() {
 
 void CollabSession::onSubmitAccepted(int newRemoteVersion) {
     if (!isBound()) { emitDump(Event::SubmitAccepted, true); return; }
+    const bool hadDirtyDuringSubmit = snapshot_.localDirtyDuringSubmit;
     if (snapshot_.submitInFlight) {
         snapshot_.submitInFlight = false;
         snapshot_.submitRequestId.clear();
         snapshot_.modelVersion = newRemoteVersion;
         snapshot_.pendingRemoteVersion = 0;
+        snapshot_.localDirtyDuringSubmit = false;
         mirrorToLegacy();
     }
-    if (snapshot_.localDirtyDuringSubmit) {
+    if (hadDirtyDuringSubmit) {
         transition(State::Connected_LocalDirty, Event::SubmitAccepted);
     } else {
         transition(State::Connected_Idle, Event::SubmitAccepted);
@@ -444,9 +443,18 @@ void CollabSession::onSubmitRejected(int latestVersion) {
 
 void CollabSession::onRemotePending(int remoteVersion) {
     if (!isBound()) { emitDump(Event::RemotePending, true); return; }
+    // 总是把 pendingRemoteVersion 累加上，以便 publish/apply 完成后能正确进入
+    // Connected_RemotePending_Dirty 状态。
     if (remoteVersion > snapshot_.modelVersion) {
         snapshot_.pendingRemoteVersion = qMax(snapshot_.pendingRemoteVersion, remoteVersion);
         mirrorToLegacy();
+    }
+    // 在 applying/publishing 期间，publish 流程会自己处理 pendingRemoteVersion
+    // （onHttpPublishEnd / onApplyEnd 会重新检查并切到 RemotePending_Dirty），
+    // 这里不要打乱状态机；保留 current state 不变即可。
+    if (snapshot_.applyingRemoteSnapshot || snapshot_.publishingSnapshot) {
+        emitDump(Event::RemotePending, true);
+        return;
     }
     if (snapshot_.submitInFlight) {
         transition(State::Connected_SubmitInFlight, Event::RemotePending);
@@ -459,6 +467,10 @@ void CollabSession::onRemotePending(int remoteVersion) {
 
 void CollabSession::onRemoteApplied(int appliedVersion) {
     if (!isBound()) { emitDump(Event::RemoteApplied, true); return; }
+    // 如果当前正在 apply 流程（tryBeginApplyRemote 已把 applyingRemoteSnapshot=true），
+    // 这里要把它清掉，否则 apply 标志会卡住，导致后续 addEntity 的 recordEntityAdded 被跳过。
+    // 这种情况出现在 syncFastAPIRemoteVersion 走 entity_graph 路径时。
+    snapshot_.applyingRemoteSnapshot = false;
     snapshot_.modelVersion = appliedVersion;
     snapshot_.pendingRemoteVersion = 0;
     mirrorToLegacy();
@@ -482,10 +494,19 @@ void CollabSession::onApplyEnd() {
     if (!isBound()) { emitDump(Event::ApplyEnd, true); return; }
     snapshot_.applyingRemoteSnapshot = false;
     mirrorToLegacy();
+    // Only clear pendingRemoteVersion if no newer remote version arrived during apply.
+    // onRemotePending() may have bumped pendingRemoteVersion while we were applying;
+    // in that case we must stay in (or transition to) RemotePending_Dirty.
+    if (snapshot_.pendingRemoteVersion <= snapshot_.modelVersion) {
+        snapshot_.pendingRemoteVersion = 0;
+        mirrorToLegacy();
+    }
     if (snapshot_.submitInFlight) {
         transition(State::Connected_SubmitInFlight, Event::ApplyEnd);
     } else if (snapshot_.localDirtyDuringSubmit) {
-        transition(State::Connected_LocalDirty, Event::ApplyEnd);
+        transition(State::Connected_SubmitInFlight_Dirty, Event::ApplyEnd);
+    } else if (snapshot_.pendingRemoteVersion > snapshot_.modelVersion) {
+        transition(State::Connected_RemotePending_Dirty, Event::ApplyEnd);
     } else {
         transition(State::Connected_Idle, Event::ApplyEnd);
     }
@@ -509,8 +530,7 @@ void CollabSession::onHttpPublishEnd() {
     }
 }
 
-void CollabSession::onReconnect(bool projectIdValid) {
-    Q_UNUSED(projectIdValid);
+void CollabSession::onReconnect(bool /*projectIdValid*/) {
     if (!isBound()) { emitDump(Event::Reconnect, true); return; }
     if (snapshot_.submitInFlight) {
         transition(State::Connected_SubmitInFlight, Event::Reconnect);
@@ -544,6 +564,12 @@ void CollabSession::onDisconnected() {
     snapshot_.applyingRemoteSnapshot = false;
     mirrorToLegacy();
     transition(State::Disconnected, Event::Disconnected);
+}
+
+void CollabSession::reset() {
+    snapshot_ = Snapshot();
+    state_ = State::Disconnected;
+    mirrorToLegacy();
 }
 
 CollabSessionApplyRemoteGuard::CollabSessionApplyRemoteGuard()  = default;

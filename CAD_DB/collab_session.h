@@ -20,7 +20,6 @@ public:
         Connected_LocalDirty,
         Connected_SubmitInFlight,
         Connected_SubmitInFlight_Dirty,
-        Connected_RemotePending,
         Connected_RemotePending_Dirty,
         Connected_ApplyingRemote,
         Connected_PublishingDirect
@@ -91,7 +90,7 @@ public:
     // 决策接口
     SubmitDecision  tryBeginSubmit(const QString& reason);
     void            rollbackSubmit();
-    ApplyDecision   tryBeginApplyRemote(int remoteVersion, const QString& reason);
+    ApplyDecision   tryBeginApplyRemote(int remoteVersion, const QString& /*reason*/);
     void            rollbackApply();
     PublishDecision tryBeginHttpPublish();
     void            rollbackHttpPublish();
@@ -107,16 +106,21 @@ public:
     void onApplyEnd();
     void onHttpPublishStart();
     void onHttpPublishEnd();
-    void onReconnect(bool projectIdValid);
+    void onReconnect(bool /*projectIdValid*/);
     void onProjectOpened();
     void onProjectCleared();
     void onDisconnected();
+
+    // 重置状态机到初始状态（用于测试）
+    void reset();
 
     // 只读访问器
     int  modelVersion() const              { return snapshot_.modelVersion; }
     int  pendingRemoteVersion() const      { return snapshot_.pendingRemoteVersion; }
     bool isSubmitInFlight() const          { return snapshot_.submitInFlight; }
     bool isLocalDirtyDuringSubmit() const { return snapshot_.localDirtyDuringSubmit; }
+    bool isLocalDirty() const { return state_ == State::Connected_LocalDirty; }
+    void clearLocalDirtyDuringSubmit() { snapshot_.localDirtyDuringSubmit = false; mirrorToLegacy(); }
     bool isApplyingRemoteSnapshot() const  { return snapshot_.applyingRemoteSnapshot; }
     bool isPublishingSnapshot() const      { return snapshot_.publishingSnapshot; }
     const QString& submitRequestId() const       { return snapshot_.submitRequestId; }
@@ -136,7 +140,8 @@ public:
         bool&   fastapiSubmitInFlight,
         bool&   fastapiLocalDirtyDuringSubmit,
         bool&   fastapiApplyingRemoteSnapshot,
-        bool&   fastapiPublishingSnapshot
+        bool&   fastapiPublishingSnapshot,
+        bool&   fastapiLocalDirty
     );
 
     // 调试接口
@@ -182,13 +187,13 @@ private:
     bool*    fastapiLocalDirtyDuringSubmit_ref_      = nullptr;
     bool*    fastapiApplyingRemoteSnapshot_ref_      = nullptr;
     bool*    fastapiPublishingSnapshot_ref_          = nullptr;
+    bool*    fastapiLocalDirty_ref_                  = nullptr;
 
     mutable qint64 last_dump_ms_[17] = {0};
 
     CollabSession::State inferStateFromLegacy() const;
     void  emitDump(Event event, bool force);
     bool  isBound() const;
-    static bool isLocalDirtyFromUI();
     static const char* stateNameFor(State s);
 };
 
