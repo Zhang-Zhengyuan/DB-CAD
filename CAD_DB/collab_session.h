@@ -118,6 +118,8 @@ public:
     int  modelVersion() const              { return snapshot_.modelVersion; }
     int  pendingRemoteVersion() const      { return snapshot_.pendingRemoteVersion; }
     bool isSubmitInFlight() const          { return snapshot_.submitInFlight; }
+    bool isSatSubmitInFlight() const      { return snapshot_.satSubmitInFlight; }
+    void setSatSubmitInFlight(bool v)     { snapshot_.satSubmitInFlight = v; }
     bool isLocalDirtyDuringSubmit() const { return snapshot_.localDirtyDuringSubmit; }
     bool isLocalDirty() const { return state_ == State::Connected_LocalDirty; }
     void clearLocalDirtyDuringSubmit() { snapshot_.localDirtyDuringSubmit = false; mirrorToLegacy(); }
@@ -165,6 +167,7 @@ private:
         QString submitRequestId;
         QString lastPublishReason;
         bool submitInFlight = false;
+        bool satSubmitInFlight = false;
         bool localDirtyDuringSubmit = false;
         bool applyingRemoteSnapshot = false;
         bool publishingSnapshot = false;

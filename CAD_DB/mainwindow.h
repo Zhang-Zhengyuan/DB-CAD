@@ -110,6 +110,15 @@ public:
     bool submitEntityGraphIncremental(const QString& entityGraphJson, const QString& changesJson, const QString& reason);
     bool applyRemoteEntityGraphIncremental(const QString& remoteEntityGraphJson, const QString& remoteChangesJson, const QString& reason);
 
+    // ========== Neo4j Entity Graph 协作方法 ==========
+    // 推送：序列化完整 ACIS entity graph → POST 到 Python neo4j_entity_store
+    // 成功后通过 WebSocket "submit_entity_graph" 广播 SAT fallback
+    bool submitACISEntityGraph(const QString& reason);
+
+    // 拉取：从 Python neo4j_entity_store 拉取 entity graph（已改为走 storage_bridge content_text）
+    // 优先走 entity graph 路径；失败则用 SAT fallback
+    bool pullACISEntityGraph(int version, const QJsonObject& entityGraphJson);
+
     // ========== 其他 public 方法 ==========
     void setCurWindow(Window* w) { curWindow = w; }
     void showMessage(const QString s, int duration = -1);
@@ -224,6 +233,9 @@ private:
     bool fastapiLocalDirty = false;
     QString fastapiLastPublishReason;
     QString fastapiPendingSubmitRequestId;
+    // submit_accepted 里的 requestId，用于 model_saved 时识别本端推送。
+    // 因为 SAT fallback 路径 entity_graph ack 先到清空 submitRequestId，所以独立保存。
+    QString fastapiLastAcceptedRequestId;
     // 协作基础设施（非状态，不归 CollabSession 管）
     // Conflict resolution 备份：submit_rejected 时备份本地 SAT 内容，Pull 后 offer 给用户恢复。
     QString fastapiConflictLocalSatBackup;

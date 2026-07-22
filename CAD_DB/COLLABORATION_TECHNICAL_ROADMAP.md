@@ -320,3 +320,80 @@ CAD_DB.exe (GUI 客户端) × N
 启动脚本：`deploy/start_dbcad_fullstack.cmd`
 
 ---
+
+## 十、ACIS Entity Graph 序列化层（entity_graph_serializer）
+
+> 更新日期：2026-07-14 | 分支：zhangzhengyuan-dev
+
+### 10.1 设计动机
+
+现有协作的"推送"和"拉取"路径都是 **SAT 全量文本**：
+
+- 推送：客户端导出完整 ACIS 模型为 SAT 字符串 → 后端存 Neo4j → 通过 WebSocket 广播 SAT
+- 拉取：远端 `entity_graph_saved` 事件携带 `content.sat`，接收端 `clear()` + `restoreFastAPIModelFromSat()` 全量替换
+
+这条路径虽然稳定，但有两个明显的痛点：
+
+1. **增量合并缺失**：每条 `entity_graph_saved` 都把本地画布整体覆盖，本地未 push 的修改丢失（必须靠 `fastapiConflictLocalSatBackup` 备份恢复对话框兜底）。
+2. **payload 臃肿**：每次 push 都把整个 SAT 文本（常常数 MB）通过 WebSocket 广播，远端广播带宽压力极大。
+
+为此引入独立的 **ACIS Entity Graph JSON 序列化层**（`entity_graph_serializer.h/cpp`），把 ACIS 拓扑 + 几何信息直接序列化成 JSON，与后端 `neo4j_entity_store.py` 的 `entity_graph_version / entity_node` 图结构对齐。
+
+### 10.2 JSON 格式
+
+```json
+{
+  "nodes": [
+    { "id": "<uuid>", "labels": ["body"], "props": { "entity_type": "body", "transform": {...} } },
+    { "id": "n_0x..._FACE_ID", "labels": ["face"], "props": { "sense": 1, "geometry": {"type": "plane", "root_point": [...], "normal": [...], "uv_range": [...]} } },
+    { "id": "n_0x..._EDGE_ID", "labels": ["edge"], "props": { "geometry": {"type": "straight", "root_point": [...], "direction": [...], "range": [...]} } }
+  ],
+  "rels": [
+    { "type": "body_lump", "start": "<body-uuid>", "end": "n_0x..._LUMP_ID" },
+    { "type": "face_geometry", "start": "n_0x..._FACE_ID", "end": "n_0x..._PLANE_ID" }
+  ]
+}
+```
+
+格式与 `neo4j_entity_store.create_entity_version()` 的入参完全兼容，可以直接 POST 到 `/projects/{id}/entities`。
+
+### 10.3 接入点
+
+| 位置 | 接入方式 |
+|------|----------|
+| `BackendApiClient` | 新增 `saveEntityGraph()` / `getEntityVersion()` 两个 HTTP 方法 |
+| `MainWindow::publishFastAPIAutoSnapshot` | 优先调 `submitACISEntityGraph()`（entity graph 持久化 + SAT broadcast 双轨） |
+| `MainWindow::handleFastAPISyncMessage` (entity_graph_saved 分支) | 优先调 `pullACISEntityGraph(egVersion)`；返回 false 自动降级 SAT fallback |
+| `submitEntityGraphIncremental` | 内部 payload 携带 `content._entity_graph_version`，让接收端能查到 neo4j 里的 entity graph 版本 |
+
+### 10.4 双轨协作语义
+
+推送（Push）顺序：
+1. `submitACISEntityGraph()` → `serializeACISEntityGraph()` 生成 JSON → `POST /projects/{id}/entities` 拿到 egVersion
+2. 用同一个 `decision.requestId` 通过 WebSocket 发送 `submit_entity_graph` 消息，`content` 同时携带：
+   - `sat`：完整 SAT fallback（保证接收端能完整重建）
+   - `entity_graph`：刚序列化好的 JSON（用于增量 diff 分析 / 审计 / 未来增量合并）
+   - `_entity_graph_version`：egVersion（让接收端能直接 GET entity graph）
+
+拉取（Pull）顺序：
+1. 收到 `entity_graph_saved` 且是自己的提交应答 → `session.onSubmitAccepted()` 更新版本号
+2. 是 sync_now 应答 / 其他 client broadcast → 尝试 `pullACISEntityGraph(egVersion)`：
+   - `GET /projects/{id}/entities/{egVersion}` → 拿到 nodes/rels
+   - `deserializeACISEntityGraph()` 重建 ACIS 实体（**当前为占位实现，返回 false**）
+3. 降级到 SAT fallback：`applyRemoteSatSnapshot(satContent)` 全量 restore
+
+### 10.5 当前阶段的状态
+
+- ✅ **序列化** `serializeACISEntityGraph()`：完整实现 BODY / LUMP / SHELL / FACE / LOOP / COEDGE / EDGE / VERTEX / TRANSFORM 的遍历，提取几何参数（plane / sphere / torus / cone / B-spline surface 等）。
+- ✅ **持久化层** `saveEntityGraph()` / `getEntityVersion()`：与 `neo4j_entity_store.py` 对接。
+- ⏳ **反序列化** `deserializeACISEntityGraph()`：占位实现（返回 false，调用 SAT fallback）。
+- ⏳ **neo4j.cpp 的 Bolt 反序列化** `api_restore_entity_list_neo4j`：已有实现，但目前针对的是 Bolt 节点对象，需要扩展接受 JSON 节点对象。
+
+### 10.6 后续工作
+
+1. 把 `api_restore_entity_list_neo4j` 改造为支持 JSON 输入，避免重复一遍 Bolt 序列化逻辑。
+2. `deserializeACISEntityGraph()` 重建 ACIS 实体后，用 ETI 的 uuid 字段把 `BODY*` 注册回 entity_tree，调用 `addEntity` 完成 UI 注册。
+3. 在 `handleFastAPISyncMessage` 的 entity_graph_saved 处理中，从 entity graph 的 `props.uuid` 字段提取 uuid，与本地 ETI 比对，**只 addEntity 增量 body**，实现真正的"增量合并 + 保留本地未 push 实体"。
+4. 移除 SAT 全量 restore 的兜底（entity graph 路径稳定后）。
+
+---

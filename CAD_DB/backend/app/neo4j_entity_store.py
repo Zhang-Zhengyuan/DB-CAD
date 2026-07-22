@@ -189,16 +189,8 @@ class Neo4jEntityStore:
         created_at = self._now_iso()
 
         def write(tx: Any) -> EntityVersionRecord:
-            exists = tx.run(
-                "MATCH (v:entity_graph_version {project_id: $project_id}) RETURN v.id LIMIT 1",
-                project_id=project_id,
-            ).single()
-            if exists is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Project not found in entity graph store",
-                )
-
+            # 新项目第一次保存 entity_graph 时，entity_graph_version 记录可能还不存在。
+            # 改为 Upsert 模式：检查是否需要创建根节点，而不是要求必须存在。
             latest_record = tx.run(
                 """
                 OPTIONAL MATCH (v:entity_graph_version {project_id: $project_id})

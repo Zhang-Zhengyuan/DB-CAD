@@ -242,9 +242,12 @@ async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, 
         raise
 
     content = dict(latest.content or {})
+    has_eg = isinstance(content, dict) and "entity_graph" in content
+    print(f"[_send_latest_model_saved_event] project_id={project_id} latest_v={latest.version} "
+          f"content_keys={list(content.keys())} has_entity_graph={has_eg}", flush=True)
     # 如果最新版本是用 entity_graph 路径写入的，必须按 entity_graph_saved 事件广播，
-    # 否则接收端会按 model_saved 走"清空+restore"路径，丢掉已有的 entity_graph 节点对齐逻辑。
-    if isinstance(content, dict) and "entity_graph" in content:
+    # 否则接收端会按 model_saved 走"清空+restore"路径，丢掉已有的 entity_graph 节点对齐信息。
+    if has_eg:
         await websocket.send_json(
             _entity_graph_saved_event(
                 project_id,
@@ -376,7 +379,7 @@ async def _handle_submit_model_message(
 
     trigger = str(data.get("reason") or "submit_model").strip() or "submit_model"
     try:
-        await _create_model_version_serialized(
+        version = await _create_model_version_serialized(
             project_id,
             model_payload,
             trigger=trigger,
@@ -393,12 +396,15 @@ async def _handle_submit_model_message(
         )
         return
 
+    # 返回真实版本号，让客户端在 submit_accepted 里就能更新版本，
+    # 不必等待后续的 model_saved 广播（可能导致版本号延迟更新）。
     await websocket.send_json(
         {
             "type": "submit_accepted",
             "project_id": project_id,
             "request_id": request_id,
             "version_model": "model",
+            "version": version.version,
         }
     )
 
@@ -447,7 +453,11 @@ async def _handle_submit_entity_graph_message(
         return
 
     trigger = str(data.get("reason") or "submit_entity_graph").strip() or "submit_entity_graph"
-    print(f"[fastapi _handle_submit_entity_graph] ENTER project_id={project_id} request_id={request_id} base_version_in={model_payload.base_version}", flush=True)
+    content_for_log = dict(data.get("content") or {})
+    print(f"[fastapi _handle_submit_entity_graph] ENTER project_id={project_id} request_id={request_id} "
+          f"base_version_in={model_payload.base_version} "
+          f"content_has_entity_graph={'entity_graph' in content_for_log} "
+          f"content_keys={list(content_for_log.keys())}", flush=True)
     try:
         async with sync_manager.write_lock(project_id):
             version = crud.create_model_version(project_id, model_payload)

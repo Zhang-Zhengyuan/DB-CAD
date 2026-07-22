@@ -271,6 +271,7 @@ CollabSession::SubmitDecision CollabSession::tryBeginSubmit(const QString& reaso
 void CollabSession::rollbackSubmit() {
     if (!snapshot_.submitInFlight) return;
     snapshot_.submitInFlight = false;
+    snapshot_.satSubmitInFlight = false;
     snapshot_.submitRequestId.clear();
     mirrorToLegacy();
     if (snapshot_.localDirtyDuringSubmit) {
@@ -408,8 +409,9 @@ void CollabSession::onSubmitAccepted(int newRemoteVersion) {
     const bool hadDirtyDuringSubmit = snapshot_.localDirtyDuringSubmit;
     if (snapshot_.submitInFlight) {
         snapshot_.submitInFlight = false;
+        snapshot_.satSubmitInFlight = false;
         snapshot_.submitRequestId.clear();
-        snapshot_.modelVersion = newRemoteVersion;
+        snapshot_.modelVersion = qMax(snapshot_.modelVersion, newRemoteVersion);
         snapshot_.pendingRemoteVersion = 0;
         snapshot_.localDirtyDuringSubmit = false;
         mirrorToLegacy();

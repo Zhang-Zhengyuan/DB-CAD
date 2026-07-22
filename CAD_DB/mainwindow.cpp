@@ -1,6 +1,8 @@
 #include "mainwindow.h"
 #include "pg_service.h"
 #include "collab_session.h"
+#include "backend_api_client.h"
+#include "entity_graph_serializer.h"
 
 
 #include <QActionGroup>
@@ -1349,6 +1351,11 @@ bool MainWindow::submitEntityGraphIncremental(const QString& entityGraphJson, co
         content.insert("changes", changesDoc.object());
     }
 
+    // 旧 entity_graph（ETI 级别：只有 index_base 依赖关系）的 Neo4j 持久化是非必须的，
+    // 因为它本身只用于 git-like 增量 diff，不携带 ACIS 拓扑几何。所以这里不调
+    // saveEntityGraph()（neo4j_entity_store 期望的是完整 ACIS 拓扑）。
+    // ACIS 拓扑走 submitACISEntityGraph() 的路径，那里有正确的 egVersion 注入。
+
     QJsonObject payload;
     payload.insert("type", "submit_entity_graph");
     payload.insert("project_id", fastapi_project_id);
@@ -1700,21 +1707,191 @@ void MainWindow::publishFastAPIAutoSnapshot() {
         return;
     }
 
-    // 优先使用增量模式
+    QString reason = fastapiLastPublishReason.isEmpty() ? QString::fromUtf8("local-change") : fastapiLastPublishReason;
+
+    // 优先：尝试 ACIS entity graph 路径（序列化完整 ACIS 拓扑 → POST 到 neo4j_entity_store）
+    if (submitACISEntityGraph(reason)) {
+        pendingEntityChanges.clear();
+        return;
+    }
+    // submitACISEntityGraph 失败时会自动降级到 WebSocket SAT 路径
+
+    // 回退到旧路径：pendingChanges 有就用 submitEntityGraphIncremental，没有就用 SAT 全量
     if (!pendingEntityChanges.isEmpty()) {
         QString entityGraphJson = exportEntityGraphToJson();
         QString changesJson = exportEntityChangesToJson(pendingEntityChanges);
-        QString reason = fastapiLastPublishReason.isEmpty() ? QString::fromUtf8("local-change") : fastapiLastPublishReason;
         if (submitEntityGraphIncremental(entityGraphJson, changesJson, reason)) {
             pendingEntityChanges.clear();
             return;
         }
-        // 如果增量提交失败，回退到SAT模式
     }
 
-    // 回退到SAT全量模式
+    // 最后兜底：SAT 全量
     publishFastAPIModelSnapshot(false);
 }
+
+// ============================================================================
+// Neo4j Entity Graph 协作方法
+// ============================================================================
+
+bool MainWindow::submitACISEntityGraph(const QString& reason) {
+    if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
+        return false;
+    }
+
+    auto& session = CollabSession::instance();
+    const QString author = QString::fromStdString(fastapi_author).trimmed();
+    CollabSession::SubmitDecision decision = session.tryBeginSubmit(reason);
+    if (decision.kind != CollabSession::SubmitDecision::Allow) {
+        statusBar()->showMessage(decision.reason, 5000);
+        return false;
+    }
+
+    if (fastapiSyncSocket == nullptr || !fastapiSyncSocket->isValid()) {
+        session.rollbackSubmit();
+        statusBar()->showMessage(tr("协作通道未连接"), 5000);
+        return false;
+    }
+
+    // 1. 序列化完整 ACIS entity graph
+    const ENTITY_LIST& entities = curWindow->getEntityList();
+    QJsonObject acisGraph = serializeACISEntityGraph(entityIndexToUuid, entities);
+    qDebug().noquote() << "[Collab] submitACISEntityGraph: entityGraph nodes="
+                       << acisGraph.value("nodes").toArray().size()
+                       << "rels=" << acisGraph.value("rels").toArray().size();
+
+    // 2. 同时导出 SAT（用于广播 content）
+    QString fullSat;
+    if (!exportCurrentModelToSat(&fullSat, nullptr) || fullSat.isEmpty()) {
+        session.rollbackSubmit();
+        statusBar()->showMessage(tr("导出本地模型 SAT 失败，无法推送"), 5000);
+        return false;
+    }
+
+    // 3. 通过 WebSocket 广播 entity_graph_saved
+    //    entity_graph 和 SAT 一起存在 storage_bridge 的 content_text 里，
+    //    storage_bridge 返回时会完整返回 content_text 中的 JSON（包含 entity_graph），
+    //    拉取端直接解析 entity_graph 做反序列化，无需走 Python neo4j 路径。
+    const QString requestId = decision.requestId;
+
+    QJsonObject content;
+    content.insert("sat", fullSat);
+    content.insert("entity_graph", acisGraph); // 完整 entity_graph JSON，存 content_text
+
+    QJsonObject payload;
+    payload.insert("type", "submit_entity_graph");
+    payload.insert("project_id", fastapi_project_id);
+    payload.insert("request_id", requestId);
+    payload.insert("author", author.isEmpty() ? QString::fromUtf8("dbcad-exe") : author);
+    payload.insert("content", content);
+    payload.insert("reason", reason.isEmpty() ? QString::fromUtf8("local-change") : reason);
+    if (session.modelVersion() > 0) {
+        payload.insert("base_version", session.modelVersion());
+    } else {
+        payload.insert("base_version", QJsonValue::Null);
+    }
+
+    fastapiSyncSocket->sendTextMessage(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact)));
+    statusBar()->showMessage(tr("正在提交 ACIS Entity Graph 变更..."), 1500);
+    updateCollabPanelUi();
+    return true;
+}
+
+bool MainWindow::pullACISEntityGraph(int version, const QJsonObject& entityGraphJson) {
+    if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
+        return false;
+    }
+
+    qDebug().noquote() << "[Collab] pullACISEntityGraph: version=" << version
+                       << "entityGraph nodes=" << entityGraphJson.value("nodes").toArray().size()
+                       << "rels=" << entityGraphJson.value("rels").toArray().size();
+
+    // 反序列化 entity_graph JSON → ACIS BODY 列表
+    DeserializedEntityGraph result;
+    QString deserializeError;
+    if (!deserializeACISEntityGraph(entityGraphJson, &result, &deserializeError)) {
+        qWarning().noquote() << "[Collab] pullACISEntityGraph: deserialize failed:" << deserializeError;
+        return false;
+    }
+
+    if (result.entities->count() == 0) {
+        qWarning().noquote() << "[Collab] pullACISEntityGraph: deserialize returned 0 entities";
+        delete result.entities;
+        return false;
+    }
+
+    qDebug().noquote() << "[Collab] pullACISEntityGraph: deserialize OK, bodies=" << result.entities->count();
+
+    // ====== 临时调试：直接返回 false，强制走 SAT 路径，确认 entity_graph 路径是崩溃源 ======
+    qDebug().noquote() << "[Collab] pullACISEntityGraph: DIAGNOSTIC MODE - 返回 false，让 SAT 路径接管";
+    delete result.entities;
+    return false;
+}
+
+/*
+ * 以下代码临时禁用（诊断目的），启用请打开下一段宏。
+ */
+#if 0
+
+    // 验证 BODY 拓扑完整性（先 api_facet_entity 一下，能成功说明拓扑完整）
+    for (int t = 0; t < result.entities->count(); ++t) {
+        ENTITY* tb = (*result.entities)[t];
+        qDebug().noquote() << "[Collab] pullACISEntityGraph: body[" << t << "] ptr=" << (void*)tb
+                           << "isBODY=" << (tb && is_BODY(tb) ? 1 : 0)
+                           << "lump=" << (tb ? (void*)((BODY*)tb)->lump() : (void*)nullptr);
+        if (tb && is_BODY(tb)) {
+            BODY* bbody = (BODY*)tb;
+            LUMP* ll = bbody->lump();
+            qDebug().noquote() << "[Collab] pullACISEntityGraph: body[" << t << "] lump=" << (void*)ll
+                               << "shell=" << (ll ? (void*)ll->shell() : (void*)nullptr);
+            SHELL* ss = ll ? ll->shell() : nullptr;
+            FACE* ff = ss ? ss->face() : nullptr;
+            qDebug().noquote() << "[Collab] pullACISEntityGraph: body[" << t << "] shell=" << (void*)ss
+                               << "face=" << (void*)ff;
+        }
+    }
+
+    // 清空本地画布
+    qDebug().noquote() << "[Collab] pullACISEntityGraph: about to call curWindow->clear()";
+    curWindow->clear();
+    qDebug().noquote() << "[Collab] pullACISEntityGraph: after clear, entity_tree.size=" << curWindow->getEntityList().count();
+
+    // 将反序列化出的 BODY 加入 entity_tree
+    int addedCount = 0;
+    for (int i = 0; i < result.entities->count(); ++i) {
+        ENTITY* body = (*result.entities)[i];
+        qDebug().noquote() << "[Collab] pullACISEntityGraph: loop iter" << i
+                           << "body ptr=" << (void*)body
+                           << "count left=" << result.entities->count() - i;
+        if (!body) {
+            qWarning() << "[Collab] pullACISEntityGraph: body is null at index" << i;
+            continue;
+        }
+        qDebug().noquote() << "[Collab] pullACISEntityGraph: body[" << i << "] is_BODY check";
+        if (is_BODY(body)) {
+            // 生成新的 ETI index（从当前 entityIndexToUuid.size() 开始）
+            int newIndex = entityIndexToUuid.size();
+            QString uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            entityIndexToUuid[newIndex] = uuid;
+            // 通过 ACIS api_restore_entity_list 内部机制注册到 ETI（如果需要）
+            // 直接 addEntity，由 Window 负责注册到 ETI
+            const QString name = QString::fromUtf8("导入实体%1").arg(curWindow->getEntityList().count());
+            qDebug().noquote() << "[Collab] pullACISEntityGraph: about to addEntity, body=" << (void*)body
+                               << "lump=" << (void*)((BODY*)body)->lump();
+            curWindow->addEntity(body, name.toStdString(), -1);
+            qDebug().noquote() << "[Collab] pullACISEntityGraph: added BODY ptr=" << (void*)body << "name=" << name;
+            addedCount++;
+        } else {
+            qWarning() << "[Collab] pullACISEntityGraph: body[" << i << "] is not a BODY";
+        }
+    }
+
+    qDebug().noquote() << "[Collab] pullACISEntityGraph: ADDED" << addedCount << "bodies";
+    delete result.entities;
+    qDebug().noquote() << "[Collab] pullACISEntityGraph: entities list deleted, returning true";
+    return true;
+}
+#endif // #if 0 诊断模式结束
 
 bool MainWindow::exportCurrentModelToSat(QString* satContent, QString* errorMessage) {
     if (satContent == nullptr) {
@@ -1813,8 +1990,14 @@ bool MainWindow::submitFastAPIModelOverSocket(const QString& satContent, const Q
         return false;
     }
 
+    // SAT fallback 路径与 entity_graph 路径共用同一个 submitInFlight 状态，
+    // 但 entity_graph 的 submit_accepted 会先到达并清空它。用 satSubmitInFlight
+    // 作为独立标记，确保 SAT 的 model_saved 广播能正确识别本端提交。
+    session.setSatSubmitInFlight(true);
+
     if (fastapiSyncSocket == nullptr || !fastapiSyncSocket->isValid()) {
         session.rollbackSubmit();
+        session.setSatSubmitInFlight(false);
         if (interactiveConflict) {
             QMessageBox::warning(this, tr("DBCAD"), tr("FastAPI WebSocket collaboration channel is not connected."));
         } else {
@@ -2101,6 +2284,9 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
 
     const QJsonObject root = document.object();
     const QString messageType = root.value("type").toString();
+    qDebug().noquote() << "[Collab][DEBUG] handleFastAPISyncMessage type=" << messageType
+                       << "hasSat=" << root.value("content").toObject().contains("sat")
+                       << "hasTrigger=" << root.value("trigger").toString();
     if (messageType == "presence_snapshot") {
         fastapi_collaborators.clear();
         const QJsonArray members = root.value("members").toArray();
@@ -2143,12 +2329,16 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
 
     if (messageType == "submit_accepted") {
         // Server 在 broadcast entity_graph_saved 时会 exclude_client_id=client_id，
-        // 然后单独给提交者发 submit_accepted { request_id, version }。client 必须
-        // 处理这条消息，否则 SubmitInFlight 状态永远清不掉。
+        // 然后单独给提交者发 submit_accepted { request_id, version, version_model }。
+        // client 必须处理这条消息，否则 SubmitInFlight 状态永远清不掉。
         auto& session = CollabSession::instance();
         const QString requestId = root.value("request_id").toString();
         const int acceptedVersion = root.value("version").toInt(0);
+
         if (requestId.isEmpty() || requestId == session.submitRequestId()) {
+            // SAT fallback 路径（version_model="model"）：服务端 version 字段已经包含正确版本，
+            // 直接用 acceptedVersion 更新版本，model_saved 广播走 isOwnSubmitBroadcast 路径。
+            // entity_graph 路径（version_model="entity_graph"）：同理的，版本在 acceptedVersion 里。
             session.onSubmitAccepted(acceptedVersion);
             fastapi_model_version = session.modelVersion();
             fastapi_pending_remote_version = session.pendingRemoteVersion();
@@ -2160,12 +2350,7 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
                 setCurrentPartName(fastapi_project_name);
             }
             updateCollabPanelUi();
-            statusBar()->showMessage(tr("增量实体图已提交，版本 %1").arg(fastapi_model_version), 2500);
-        } else {
-            // 不匹配的 requestId：通常是别的客户端的 ack 被错误地投递到了这条 socket 上，
-            // 静默忽略，不改本地状态。
-            qDebug().noquote() << "[Collab] submit_accepted ignored (requestId mismatch) local="
-                                << session.submitRequestId() << "incoming=" << requestId;
+            statusBar()->showMessage(tr("协作快照已提交，版本 %1").arg(fastapi_model_version), 2500);
         }
         return;
     }
@@ -2301,11 +2486,18 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
             return;
         }
 
-        // Git-like 语义：远端 broadcast（其他客户端提交触发）默认不自动 apply 整个替换，
-        // 否则可能打断本地编辑。只有用户主动 Pull 才真正 clear+restore。
-        // 唯一例外：远端 reply 的 trigger == "sync_now" 是 Pull 的应答，立即合并。
+        // Git-like 语义：
+        //   - 只有用户主动 Pull（trigger == "sync_now"）的应答才立即合并本地画布
+        //   - 远端 broadcast（其他客户端提交触发）默认只更新 pendingRemoteVersion，
+        //     提示用户"远端有新版本，请在协作面板点 Pull 合并"，保留本地编辑不被破坏。
+        // 这样：A push 后，B 不会立刻同步，必须点 Pull 才合并，符合 git 协作习惯。
         const bool shouldApply = isPullResponse;
+        qDebug().noquote() << "[Collab] shouldApply decision:"
+                           << "isPullResponse=" << isPullResponse
+                           << "trigger=" << reason
+                           << "final=" << shouldApply;
         if (!shouldApply) {
+            qDebug().noquote() << "[Collab][DEBUG] handleFastAPISyncMessage: shouldApply=false, parking as pending, msg_type=entity_graph_saved";
             session.onRemotePending(remoteVersion);
             fastapi_pending_remote_version = session.pendingRemoteVersion();
             const QString tip = tr("远端版本%1已推送（git-like 语义），请在协作面板点「拉取(Pull)」合并").arg(remoteVersion);
@@ -2315,11 +2507,10 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
         }
 
         if (satContent.isEmpty()) {
-            // 极端情况：远端没有 SAT 文本（很老的 model_saved 格式），降级为只更新版本号，
-            // 让用户重新拉一次完整 SAT。
+            // sync_now 应答居然没 SAT，理论不应发生，回退到 pending 让用户重试
             session.onRemotePending(remoteVersion);
             fastapi_pending_remote_version = session.pendingRemoteVersion();
-            statusBar()->showMessage(tr("远端版本%1不包含SAT文本，请刷新后重试Pull").arg(remoteVersion), 5000);
+            statusBar()->showMessage(tr("远端版本%1的 Pull 应答缺少SAT文本，请刷新后重试").arg(remoteVersion), 5000);
             updateCollabPanelUi();
             return;
         }
@@ -2336,8 +2527,42 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
             return;
         }
 
+        // 从 content.entity_graph 直接获取 entity_graph JSON，
+        // 不再依赖 Python neo4j API（_entity_graph_version）。
+        // 新路径：submitACISEntityGraph 把 entity_graph 存在 storage_bridge 的 content_text 里，
+        // storage_bridge 返回完整 content 时会携带 entity_graph。
+        const QJsonObject entityGraphJson = content.value("entity_graph").toObject();
+        if (!entityGraphJson.isEmpty() && !entityGraphJson.value("nodes").toArray().isEmpty()) {
+            qDebug().noquote() << "[Collab] Pull try entity_graph path, nodes="
+                               << entityGraphJson.value("nodes").toArray().size()
+                               << "rels=" << entityGraphJson.value("rels").toArray().size();
+            if (pullACISEntityGraph(remoteVersion, entityGraphJson)) {
+                session.onRemoteApplied(remoteVersion);
+                fastapi_model_version = session.modelVersion();
+                fastapi_pending_remote_version = session.pendingRemoteVersion();
+                pendingEntityChanges.clear();
+                if (!fastapi_project_name.isEmpty()) {
+                    setCurrentPartName(fastapi_project_name);
+                }
+                updateCollabPanelUi();
+                statusBar()->showMessage(tr("已通过 ACIS Entity Graph 拉取远端版本 %1").arg(fastapi_model_version), 3000);
+                return;
+            }
+            qDebug().noquote() << "[Collab] Pull entity_graph path returned false, falling back to SAT";
+            session.rollbackApply();
+        }
+
+        if (satContent.isEmpty()) {
+            session.rollbackApply();
+            session.onRemotePending(remoteVersion);
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            updateCollabPanelUi();
+            statusBar()->showMessage(tr("远端版本%1无SAT文本且Entity Graph重建失败，请刷新后重试").arg(remoteVersion), 5000);
+            return;
+        }
+
         qDebug().noquote() << "[Collab] Pull applyRemoteSat start, sat.size=" << satContent.size();
-        // 调用 master 同款的 clear() + restoreFastAPIModelFromSat() 全量替换路径。
+        // SAT fallback：调用 master 同款的 clear() + restoreFastAPIModelFromSat() 全量替换路径。
         const bool ok = applyRemoteSatSnapshot(satContent, reason);
         qDebug().noquote() << "[Collab] Pull applyRemoteSat done, ok=" << ok;
         if (ok) {
@@ -2367,6 +2592,8 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
         return;
     }
 
+    qDebug().noquote() << "[Collab][DEBUG] handleFastAPISyncMessage: entering model_saved branch";
+
     const QString projectId = root.value("project_id").toString();
     if (projectId != fastapi_project_id) {
         return;
@@ -2380,11 +2607,20 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
     auto& session = CollabSession::instance();
     const QString requestId = root.value("request_id").toString();
     const bool acceptedOwnSubmit = !requestId.isEmpty() && requestId == session.submitRequestId();
+    // SAT fallback 路径：entity_graph ack 先到清空 submitRequestId，
+    // 用 satSubmitInFlight 标记 SAT 提交在飞行中，用 fastapiLastAcceptedRequestId
+    // 匹配 submit_accepted 留下的 requestId。
+    // 注意：SAT 的 model_saved 广播不含 requestId，此时 submitRequestId 仍未被清空，
+    // 所以不能用 requestId 匹配，必须用 satSubmitInFlight 来判断。
+    const bool isOwnSubmitBroadcast = acceptedOwnSubmit
+        || (session.isSatSubmitInFlight() && requestId.isEmpty())
+        || (!requestId.isEmpty() && requestId == fastapiLastAcceptedRequestId);
 
-    if (acceptedOwnSubmit) {
-        session.onSubmitAccepted(remoteVersion);
-        fastapi_model_version = session.modelVersion();
-        fastapi_pending_remote_version = session.pendingRemoteVersion();
+    if (isOwnSubmitBroadcast) {
+        // 本端提交的广播（被 exclude_client_id 排除后发给自己的）。
+        // 状态转换（submitOk）和版本号在 submit_accepted 时已经处理完毕。
+        // 这里只需要同步 UI 状态，不要再次调用 onSubmitAccepted——remoteVersion
+        // 是旧版本号（0），会错误地覆盖已接受的版本。
         if (!session.isLocalDirtyDuringSubmit() && curWindow != nullptr) {
             curWindow->setIsModified(false);
         }
@@ -2403,17 +2639,85 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
         return;
     }
 
-    // model_saved 是老格式提交（不含 entity_graph）：不 clear 本地画布，
-    // 把远端版本号标到 pendingRemoteVersion，用户在协作菜单点 Pull 时再处理。
+    // model_saved 消息可能是：
+    //   1. 来自 submitFastAPIModelOverSocket（SAT fallback，neo4j 存储失败时降级路径）
+    //   2. 来自 submit_entity_graph 的存储路径（content 包含 entity_graph）
+    // 只要带了 SAT 内容，就应该立即 apply，跟 entity_graph_saved 的 SAT fallback 完全一致。
+    const QJsonObject contentJson = root.value("content").toObject();
+    const QString satContent = contentJson.value("sat").toString();
+    const QString reason = root.value("trigger").toString("model_saved");
+    qDebug().noquote() << "[Collab][DEBUG] model_saved branch: hasSat=" << !satContent.isEmpty()
+                       << "sat.size=" << satContent.size() << "reason=" << reason
+                       << "requestId=" << requestId
+                       << "lastAcceptedId=" << fastapiLastAcceptedRequestId
+                       << "satSubmitInFlight=" << session.isSatSubmitInFlight();
+
+    // 优先尝试 entity_graph 反序列化路径（如果 content 包含 entity_graph）
+    const QJsonObject entityGraphJson = contentJson.value("entity_graph").toObject();
+    if (!entityGraphJson.isEmpty() && !entityGraphJson.value("nodes").toArray().isEmpty()) {
+        qDebug().noquote() << "[Collab] model_saved try entity_graph path, nodes="
+                           << entityGraphJson.value("nodes").toArray().size();
+        if (pullACISEntityGraph(remoteVersion, entityGraphJson)) {
+            session.onRemoteApplied(remoteVersion);
+            fastapi_model_version = session.modelVersion();
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            pendingEntityChanges.clear();
+            if (!fastapi_project_name.isEmpty()) {
+                setCurrentPartName(fastapi_project_name);
+            }
+            updateCollabPanelUi();
+            statusBar()->showMessage(tr("已通过 ACIS Entity Graph 拉取远端版本 %1").arg(fastapi_model_version), 3000);
+            return;
+        }
+        qDebug().noquote() << "[Collab] model_saved entity_graph path returned false, falling back to SAT";
+    }
+
     if (curWindow == nullptr) {
         return;
     }
-    session.onRemotePending(remoteVersion);
-    fastapi_pending_remote_version = session.pendingRemoteVersion();
-    statusBar()->showMessage(
-        tr("远端模型版本%1到达（model_saved格式），请在协作菜单中点击拉取(Pull)").arg(session.pendingRemoteVersion()),
-        5000);
-    updateCollabPanelUi();
+
+    if (satContent.isEmpty()) {
+        session.onRemotePending(remoteVersion);
+        fastapi_pending_remote_version = session.pendingRemoteVersion();
+        statusBar()->showMessage(
+            tr("远端版本%1不包含SAT文本，无法自动拉取，请刷新后重试").arg(remoteVersion),
+            5000);
+        updateCollabPanelUi();
+        return;
+    }
+
+    CollabSession::ApplyDecision applyDecision = session.tryBeginApplyRemote(remoteVersion, reason);
+    qDebug().noquote() << "[Collab] model_saved tryBeginApplyRemote kind=" << (int)applyDecision.kind
+                       << "reason=" << applyDecision.reasonTr;
+    if (applyDecision.kind != CollabSession::ApplyDecision::Allow) {
+        qWarning() << "[Collab] model_saved apply rejected:" << applyDecision.reasonTr;
+        session.onRemotePending(remoteVersion);
+        fastapi_pending_remote_version = session.pendingRemoteVersion();
+        updateCollabPanelUi();
+        return;
+    }
+
+    qDebug().noquote() << "[Collab] model_saved: applying remote SAT snapshot, sat.size=" << satContent.size();
+    const bool ok = applyRemoteSatSnapshot(satContent, reason);
+    qDebug().noquote() << "[Collab] model_saved applyRemoteSat done, ok=" << ok;
+    if (ok) {
+        session.onRemoteApplied(remoteVersion);
+        fastapi_model_version = session.modelVersion();
+        fastapi_pending_remote_version = session.pendingRemoteVersion();
+        pendingEntityChanges.clear();
+        if (!fastapi_project_name.isEmpty()) {
+            setCurrentPartName(fastapi_project_name);
+        }
+        updateCollabPanelUi();
+        statusBar()->showMessage(tr("已拉取远端版本 %1（SAT 格式）").arg(fastapi_model_version), 3000);
+    } else {
+        session.rollbackApply();
+        session.onRemotePending(remoteVersion);
+        fastapi_model_version = session.modelVersion();
+        fastapi_pending_remote_version = session.pendingRemoteVersion();
+        updateCollabPanelUi();
+        qWarning() << "[Collab] model_saved applyRemoteSatSnapshot failed, parked as pending for retry. v=" << remoteVersion;
+    }
 }
 
 void MainWindow::addWindow() {

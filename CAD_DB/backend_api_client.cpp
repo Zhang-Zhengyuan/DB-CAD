@@ -1,6 +1,7 @@
 #include "backend_api_client.h"
 
 #include <QEventLoop>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFile>
@@ -381,4 +382,127 @@ std::optional<BackendApiClient::ModelPayload> BackendApiClient::getModelVersion(
     }
 
     return payload;
+}
+
+// ---------------------------------------------------------------------------
+// Neo4j Entity Graph Storage
+// ---------------------------------------------------------------------------
+
+std::optional<int> BackendApiClient::saveEntityGraph(
+    const QString& projectId,
+    const QString& author,
+    const QString& entityGraphJson,
+    std::optional<int> baseVersion
+) {
+    errorMessage.clear();
+
+    // 构造 EntityVersionCreate 兼容的 payload
+    // { "author": "...", "entity_graph": {...}, "base_version": ... }
+    QJsonParseError parseError;
+    const QJsonDocument egDoc = QJsonDocument::fromJson(entityGraphJson.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        errorMessage = QString::fromUtf8("entity_graph JSON 格式错误: %1").arg(parseError.errorString());
+        return std::nullopt;
+    }
+    if (!egDoc.isObject()) {
+        errorMessage = QString::fromUtf8("entity_graph 根必须是对象");
+        return std::nullopt;
+    }
+
+    QJsonObject payload;
+    payload.insert("author", author.isEmpty() ? QString::fromUtf8("dbcad-exe") : author);
+    payload.insert("entity_graph", egDoc.object());
+    if (baseVersion.has_value()) {
+        payload.insert("base_version", *baseVersion);
+    } else {
+        payload.insert("base_version", QJsonValue::Null);
+    }
+
+    HttpResult response = sendJsonRequest(
+        "POST",
+        QString("/projects/%1/entities").arg(projectId),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact)
+    );
+
+    if (!response.error.isEmpty() && response.statusCode <= 0) {
+        errorMessage = response.error;
+        return std::nullopt;
+    }
+
+    if (response.statusCode == 409) {
+        errorMessage = QString::fromUtf8("Entity graph 版本冲突（base_version 与服务端最新版本不匹配）");
+        return std::nullopt;
+    }
+
+    if (response.statusCode != 201) {
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("保存 entity graph 失败"), response.statusCode, response.body);
+        return std::nullopt;
+    }
+
+    const QJsonDocument respDoc = QJsonDocument::fromJson(response.body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !respDoc.isObject()) {
+        errorMessage = QString::fromUtf8("保存 entity graph 返回数据格式错误");
+        return std::nullopt;
+    }
+
+    const int version = respDoc.object().value("version").toInt(0);
+    if (version <= 0) {
+        errorMessage = QString::fromUtf8("保存 entity graph 返回版本号无效");
+        return std::nullopt;
+    }
+    return version;
+}
+
+std::optional<BackendApiClient::EntityGraphPayload> BackendApiClient::getEntityVersion(
+    const QString& projectId,
+    int version
+) {
+    errorMessage.clear();
+
+    HttpResult response = sendJsonRequest(
+        "GET",
+        QString("/projects/%1/entities/%2").arg(projectId).arg(version)
+    );
+
+    if (!response.error.isEmpty() && response.statusCode <= 0) {
+        errorMessage = response.error;
+        return std::nullopt;
+    }
+
+    if (response.statusCode == 404) {
+        return std::nullopt;
+    }
+
+    if (response.statusCode != 200) {
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("获取 entity graph 版本失败"), response.statusCode, response.body);
+        return std::nullopt;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        errorMessage = QString::fromUtf8("获取 entity graph 返回数据格式错误");
+        return std::nullopt;
+    }
+
+    const QJsonObject root = doc.object();
+
+    EntityGraphPayload result;
+    result.version = root.value("version").toInt(0);
+    result.author = root.value("author").toString();
+    const QString createdAtStr = root.value("created_at").toString();
+    if (!createdAtStr.isEmpty()) {
+        QDateTime dt = QDateTime::fromString(createdAtStr, Qt::ISODate);
+        result.createdAt = dt.isValid() ? dt.toMSecsSinceEpoch() : 0;
+    }
+
+    // 直接保留 nodes 数组（原序），调用方需要时按 id 自行索引
+    result.nodes = root.value("nodes").toArray();
+    result.rels = root.value("rels").toArray();
+
+    if (result.version <= 0) {
+        errorMessage = QString::fromUtf8("获取 entity graph 版本号无效");
+        return std::nullopt;
+    }
+    return result;
 }
