@@ -122,6 +122,7 @@
     <ClCompile Include="DbcadAPI.cpp" />
     <ClCompile Include="collab_session.cpp" />
     <ClCompile Include="entity_graph_serializer.cpp" />
+    <ClCompile Include="entity_merge_engine.cpp" />
     <ClCompile Include="gme_dump_object.cpp" />
     <ClCompile Include="gme_mesh.cpp" />
     <ClCompile Include="glwidget.cpp" />
@@ -158,6 +159,7 @@
     <ClInclude Include="storage_bridge_service.h" />
     <ClInclude Include="collab_session.h" />
     <ClInclude Include="entity_graph_serializer.h" />
+    <ClInclude Include="entity_merge_engine.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="images\DBCAD.rc" />

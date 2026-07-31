@@ -7,6 +7,7 @@
 #include <QString>
 #include <QtGlobal>
 #include <memory>
+#include "access.hxx"
 #include "pg_service.h"
 
 enum OPERATOR_TYPES { OPERATOR_IMPORT = 0, OPERATOR_CONSTRUCTOR, OPERATOR_INTERSECTOR, OPERATOR_BOOLEAN, OPERATOR_DEFEATURE, OPERATOR_UNKNOWN, OPERATOR_SPERATOR = 999 };
@@ -114,6 +115,16 @@ public:
     // 推送：序列化完整 ACIS entity graph → POST 到 Python neo4j_entity_store
     // 成功后通过 WebSocket "submit_entity_graph" 广播 SAT fallback
     bool submitACISEntityGraph(const QString& reason);
+
+    // ========== 增量 delta Push / Pull（接入 access 模块） ==========
+    // 增量 Push：基于 ACIS delta_state 计算 body 变更，只上传真正变化的部分
+    bool submitIncrementalDelta(const QString& reason);
+    // 增量 Pull：基于 UUID 去重，不调 clear()，只 addEntity 远端独有的 bodies
+    bool applyRemoteIncrementalDelta(const QJsonObject& remoteContent, QString* errorMessage);
+    // 把单个 body 序列化为 SAT 文本（供增量 Push 使用）
+    QString serializeBodyToSat(ENTITY* body);
+    // 把远端 SAT 文本增量 restore 到画布（不 clear，UUID 去重）
+    int restoreRemoteDeltaSat(const QString& remoteSat, const QJsonObject& collabSnapshot, QString* errorMessage);
 
     // 拉取：从 Python neo4j_entity_store 拉取 entity graph（已改为走 storage_bridge content_text）
     // 优先走 entity graph 路径；失败则用 SAT fallback
@@ -275,4 +286,6 @@ private:
     QList<EntityChange> pendingEntityChanges;
     bool isTrackingEntityChanges = false;
     qint64 entityChangeTrackingStartTime = 0;
+    // Access 模块增量 delta 追踪（Push 时计算 delta，Pull 时做 UUID 去重）
+    IncrementalContext collabCtx;
 };

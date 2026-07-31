@@ -10,36 +10,40 @@
 
 [Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 421
 [Collab][DEBUG] handleFastAPISyncMessage type= presence_snapshot hasSat= false hasTrigger=
-[+4017ms] | [CollabSession] | ws_msg | Connected_Idle | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 22029
+[+4817ms] | [CollabSession] | ws_msg | Connected_Idle | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 7897
 [Collab][DEBUG] handleFastAPISyncMessage type= entity_graph_saved hasSat= true hasTrigger= manual-push
-[Collab][DEBUG] handleFastAPISyncMessage: entity_graph_saved RECEIVED, projectId= b4411dcd-4bfc-4d6a-bb61-ebefa47994d3 requestId= dd9fe39d-f934-4aec-b832-37e5bb1098b3
+[Collab][DEBUG] handleFastAPISyncMessage: entity_graph_saved RECEIVED, projectId= defaad4a-6620-4770-9118-92e36b193be0 requestId= 633cf126-2cca-4008-aa36-343c22f9e854
 [Collab] entity_graph_saved v= 1 trigger= manual-push isPull= false state=  content.hasSat= true sat.size= 3613
 [Collab] shouldApply decision: isPullResponse= false trigger= manual-push final= false
 [Collab][DEBUG] handleFastAPISyncMessage: shouldApply=false, parking as pending, msg_type=entity_graph_saved
 [+0ms] | [CollabSession] | remotePending | Connected_RemotePending_Dirty | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab][DEBUG] >>> onCollabPullButtonClicked ENTER curWindow= ok fastapi_project_id= b4411dcd-4bfc-4d6a-bb61-ebefa47994d3 socket= exists socketValid= yes
+[Collab][DEBUG] >>> onCollabPullButtonClicked ENTER curWindow= ok fastapi_project_id= defaad4a-6620-4770-9118-92e36b193be0 socket= exists socketValid= yes
 [Collab][DEBUG] >>> requestFastAPISyncNow socket= exists valid= yes
 [Collab][DEBUG] <<< onCollabPullButtonClicked EXIT (sync_now sent)
-[+6404ms] | [CollabSession] | ws_msg | Connected_RemotePending_Dirty | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 20412
-[Collab][DEBUG] handleFastAPISyncMessage type= entity_graph_saved hasSat= true hasTrigger= sync_now
-[Collab][DEBUG] handleFastAPISyncMessage: entity_graph_saved RECEIVED, projectId= b4411dcd-4bfc-4d6a-bb61-ebefa47994d3 requestId=
-[Collab] entity_graph_saved v= 1 trigger= sync_now isPull= true state=  content.hasSat= true sat.size= 3613
-[Collab] shouldApply decision: isPullResponse= true trigger= sync_now final= true
-[Collab] Pull tryBeginApplyRemote kind= 0 reason=
-[Collab] Pull try entity_graph path, nodes= 59 rels= 93
-[Collab] pullACISEntityGraph: version= 1 entityGraph nodes= 59 rels= 93
-[Collab] pullACISEntityGraph: deserialize OK, bodies= 1
-[Collab] pullACISEntityGraph: DIAGNOSTIC MODE - ���� false���� SAT ·���ӹ�
-[Collab] Pull entity_graph path returned false, falling back to SAT
-[+0ms] | [CollabSession] | applyEnd | Connected_RemotePending_Dirty | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab] Pull applyRemoteSat start, sat.size= 3613
+[+2569ms] | [CollabSession] | ws_msg | Connected_RemotePending_Dirty | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 7771
+[Collab][DEBUG] handleFastAPISyncMessage type= model_saved hasSat= true hasTrigger= sync_now
+[Collab][DEBUG] handleFastAPISyncMessage: entering model_saved branch
+[Collab][DEBUG] model_saved branch: hasSat= true sat.size= 3613 reason= sync_now requestId=  lastAcceptedId=  satSubmitInFlight= false
+[Collab] model_saved delta path check: delta_bodies.size= 1 deleted_uuids.size= 0
+[Collab] model_saved try incremental delta path, + 1  - 0
+[FINGERPRINT-2026-07-31] applyRemoteIncrementalDelta CALLED, this code includes the el-bypass fix
+[Collab][Delta] applyRemoteIncrementalDelta ENTER, delta_bodies=1 deleted_uuids=0
+[CollabSession] onApplyStart ENTER, bound= true
 [+0ms] | [CollabSession] | applyStart | Connected_ApplyingRemote | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=T | publish=F
-[+0ms] | [CollabSession] | applyStart | Connected_ApplyingRemote | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=T | publish=F
-[Collab] restoreFastAPIModelFromSat: after api_restore_entity_list el.count()= 1
-[Collab] restoreFastAPIModelFromSat: entity[ 0 ] ptr= 0x23f28b9eaf0 isBODY= 1
-[Collab][DEBUG] >>> Window::addEntity ENTER name=导入(FastAPI)实体0 ptrEntity=0000023F28B9EAF0 sot=-1 index_base.size=0 ot=1
+[CollabSession] onApplyStart EXIT
+[Collab][Delta] step1 localUuids.size= 0
+[Collab][Delta] step2 delta_bodies.size= 1
+[Collab][Delta]   body[ 0 ] uuid= d0ac2a9b-5755-4cc2-a003-533bc24cfbe5 sat.size= 3619 alreadyLocal= false
+[Collab][Delta]   begin restore, uuid= d0ac2a9b-5755-4cc2-a003-533bc24cfbe5
+[Collab][Delta]   temp SAT ready, path= C:/Users/Lenovo/AppData/Local/Temp/dbcad_remote_delta_HwcOrQ.sat bytes= 3619
+[Collab][Delta]   acis_restore_entity_list returned, ok=1 el.count=1 err=
+[Collab][Delta]   probing el[0], el.count=1
+[Collab][Delta]   el[0]=000002143495D800
+[Collab][Delta]   el[0]->identity=268435456
+[Collab][Delta]   calling addEntity idx=0 uuid=d0ac2a9b-5755-4cc2-a003-533bc24cfbe5
+[Collab][DEBUG] >>> Window::addEntity ENTER name=远端增量0 ptrEntity=000002143495D800 sot=-1 index_base.size=0 ot=1
 [Collab][DEBUG] Window::addEntity before updateTreeWidget, entity_tree.size=1
 [Collab][DEBUG] Window::addEntity before updateMeshData
 [Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=1
@@ -56,19 +60,18 @@
 [Collab][DEBUG] Window::addEntity after updateMeshData
 [Collab][DEBUG] Window::addEntity isApplyingRemote=1 isPublishing=0
 [Collab][DEBUG] <<< Window::addEntity EXIT OK
-[Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=1
-[Window::updateMeshData] display_data=1 totalFaces=6 totalEdges=12 no-mesh entities=0
-[GLWidget::updateMeshData] pendingGpuUpload=true data_face=216 data_edge=72 count_face=216 count_edge=72 radius=1.5
-[Collab][DEBUG] <<< Window::updateMeshData EXIT
-[+2ms] | [CollabSession] | applyEnd | Connected_RemotePending_Dirty | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab] Pull applyRemoteSat done, ok= true
+[Collab][Delta]   addEntity done, appliedAdd=1
+[Collab][Delta] step3 deleted_uuids.size= 0
+[Collab][Delta] applyRemote: + 1 / 1   - 0 / 0  (ENTER saw delta_bodies= 1 deleted= 0 )
+[+0ms] | [CollabSession] | applyEnd | Connected_RemotePending_Dirty | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab][Delta] applyRemoteIncrementalDelta EXIT success
 [+0ms] | [CollabSession] | remoteApply | Connected_Idle | v=1 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-
-[Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 67
-[Collab][DEBUG] handleFastAPISyncMessage type= pong hasSat= false hasTrigger=
 [GLWidget::paintGL] pendingGpuUpload=true, calling uploadMeshDataToGpu
 [GLWidget::uploadMeshDataToGpu] uploaded face=216 floats edge=72 floats
-[Collab][DEBUG] >>> Window::addEntity ENTER name=球体 ptrEntity=0000023F28B9DF10 sot=1 index_base.size=0 ot=1
+[+2613ms] | [CollabSession] | ws_msg | Connected_Idle | v=1 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 67
+[Collab][DEBUG] handleFastAPISyncMessage type= pong hasSat= false hasTrigger=
+[Collab][DEBUG] >>> Window::addEntity ENTER name=球体 ptrEntity=000002143495C900 sot=1 index_base.size=0 ot=1
 [Collab][DEBUG] Window::addEntity before updateTreeWidget, entity_tree.size=2
 [Collab][DEBUG] Window::addEntity before updateMeshData
 [Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=2
@@ -88,112 +91,19 @@
 [Collab][DEBUG] <<< Window::addEntity EXIT OK
 [GLWidget::paintGL] pendingGpuUpload=true, calling uploadMeshDataToGpu
 [GLWidget::uploadMeshDataToGpu] uploaded face=24840 floats edge=72 floats
-[+0ms] | [CollabSession] | submitStart | Connected_SubmitInFlight | v=1 | pv=0 | in_flight=T | dirty_during=F | apply=F | publish=F | req=70b8da0e
-[Collab] submitACISEntityGraph: entityGraph nodes= 63 rels= 97
+[+0ms] | [CollabSession] | submitStart | Connected_SubmitInFlight | v=1 | pv=0 | in_flight=T | dirty_during=F | apply=F | publish=F | req=6a1c5d42
+[Collab][Delta] created_or_updated: 1   deleted: 0
 [Collab] exportCurrentModelToSat: el.count()= 2 (from entity_tree, not ACIS API)
-[Collab] exportCurrentModelToSat: entity[ 0 ] ptr= 0x23f28b9eaf0 isBODY= 1
-[Collab] exportCurrentModelToSat: entity[ 1 ] ptr= 0x23f28b9df10 isBODY= 1
-[+5640ms] | [CollabSession] | ws_msg | Connected_SubmitInFlight | v=1 | pv=0 | in_flight=T | dirty_during=F | apply=F | publish=F | req=70b8da0e
+[Collab] exportCurrentModelToSat: entity[ 0 ] ptr= 0x2143495d800 isBODY= 1
+[Collab] exportCurrentModelToSat: entity[ 1 ] ptr= 0x2143495c900 isBODY= 1
+[Collab][Delta] submitted: delta_bodies= 1  deleted= 0  fullSat.size= 3823
+[+8654ms] | [CollabSession] | ws_msg | Connected_SubmitInFlight | v=1 | pv=0 | in_flight=T | dirty_during=F | apply=F | publish=F | req=6a1c5d42
 [Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 173
 [Collab][DEBUG] handleFastAPISyncMessage type= submit_accepted hasSat= false hasTrigger=
 [+0ms] | [CollabSession] | submitOk | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[+3947ms] | [CollabSession] | ws_msg | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[+1757ms] | [CollabSession] | ws_msg | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 67
 [Collab][DEBUG] handleFastAPISyncMessage type= pong hasSat= false hasTrigger=
-[+5071ms] | [CollabSession] | ws_msg | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 24418
-[Collab][DEBUG] handleFastAPISyncMessage type= entity_graph_saved hasSat= true hasTrigger= manual-push
-[Collab][DEBUG] handleFastAPISyncMessage: entity_graph_saved RECEIVED, projectId= b4411dcd-4bfc-4d6a-bb61-ebefa47994d3 requestId= 0f481b4f-27d1-4033-b273-2d1b859fec15
-[Collab] entity_graph_saved v= 3 trigger= manual-push isPull= false state=  content.hasSat= true sat.size= 4106
-[Collab] shouldApply decision: isPullResponse= false trigger= manual-push final= false
-[Collab][DEBUG] handleFastAPISyncMessage: shouldApply=false, parking as pending, msg_type=entity_graph_saved
-[+0ms] | [CollabSession] | remotePending | Connected_RemotePending_Dirty | v=2 | pv=3 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab][DEBUG] >>> onCollabPullButtonClicked ENTER curWindow= ok fastapi_project_id= b4411dcd-4bfc-4d6a-bb61-ebefa47994d3 socket= exists socketValid= yes
-[Collab][DEBUG] >>> requestFastAPISyncNow socket= exists valid= yes
-[Collab][DEBUG] <<< onCollabPullButtonClicked EXIT (sync_now sent)
-[+2838ms] | [CollabSession] | ws_msg | Connected_RemotePending_Dirty | v=2 | pv=3 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 22655
-[Collab][DEBUG] handleFastAPISyncMessage type= entity_graph_saved hasSat= true hasTrigger= sync_now
-[Collab][DEBUG] handleFastAPISyncMessage: entity_graph_saved RECEIVED, projectId= b4411dcd-4bfc-4d6a-bb61-ebefa47994d3 requestId=
-[Collab] entity_graph_saved v= 3 trigger= sync_now isPull= true state=  content.hasSat= true sat.size= 4106
-[Collab] shouldApply decision: isPullResponse= true trigger= sync_now final= true
-[Collab] Pull tryBeginApplyRemote kind= 0 reason=
-[Collab] Pull try entity_graph path, nodes= 67 rels= 101
-[Collab] pullACISEntityGraph: version= 3 entityGraph nodes= 67 rels= 101
-[Collab] pullACISEntityGraph: deserialize OK, bodies= 3
-[Collab] pullACISEntityGraph: DIAGNOSTIC MODE - ���� false���� SAT ·���ӹ�
-[Collab] Pull entity_graph path returned false, falling back to SAT
-[+0ms] | [CollabSession] | applyEnd | Connected_RemotePending_Dirty | v=2 | pv=3 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab] Pull applyRemoteSat start, sat.size= 4106
-[+0ms] | [CollabSession] | applyStart | Connected_ApplyingRemote | v=2 | pv=3 | in_flight=F | dirty_during=F | apply=T | publish=F
-[+0ms] | [CollabSession] | applyStart | Connected_ApplyingRemote | v=2 | pv=3 | in_flight=F | dirty_during=F | apply=T | publish=F
-[Collab] restoreFastAPIModelFromSat: after api_restore_entity_list el.count()= 3
-[Collab] restoreFastAPIModelFromSat: entity[ 0 ] ptr= 0x23f28b9f810 isBODY= 1
-[Collab] restoreFastAPIModelFromSat: entity[ 1 ] ptr= 0x23f28ba0170 isBODY= 1
-[Collab] restoreFastAPIModelFromSat: entity[ 2 ] ptr= 0x23f28b9f8b0 isBODY= 1
-[Collab][DEBUG] >>> Window::addEntity ENTER name=导入(FastAPI)实体0 ptrEntity=0000023F28B9F810 sot=-1 index_base.size=0 ot=1
-[Collab][DEBUG] Window::addEntity before updateTreeWidget, entity_tree.size=1
-[Collab][DEBUG] Window::addEntity before updateMeshData
-[Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=1
-[CreateMeshFromEntity] e=BODY
-[CreateMeshFromEntity] api_facet_entity ok=1 err#=0
-[CreateMeshFromEntity] direct topology: lumps=1 shells=1 faces=6
-[CreateMeshFromEntity] PAT_IGNORE faces=6
-[CreateMeshFromEntity] api_get_faces ok=1 numFaces=6
-[CreateMeshFromEntity] api_get_edges ok=1 numEdges=12
-[CreateMeshFromEntity] after fill: faceCoords.size=72 triangles.size=36 edgeCoords.size=72
-[Window::updateMeshData] display_data=1 totalFaces=6 totalEdges=12 no-mesh entities=0
-[GLWidget::updateMeshData] pendingGpuUpload=true data_face=216 data_edge=72 count_face=216 count_edge=72 radius=1.5
-[Collab][DEBUG] <<< Window::updateMeshData EXIT
-[Collab][DEBUG] Window::addEntity after updateMeshData
-[Collab][DEBUG] Window::addEntity isApplyingRemote=1 isPublishing=0
-[Collab][DEBUG] <<< Window::addEntity EXIT OK
-[Collab][DEBUG] >>> Window::addEntity ENTER name=导入(FastAPI)实体1 ptrEntity=0000023F28BA0170 sot=-1 index_base.size=0 ot=1
-[Collab][DEBUG] Window::addEntity before updateTreeWidget, entity_tree.size=2
-[Collab][DEBUG] Window::addEntity before updateMeshData
-[Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=2
-[CreateMeshFromEntity] e=BODY
-[CreateMeshFromEntity] api_facet_entity ok=1 err#=0
-[CreateMeshFromEntity] direct topology: lumps=1 shells=1 faces=1
-[CreateMeshFromEntity] PAT_IGNORE faces=1
-[CreateMeshFromEntity] api_get_faces ok=1 numFaces=1
-[CreateMeshFromEntity] api_get_edges ok=1 numEdges=0
-[CreateMeshFromEntity] after fill: faceCoords.size=2058 triangles.size=4104 edgeCoords.size=0
-[Window::updateMeshData] display_data=2 totalFaces=7 totalEdges=12 no-mesh entities=0
-[GLWidget::updateMeshData] pendingGpuUpload=true data_face=24840 data_edge=72 count_face=24840 count_edge=72 radius=1.5
-[Collab][DEBUG] <<< Window::updateMeshData EXIT
-[Collab][DEBUG] Window::addEntity after updateMeshData
-[Collab][DEBUG] Window::addEntity isApplyingRemote=1 isPublishing=0
-[Collab][DEBUG] <<< Window::addEntity EXIT OK
-[Collab][DEBUG] >>> Window::addEntity ENTER name=导入(FastAPI)实体2 ptrEntity=0000023F28B9F8B0 sot=-1 index_base.size=0 ot=1
-[Collab][DEBUG] Window::addEntity before updateTreeWidget, entity_tree.size=3
-[Collab][DEBUG] Window::addEntity before updateMeshData
-[Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=3
-[CreateMeshFromEntity] e=BODY
-[CreateMeshFromEntity] api_facet_entity ok=1 err#=0
-[CreateMeshFromEntity] direct topology: lumps=1 shells=1 faces=1
-[CreateMeshFromEntity] PAT_IGNORE faces=1
-[CreateMeshFromEntity] api_get_faces ok=1 numFaces=1
-[CreateMeshFromEntity] api_get_edges ok=1 numEdges=0
-[CreateMeshFromEntity] after fill: faceCoords.size=3024 triangles.size=6048 edgeCoords.size=0
-[Window::updateMeshData] display_data=3 totalFaces=8 totalEdges=12 no-mesh entities=0
-[GLWidget::updateMeshData] pendingGpuUpload=true data_face=61128 data_edge=72 count_face=61128 count_edge=72 radius=2.2
-[Collab][DEBUG] <<< Window::updateMeshData EXIT
-[Collab][DEBUG] Window::addEntity after updateMeshData
-[Collab][DEBUG] Window::addEntity isApplyingRemote=1 isPublishing=0
-[Collab][DEBUG] <<< Window::addEntity EXIT OK
-[Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=3
-[Window::updateMeshData] display_data=3 totalFaces=8 totalEdges=12 no-mesh entities=0
-[GLWidget::updateMeshData] pendingGpuUpload=true data_face=61128 data_edge=72 count_face=61128 count_edge=72 radius=2.2
-[Collab][DEBUG] <<< Window::updateMeshData EXIT
-[+0ms] | [CollabSession] | applyEnd | Connected_RemotePending_Dirty | v=2 | pv=3 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab] Pull applyRemoteSat done, ok= true
-[+0ms] | [CollabSession] | remoteApply | Connected_Idle | v=3 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[GLWidget::paintGL] pendingGpuUpload=true, calling uploadMeshDataToGpu
-[GLWidget::uploadMeshDataToGpu] uploaded face=61128 floats edge=72 floats
-[+2088ms] | [CollabSession] | ws_msg | Connected_Idle | v=3 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 67
-[Collab][DEBUG] handleFastAPISyncMessage type= pong hasSat= false hasTrigger=
-[+9997ms] | [CollabSession] | ws_msg | Connected_Idle | v=3 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[+9581ms] | [CollabSession] | ws_msg | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [Collab][DEBUG] >>> handleFastAPISyncMessage message.size= 67
 [Collab][DEBUG] handleFastAPISyncMessage type= pong hasSat= false hasTrigger=

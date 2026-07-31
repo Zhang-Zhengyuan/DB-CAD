@@ -945,11 +945,15 @@ ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, i
         QString bodySat;
         ENTITY_LIST singleBody;
         singleBody.add(ptrEntity);
+        // 使用 QTemporaryFile 生成路径，立即 close() 释放句柄，然后手动 fopen + 写 + fclose。
+        // 关键：close() 后 Qt 释放文件句柄，api_save_entity_list 内部 fopen 可以正常打开。
+        // 手动 QFile::remove() 在操作完成后清理。
+        // 不用 autoRemove，因为我们需要先读文件内容，再删除。
         QTemporaryFile satTmp(QDir::tempPath() + "/dbcad_addsat_XXXXXX.sat");
-        satTmp.setAutoRemove(true);
+        satTmp.setAutoRemove(false);
         if (satTmp.open()) {
             const QString satPath = satTmp.fileName();
-            satTmp.close();
+            satTmp.close(); // 释放句柄
             FILE* satFile = fopen(satPath.toStdString().c_str(), "wb");
             if (satFile != nullptr) {
                 API_NOP_BEGIN;
@@ -965,6 +969,7 @@ ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, i
                 if (in.open(QIODevice::ReadOnly)) {
                     bodySat = QString::fromUtf8(in.readAll());
                 }
+                QFile::remove(satPath); // 读完后删除
             }
         }
         mainWindow->recordEntityAdded(

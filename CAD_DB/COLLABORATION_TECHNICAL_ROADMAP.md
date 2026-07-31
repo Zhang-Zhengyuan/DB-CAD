@@ -1,6 +1,6 @@
 # DBCAD 多人协作系统 — 技术路线与方案全览
 
-> 更新日期：2026-07-13 | 分支：zhangzhengyuan-dev
+> 最后更新：2026-07-31 | 阶段里程碑：客户端-服务端增量同步端到端跑通
 
 ---
 
@@ -19,6 +19,10 @@ DBCAD 多人协作采用 **客户端-服务器** 架构，分五层：
 │  │BackendApiClient  │ │EntityChange Tracking │  │
 │  │(HTTP/WS 客户端)  │ │(增量变更追踪)        │  │
 │  └──────────────────┘ └──────────────────────┘  │
+│  ┌──────────────────────┐ ┌──────────────────┐  │
+│  │EntityGraphSerializer│ │StorageBridge     │  │
+│  │(ACIS → JSON)        │ │(C++ → Neo4j)     │  │
+│  └──────────────────────┘ └──────────────────┘  │
 └────────────────────┬────────────────────────────┘
                      │  HTTP REST + WebSocket (端口 8000)
 ┌────────────────────┴────────────────────────────┐
@@ -114,7 +118,7 @@ ws://<host>:8000/ws/projects/{project_id}?client_id=<uuid>&author=<name>&passwor
 | type | 用途 |
 |------|------|
 | `submit_model` | 提交 SAT 全量快照（含 `base_version` 乐观锁） |
-| `submit_entity_graph` | 提交增量实体图 |
+| `submit_entity_graph` | 提交增量实体图（含 `content.delta_bodies[]` 单 body SAT + `fullSat`） |
 | `sync_now` | 请求服务器推送最新版本 |
 | `ping` | 心跳保活 |
 
@@ -122,7 +126,7 @@ ws://<host>:8000/ws/projects/{project_id}?client_id=<uuid>&author=<name>&passwor
 
 | type | 用途 |
 |------|------|
-| `model_saved` | 广播：新版本已保存 |
+| `model_saved` | 广播：新版本已保存（trigger=manual-push/sync_now/...） |
 | `entity_graph_saved` | 广播：增量实体图已保存 |
 | `submit_rejected` | 提交被拒绝（版本冲突） |
 | `submit_accepted` | 提交已被接受 |
@@ -131,7 +135,32 @@ ws://<host>:8000/ws/projects/{project_id}?client_id=<uuid>&author=<name>&passwor
 | `collaborator_left` | 有人离开 |
 | `pong` | 心跳响应 |
 
-### 3.3 HTTP REST API
+### 3.3 增量提交 payload (`submit_entity_graph`)
+
+```json
+{
+  "type": "submit_entity_graph",
+  "project_id": "...",
+  "author": "...",
+  "base_version": 1,
+  "request_id": "...",
+  "content": {
+    "delta_bodies": [
+      {
+        "uuid": "868930b8-587d-4e0f-b442-3353cf3045b1",
+        "op": "ADD",
+        "name": "立方体",
+        "sat": "<单 body SAT 文本 ~3.6KB>"
+      }
+    ],
+    "deleted_uuids": [],
+    "fullSat": "<全量 SAT ~3.6KB>",
+    "_entity_graph_version": 1
+  }
+}
+```
+
+### 3.4 HTTP REST API
 
 | 方法 | 路径 | 用途 |
 |------|------|------|
@@ -142,6 +171,7 @@ ws://<host>:8000/ws/projects/{project_id}?client_id=<uuid>&author=<name>&passwor
 | GET | `/projects/{id}/models/versions` | 分页列出版本历史 |
 | POST | `/projects/{id}/entities` | 存储实体图版本 |
 | GET | `/projects/{id}/entities/diff?a=&b=` | 两个实体图版本的 diff |
+| GET | `/projects/{id}/entities/{version}` | 获取实体图版本 |
 
 ---
 
@@ -152,7 +182,7 @@ ws://<host>:8000/ws/projects/{project_id}?client_id=<uuid>&author=<name>&passwor
 协作面板提供两个按钮，用户手动触发：
 
 - **推送(Push)**：`submitEntityGraphIncremental` 把本地 `pendingEntityChanges` 一次性发到服务器，写为新版本并通过 `entity_graph_saved` 广播给其他 client。每个 ADD 变更附带该 body 的独立 SAT 文本。
-- **拉取(Pull)**：`requestFastAPISyncNow` 从服务器拉取远端最新版本，通过 `entity_graph_saved` 广播；接收端走 `applyRemoteEntityGraphIncremental` 增量合并到本地画布。**不 clear 本地画布**。
+- **拉取(Pull)**：`requestFastAPISyncNow` 从服务器拉取远端最新版本，通过 `entity_graph_saved` 广播；接收端走 `applyRemoteIncrementalDelta` 增量合并到本地画布。**不 clear 本地画布**。
 
 冲突处理：
 - 如果 `pendingRemoteVersion > modelVersion`，Push 按钮提示先 Pull。
@@ -169,7 +199,7 @@ ws://<host>:8000/ws/projects/{project_id}?client_id=<uuid>&author=<name>&passwor
 
 ---
 
-## 五、增量协作方案
+## 五、增量协作方案（核心）
 
 ### 5.1 实体变更追踪
 
@@ -198,48 +228,65 @@ addEntity / removeEntity → recordEntity*()     // 期间累积
 Push → submitEntityGraphIncremental 提交后清空
 ```
 
-### 5.2 实体图导出
+### 5.2 单 body SAT 序列化
 
-`exportEntityGraphToJson()` 将当前场景序列化为图结构：
+`serializeBodyToSat(ENTITY* body)` 把单个 body 序列化为 SAT 文本：
 
-```json
-{
-  "nodes": [
-    {
-      "id": "<uuid>",
-      "labels": ["<entity-type>"],
-      "props": {
-        "index": 0, "name": "...",
-        "operatorType": 1, "subOperatorType": 0,
-        "transform": [...], "index_base": [...],
-        "index_support": [...], "visible": true
-      }
-    }
-  ],
-  "rels": [
-    { "type": "DEPENDS_ON", "start": "<uuid>", "end": "<dep-uuid>" }
-  ]
-}
+```cpp
+ENTITY_LIST el;
+el.add(body);
+QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_delta_XXXXXX.sat");
+tempFile.setAutoRemove(false);
+if (!tempFile.open()) return QString();
+const QString tempPath = tempFile.fileName();
+tempFile.close();   // 释放 Qt 排他锁
+FILE* f = fopen(tempPath.toStdString().c_str(), "wb");
+api_set_int_option("sequence_save_files", 1);   // 写 schema-version header
+api_save_entity_list(f, true, el);              // text_mode=true
+fclose(f);
+// 读字节流作为字符串返回
 ```
 
-### 5.3 增量回放
+要点：
+- **必须先 close() QTemporaryFile 再 fopen**——Qt 的排他锁会让 ACIS 后续 `fopen` 失败（"打开文件失败"根因）
+- **`sequence_save_files=1`** 让 ACIS 写 SAT schema header（schema-version / product-id），否则接收端 `acis_restore_entity_list` 读不到合法 header 直接 abort
 
-`applyRemoteEntityGraphIncremental(remoteGraph, remoteChanges, reason)` 工作流：
+### 5.3 增量回放（接收端 `applyRemoteIncrementalDelta`）
 
-1. 收集本地 `entity_tree` 里所有 uuid，构成 `localUuids: QSet<QString>`
-2. 解析 `content.changes`，对每个变更：
-   - **ADD**：uuid 不在 `localUuids` 时，用变更携带的 `sat` 文本创建临时文件，调 `acis_restore_entity_list` 恢复为 `ENTITY_LIST`，取第一个 body 调 `addEntity` 注册到本地 tree
-   - **REMOVE**：跳过，保留本地未推送的实体
-   - **MODIFY**：当前不处理
-3. 不调用 `clear()`，不删除任何本地 body
+**完整工作流**（这是 2026-07-31 阶段里程碑跑通的端到端路径）：
 
-### 5.4 SAT 导出来源修正（Bug 修复记录）
+```cpp
+1. 收集本地 entity_tree 里所有 uuid，构成 localUuids: QSet<QString>
+2. 解析 content.delta_bodies[] 和 content.deleted_uuids
+3. 对每个 delta_bodies[i]（op=ADD）：
+   a) uuid 已在 localUuids → skip
+   b) 写远端 SAT 到 QTemporaryFile（setAutoRemove(false)，先 close 释放排他锁）
+   c) fopen("rb") → acis_restore_entity_list(el, f, 2, 0, 1)
+      注意：不要在外面套 API_NOP_BEGIN/END——wrapper 内部已 API_BEGIN/END，
+      嵌套会让 ACIS 内部状态机错乱，导致 entity 不进 active list 也不进 el 数组
+   d) 取 el[0]（restore 后的第一个 ENTITY*）
+   e) curWindow->addEntity(el[0], tr("远端增量%1").arg(idx).toStdString(), -1)
+   f) entityIndexToUuid[idx] = uuid   // 注册到本地索引
+4. 对每个 deleted_uuids[i]：如果本地有，调用 ACIS api_del_entity + 从 entity_tree 删除
+5. 不调用 clear()，不删除任何本地 body（本地未提交修改完整保留）
+```
+
+关键点逐条说明：
+
+| 步骤 | 关键点 |
+|---|---|
+| QTemporaryFile | `setAutoRemove(false)`，**close 后再 fopen**——Qt 排他锁 |
+| acis_restore_entity_list | **不要嵌套 API_NOP_BEGIN/END**（详见第六节 bug 修复记录） |
+| el[0] | restore 成功后 el.count() >= 1，第一个 ENTITY* 即 BODY |
+| addEntity | isApplyingRemote 标志位让 addEntity 不再记录增量 change（避免回环推送） |
+
+### 5.4 SAT 导出来源修正（已修复）
 
 **问题**：pull 后再 push，远端看不到之前的实体。
 
 **根因**：`exportCurrentModelToSat` 使用 `acis_get_noattrib_toplevel_active_entities()` 从 ACIS API 获取实体列表，但 `api_restore_entity_list` 恢复的实体没有正确进入 ACIS 的 active model，导致 ACIS API 返回的实体不完整。
 
-**修复**：改用 `Window::getEntityList()` 从 Qt 的 `entity_tree` 直接获取实体列表，不再依赖 ACIS API。`entity_tree` 是 Qt 层维护的列表，始终与场景同步。
+**修复**：改用 `Window::getEntityList()` 从 Qt 的 `entity_tree` 直接获取实体列表，不再依赖 ACIS API。
 
 ```cpp
 // 修复前（有问题）
@@ -250,15 +297,96 @@ acis_get_noattrib_toplevel_active_entities(el);  // pull 后实体可能不在 a
 ENTITY_LIST el = curWindow->getEntityList();     // 从 entity_tree 获取，准确性有保证
 ```
 
+### 5.5 端到端验证（2026-07-31）
+
+测试场景：A 端 push 立方体 → B 端 pull → B 端本地加球体 → B 端 push → A 端自动收到。
+
+**A 端日志关键帧**：
+```
+[Collab][DEBUG] >>> handleFastAPISyncMessage type= entity_graph_saved ...
+[Collab] shouldApply decision: isPullResponse= false trigger= manual-push final= false
+[Collab][DEBUG] handleFastAPISyncMessage: shouldApply=false, parking as pending
+[Collab][DEBUG] >>> onCollabPullButtonClicked ENTER
+[Collab][DEBUG] >>> requestFastAPISyncNow
+[Collab][DEBUG] <<< onCollabPullButtonClicked EXIT (sync_now sent)
+[Collab][DEBUG] >>> handleFastAPISyncMessage type= model_saved hasTrigger= sync_now
+[Collab] model_saved delta path check: delta_bodies.size= 1 deleted_uuids.size= 0
+[Collab] model_saved try incremental delta path, + 1  - 0
+```
+
+**B 端日志关键帧**：
+```
+[FINGERPRINT-2026-07-31] applyRemoteIncrementalDelta CALLED
+[Collab][Delta] applyRemoteIncrementalDelta ENTER, delta_bodies=1 deleted_uuids=0
+[Collab][Delta]   acis_restore_entity_list returned, ok=1 el.count=1 err=
+[Collab][Delta]   probing el[0], el.count=1
+[Collab][Delta]   el[0]=000002143495D800
+[Collab][Delta]   el[0]->identity=268435456
+[Collab][Delta]   calling addEntity idx=0 uuid=...
+[Collab][DEBUG] >>> Window::addEntity ENTER name=远端增量0 ...
+[CreateMeshFromEntity] e=BODY
+[CreateMeshFromEntity] api_facet_entity ok=1
+[CreateMeshFromEntity] direct topology: lumps=1 shells=1 faces=6
+[Window::updateMeshData] display_data=1 totalFaces=6
+[GLWidget::uploadMeshDataToGpu] uploaded face=216 floats  ← 立方体 GPU 上传成功
+[Collab][Delta] applyRemote: + 1 / 1   - 0 / 0
+[Collab] remoteApply | Connected_Idle | v=1
+```
+
 ---
 
-## 六、Storage Bridge 架构
+## 六、关键 Bug 修复记录
 
-### 6.1 设计动机
+### 6.1 B 端 `acis_restore_entity_list` 后 `el.count()=1` 但 `activeList.count()=0`（2026-07-31）
+
+**症状**：
+- B 端 pull 后进程**不崩**，applyRemoteIncrementalDelta EXIT success
+- 版本号正常升 v=1
+- 但画布空，GLWidget::uploadMeshDataToGpu 没被调用
+- log 末尾 `[Collab][Delta]   activeList.count=0` → `no BODY found in activeList, skip`
+
+**尝试 1**：放弃 `el[]`，改走 `acis_get_noattrib_toplevel_active_entities`——失败，因为 active list 本身是空的，绕了一圈还是 0。
+
+**真正根因**：在 `acis_restore_entity_list(el, f, 2, 0, 1)`（wrapper 函数，内部已 `API_BEGIN/END`）**外面又嵌套了 `API_NOP_BEGIN/END`**——ACIS 内部状态机在嵌套 API_NOP 时进入异常状态，导致 restore 完后 entity 进了 ref/history 列表而**没进 active list**，也没进 `el` 内部数组（实测 `el.count()=1` 但解引用 `el[0]` 时同样异常）。
+
+**修复**：去掉外面嵌套的 `API_NOP_BEGIN/END`，只保留 try/catch 守 C++ 异常，让 wrapper 内部自己的 `API_BEGIN/END` 单独工作。
+
+```cpp
+// 修复前（bug）
+try {
+    API_NOP_BEGIN;
+    acis_restore_entity_list(el, f, 2, 0, 1);
+    API_NOP_END;
+    restoreOk = true;
+} catch (...) { ... }
+
+// 修复后
+try {
+    acis_restore_entity_list(el, f, 2, 0, 1);  // wrapper 内部 API_BEGIN
+    restoreOk = true;
+} catch (...) { ... }
+```
+
+### 6.2 B 端 SIGABRT 崩溃（在 6.1 修复前）
+
+**症状**：`acis_restore_entity_list returned, ok=1 el.count=1` 后下一行 fprintf 之后整进程 SIGABRT。
+
+**根因**：与 6.1 同根——API_NOP 嵌套导致 ACIS 状态机错乱，restore 完的 entity 不在有效内部状态。
+
+**附带教训**：
+- `QTemporaryFile::setAutoRemove(false)` + 先 `close()` 再 `fopen` 是必须的
+- **不要在 ACIS wrapper 外面再嵌套 `API_NOP_BEGIN/END`**——wrapper 已经做了
+- 调试时在每个 ACIS 调用前后加 `fprintf(stderr, ...)` 写 stderr，比 `qDebug()` 更可靠（崩溃时 qDebug 消息可能未 flush，stderr 直接落盘）
+
+---
+
+## 七、Storage Bridge 架构
+
+### 7.1 设计动机
 
 C++ 客户端和 Neo4j 之间需要中间层：ACIS 内核是 C++ 独占的（SAT ↔ Entity 转换必须在 C++ 侧完成），而 FastAPI (Python) 不能直接调用 ACIS API。
 
-### 6.2 双模式可执行文件
+### 7.2 双模式可执行文件
 
 `CAD_DB.exe` 支持两种运行模式：
 
@@ -267,7 +395,7 @@ C++ 客户端和 Neo4j 之间需要中间层：ACIS 内核是 C++ 独占的（SA
 | GUI 客户端 | (无参数) | 完整 CAD 应用程序 |
 | Bridge 服务 | `--storage-bridge` | 无头 HTTP 服务，监听 8100 端口 |
 
-### 6.3 Bridge REST API
+### 7.3 Bridge REST API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -279,13 +407,13 @@ C++ 客户端和 Neo4j 之间需要中间层：ACIS 内核是 C++ 独占的（SA
 | GET | `/projects/{id}/models/{version}` | 获取指定版本 |
 | GET | `/projects/{id}/models/versions` | 列出版本 |
 
-### 6.4 乐观锁并发控制
+### 7.4 乐观锁并发控制
 
 创建模型版本时校验 `base_version`（客户端声明）与服务器最新版本是否匹配，不匹配返回 409 Conflict。
 
 ---
 
-## 七、在线协作者管理 (Presence)
+## 八、在线协作者管理 (Presence)
 
 `ProjectSyncManager` 管理 WebSocket 连接池，每个项目一个 `asyncio.Lock` 用于写序列化。
 
@@ -293,53 +421,17 @@ MainWindow 维护 `fastapi_collaborators: QHash<QString, QString>` (client_id �
 
 ---
 
-## 八、存储模式对比
+## 九、ACIS Entity Graph 序列化层（entity_graph_serializer）
 
-| 模式 | 存储位置 | 协议 | 增量支持 | 多人协作 |
-|------|----------|------|----------|----------|
-| SAT 文件 (ACIS) | 本地 .sat 文件 | 文件系统 | ❌ | ❌ |
-| Neo4j 全量 | Neo4j 图数据库 | Bolt | ❌ | ❌ (单机) |
-| Neo4j 增量 | Neo4j 图数据库 | Bolt | ✅ | ❌ (单机) |
-| FastAPI 远程 | Neo4j (via Bridge) | HTTP + WS | ✅ | ✅ |
-| PostgreSQL | PostgreSQL 表 | libpq | ❌ | ❌ (实验) |
+### 9.1 设计动机
 
----
-
-## 九、部署架构
-
-```
-docker run neo4j:5.15 (端口 7687/7474)
-     +
-CAD_DB.exe --storage-bridge (端口 8100)
-     +
-uvicorn app.main:app (端口 8000)
-     +
-CAD_DB.exe (GUI 客户端) × N
-```
-
-启动脚本：`deploy/start_dbcad_fullstack.cmd`
-
----
-
-## 十、ACIS Entity Graph 序列化层（entity_graph_serializer）
-
-> 更新日期：2026-07-14 | 分支：zhangzhengyuan-dev
-
-### 10.1 设计动机
-
-现有协作的"推送"和"拉取"路径都是 **SAT 全量文本**：
-
+现有协作的"推送"和"拉取"路径主用 **SAT 全量文本**：
 - 推送：客户端导出完整 ACIS 模型为 SAT 字符串 → 后端存 Neo4j → 通过 WebSocket 广播 SAT
-- 拉取：远端 `entity_graph_saved` 事件携带 `content.sat`，接收端 `clear()` + `restoreFastAPIModelFromSat()` 全量替换
-
-这条路径虽然稳定，但有两个明显的痛点：
-
-1. **增量合并缺失**：每条 `entity_graph_saved` 都把本地画布整体覆盖，本地未 push 的修改丢失（必须靠 `fastapiConflictLocalSatBackup` 备份恢复对话框兜底）。
-2. **payload 臃肿**：每次 push 都把整个 SAT 文本（常常数 MB）通过 WebSocket 广播，远端广播带宽压力极大。
+- 拉取：远端 `entity_graph_saved` 事件携带 `content.sat`，接收端走 `applyRemoteIncrementalDelta` 单 body 增量合并
 
 为此引入独立的 **ACIS Entity Graph JSON 序列化层**（`entity_graph_serializer.h/cpp`），把 ACIS 拓扑 + 几何信息直接序列化成 JSON，与后端 `neo4j_entity_store.py` 的 `entity_graph_version / entity_node` 图结构对齐。
 
-### 10.2 JSON 格式
+### 9.2 JSON 格式
 
 ```json
 {
@@ -355,45 +447,65 @@ CAD_DB.exe (GUI 客户端) × N
 }
 ```
 
-格式与 `neo4j_entity_store.create_entity_version()` 的入参完全兼容，可以直接 POST 到 `/projects/{id}/entities`。
+### 9.3 双轨协作语义
 
-### 10.3 接入点
+推送（Push）：
+1. `serializeBodyToSat(body)` → 单 body SAT 字符串加入 `delta_bodies[i].sat`
+2. `exportCurrentModelToSat()` → 全量 SAT 字符串加入 `content.fullSat`（fallback）
+3. WebSocket 发 `submit_entity_graph`，`request_id` 一致
 
-| 位置 | 接入方式 |
-|------|----------|
-| `BackendApiClient` | 新增 `saveEntityGraph()` / `getEntityVersion()` 两个 HTTP 方法 |
-| `MainWindow::publishFastAPIAutoSnapshot` | 优先调 `submitACISEntityGraph()`（entity graph 持久化 + SAT broadcast 双轨） |
-| `MainWindow::handleFastAPISyncMessage` (entity_graph_saved 分支) | 优先调 `pullACISEntityGraph(egVersion)`；返回 false 自动降级 SAT fallback |
-| `submitEntityGraphIncremental` | 内部 payload 携带 `content._entity_graph_version`，让接收端能查到 neo4j 里的 entity graph 版本 |
+拉取（Pull）：
+1. 收到 `entity_graph_saved` 是自己的提交应答 → `session.onSubmitAccepted()`
+2. 是 sync_now 应答 / 其他 client broadcast → 走 `applyRemoteIncrementalDelta(content.delta_bodies, content.deleted_uuids)`
+3. 对每个 ADD 变更：写 SAT 到临时文件 → `acis_restore_entity_list` → `el[0]` → `addEntity`
 
-### 10.4 双轨协作语义
+### 9.4 当前阶段状态
 
-推送（Push）顺序：
-1. `submitACISEntityGraph()` → `serializeACISEntityGraph()` 生成 JSON → `POST /projects/{id}/entities` 拿到 egVersion
-2. 用同一个 `decision.requestId` 通过 WebSocket 发送 `submit_entity_graph` 消息，`content` 同时携带：
-   - `sat`：完整 SAT fallback（保证接收端能完整重建）
-   - `entity_graph`：刚序列化好的 JSON（用于增量 diff 分析 / 审计 / 未来增量合并）
-   - `_entity_graph_version`：egVersion（让接收端能直接 GET entity graph）
-
-拉取（Pull）顺序：
-1. 收到 `entity_graph_saved` 且是自己的提交应答 → `session.onSubmitAccepted()` 更新版本号
-2. 是 sync_now 应答 / 其他 client broadcast → 尝试 `pullACISEntityGraph(egVersion)`：
-   - `GET /projects/{id}/entities/{egVersion}` → 拿到 nodes/rels
-   - `deserializeACISEntityGraph()` 重建 ACIS 实体（**当前为占位实现，返回 false**）
-3. 降级到 SAT fallback：`applyRemoteSatSnapshot(satContent)` 全量 restore
-
-### 10.5 当前阶段的状态
-
-- ✅ **序列化** `serializeACISEntityGraph()`：完整实现 BODY / LUMP / SHELL / FACE / LOOP / COEDGE / EDGE / VERTEX / TRANSFORM 的遍历，提取几何参数（plane / sphere / torus / cone / B-spline surface 等）。
-- ✅ **持久化层** `saveEntityGraph()` / `getEntityVersion()`：与 `neo4j_entity_store.py` 对接。
-- ⏳ **反序列化** `deserializeACISEntityGraph()`：占位实现（返回 false，调用 SAT fallback）。
-- ⏳ **neo4j.cpp 的 Bolt 反序列化** `api_restore_entity_list_neo4j`：已有实现，但目前针对的是 Bolt 节点对象，需要扩展接受 JSON 节点对象。
-
-### 10.6 后续工作
-
-1. 把 `api_restore_entity_list_neo4j` 改造为支持 JSON 输入，避免重复一遍 Bolt 序列化逻辑。
-2. `deserializeACISEntityGraph()` 重建 ACIS 实体后，用 ETI 的 uuid 字段把 `BODY*` 注册回 entity_tree，调用 `addEntity` 完成 UI 注册。
-3. 在 `handleFastAPISyncMessage` 的 entity_graph_saved 处理中，从 entity graph 的 `props.uuid` 字段提取 uuid，与本地 ETI 比对，**只 addEntity 增量 body**，实现真正的"增量合并 + 保留本地未 push 实体"。
-4. 移除 SAT 全量 restore 的兜底（entity graph 路径稳定后）。
+- ✅ **单 body SAT 序列化** `serializeBodyToSat()`：完整实现，与 push 端对齐
+- ✅ **增量回放** `applyRemoteIncrementalDelta()`：2026-07-31 端到端跑通
+- ✅ **UUID 去重 + 本地索引映射**：`entityIndexToUuid[idx] = uuid`
+- ⏳ **Entity Graph JSON 序列化** `serializeACISEntityGraph()`：完整实现 BODY / LUMP / SHELL / FACE / LOOP / COEDGE / EDGE / VERTEX / TRANSFORM 遍历
+- ⏳ **Entity Graph 反序列化** `deserializeACISEntityGraph()`：占位实现（返回 false，调用 SAT fallback）—— 当前由 SAT 单 body 路径替代
 
 ---
+
+## 十、存储模式对比
+
+| 模式 | 存储位置 | 协议 | 增量支持 | 多人协作 |
+|------|----------|------|----------|----------|
+| SAT 文件 (ACIS) | 本地 .sat 文件 | 文件系统 | ❌ | ❌ |
+| Neo4j 全量 | Neo4j 图数据库 | Bolt | ❌ | ❌ (单机) |
+| Neo4j 增量 | Neo4j 图数据库 | Bolt | ✅ | ❌ (单机) |
+| FastAPI 远程 | Neo4j (via Bridge) | HTTP + WS | ✅ | ✅ |
+| PostgreSQL | PostgreSQL 表 | libpq | ❌ | ❌ (实验) |
+
+---
+
+## 十一、后续工作
+
+1. **`deserializeACISEntityGraph()`** 真正实现——目前 SAT 单 body 路径已稳定可用
+2. **`applyRemoteIncrementalDelta` 扩展支持 MODIFY 变更**——目前只处理 ADD 和 REMOVE
+3. **冲突可视化**——当两个客户端同时改同一 UUID 的 body 时，目前后到者 reject，前端需提示用户
+4. **撤销栈同步**——本地 Undo/Redo 暂未通过协作广播
+5. **`api_for_all` / `api_get_entities` 之外的 active entity 收集路径**——保留为 fallback
+
+---
+
+## 附录 A：日志约定
+
+协作相关日志使用统一前缀：
+
+| 前缀 | 含义 |
+|---|---|
+| `[CollabSession]` | 状态机转移 |
+| `[Collab][DEBUG]` | 通用协作调试 |
+| `[Collab][Delta]` | 增量同步细节 |
+| `[CreateMeshFromEntity]` | ACIS → 三角面片 |
+| `[GLWidget::*]` | 渲染上传 |
+| `[Window::addEntity]` / `[Window::updateMeshData]` | Qt 层实体树管理 |
+| `[FINGERPRINT-YYYY-MM-DD]` | 代码指纹——快速确认运行的是最新二进制 |
+
+调试时优先看：
+- `[FINGERPRINT-2026-07-31]` 在不在 → 新代码生效没
+- `[Collab][Delta]` applyRemoteIncrementalDelta 段 → 增量同步走到哪一步
+- `[CollabSession]` 状态转移 → 协作状态机是否正常

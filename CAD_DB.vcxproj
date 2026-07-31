@@ -118,6 +118,7 @@
     <ClCompile Include="common.cpp" />
     <ClCompile Include="glwidget.cpp" />
     <ClCompile Include="access.cpp" />
+    <ClCompile Include="entity_merge_engine.cpp" />
     <ClCompile Include="gme_dump_object.cpp" />
     <ClCompile Include="gme_mesh.cpp" />
     <ClCompile Include="neo4j.cpp" />
@@ -137,6 +138,7 @@
     <ClInclude Include="acis.hxx" />
     <ClInclude Include="common.hxx" />
     <ClInclude Include="access.hxx" />
+    <ClInclude Include="entity_merge_engine.h" />
     <ClInclude Include="gme_dump_object.hxx" />
     <ClInclude Include="gme_mesh.hxx" />
     <ClInclude Include="gme_user_data.hxx" />

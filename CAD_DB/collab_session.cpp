@@ -486,10 +486,12 @@ void CollabSession::onRemoteApplied(int appliedVersion) {
 }
 
 void CollabSession::onApplyStart() {
+    qDebug().noquote() << "[CollabSession] onApplyStart ENTER, bound=" << isBound();
     if (!isBound()) { emitDump(Event::ApplyStart, true); return; }
     snapshot_.applyingRemoteSnapshot = true;
     mirrorToLegacy();
     transition(State::Connected_ApplyingRemote, Event::ApplyStart);
+    qDebug().noquote() << "[CollabSession] onApplyStart EXIT";
 }
 
 void CollabSession::onApplyEnd() {
