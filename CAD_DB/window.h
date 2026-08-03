@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include <QWidget>
+#include <algorithm>
+#include <vector>
 
 #include "acis/include/lists.hxx"
 #include "acis/include/position.hxx"
@@ -86,6 +88,9 @@ public:
     bool getIsModified() { return isModified; }
     QImage getScreenshot();
     void clearSelectedEntities() { selected_entities.clear(); }
+    void removeFromSelectedEntities(int index) {
+        selected_entities.erase(std::remove(selected_entities.begin(), selected_entities.end(), index), selected_entities.end());
+    }
     void showMessage(QString s, int duration = -1);
 
 protected:
@@ -98,6 +103,7 @@ protected:
     void updateTabWidget();
     void currentEntityChanged(QTreeWidgetItem* current, QTreeWidgetItem* previous);
     void entityChanged(QTreeWidgetItem* item, int column);
+    void onTreeContextMenu(const QPoint& pos);
     void isDisplayChanged();
     void setSurfaceAlpha(double sa);
     void setLineWidth(int lw);

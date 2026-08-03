@@ -106,6 +106,8 @@ public:
     void recordEntityModified(int index);
     QList<EntityChange> endEntityChangeTracking();
     void clearEntityChanges();
+    // 协作友好的本地删除：UI 右键删除按钮调用，ACIS 真删 + 记账 + 调度 Push
+    void deleteEntityByIndexForCollaboration(int index);
     QString exportEntityGraphToJson();
     QString exportEntityChangesToJson(const QList<EntityChange>& changes);
     bool submitEntityGraphIncremental(const QString& entityGraphJson, const QString& changesJson, const QString& reason);

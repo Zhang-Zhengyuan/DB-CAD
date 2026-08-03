@@ -11,6 +11,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
@@ -50,8 +51,11 @@ Window::Window(MainWindow* mw) : mainWindow(mw) {
     treeWidget = new QTreeWidget(this);
     const QStringList headers({ tr("实体") });
     treeWidget->setHeaderLabels(headers);
+    treeWidget->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(treeWidget, &QTreeWidget::currentItemChanged, this, &Window::currentEntityChanged);
     connect(treeWidget, &QTreeWidget::itemChanged, this, &Window::entityChanged);
+    connect(treeWidget, &QTreeWidget::customContextMenuRequested,
+            this, &Window::onTreeContextMenu);
     updateTreeWidget();
 
     tabWidget = new QTabWidget(this);
@@ -92,6 +96,24 @@ void Window::entityChanged(QTreeWidgetItem* item, int column) {
             std::string s = item->text(0).toStdString();
             if (s.length()) eti.name = s;
         }
+    }
+}
+
+// 右键菜单：实体树条目 → 删除选中实体（协作增量同步友好的入口）
+void Window::onTreeContextMenu(const QPoint& pos) {
+    if (treeWidget == nullptr) return;
+    QTreeWidgetItem* item = treeWidget->itemAt(pos);
+    if (item == nullptr) return;
+
+    QMenu menu(this);
+    QAction* delAct = menu.addAction(tr("删除选中实体"));
+    QAction* chosen = menu.exec(treeWidget->viewport()->mapToGlobal(pos));
+    if (chosen != delAct) return;
+
+    // 从 tree 当前项反查 index，再交回 MainWindow 处理
+    int idx = item->text(1).toInt();
+    if (mainWindow != nullptr) {
+        mainWindow->deleteEntityByIndexForCollaboration(idx);
     }
 }
 

@@ -201,6 +201,14 @@ async def _create_model_version_serialized(
         # 广播会污染版本序列，接收端只能"清空+restore"，丢失对齐信息。
         content = dict(version.content or {})
         has_entity_graph = isinstance(content, dict) and "entity_graph" in content
+        has_delta = isinstance(content, dict) and ("delta_bodies" in content or "deleted_uuids" in content)
+        print(f"[_create_model_version_serialized] project_id={project_id} version={version.version} "
+              f"trigger={trigger} request_id={request_id} "
+              f"content_keys={list(content.keys())} "
+              f"has_entity_graph={has_entity_graph} has_delta={has_delta} "
+              f"delta_bodies_size={len(content.get('delta_bodies', [])) if isinstance(content.get('delta_bodies'), list) else 'N/A'} "
+              f"deleted_uuids_size={len(content.get('deleted_uuids', [])) if isinstance(content.get('deleted_uuids'), list) else 'N/A'}",
+              flush=True)
         broadcast_event = _entity_graph_saved_event(
             project_id,
             version,
@@ -215,6 +223,8 @@ async def _create_model_version_serialized(
             source_client_id=source_client_id,
             include_content=False,
         )
+        print(f"[_create_model_version_serialized]   routing to: {'entity_graph_saved' if has_entity_graph else 'model_saved'}",
+              flush=True)
         await sync_manager.broadcast(
             project_id,
             broadcast_event,
@@ -243,8 +253,14 @@ async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, 
 
     content = dict(latest.content or {})
     has_eg = isinstance(content, dict) and "entity_graph" in content
+    has_delta = isinstance(content, dict) and ("delta_bodies" in content or "deleted_uuids" in content)
     print(f"[_send_latest_model_saved_event] project_id={project_id} latest_v={latest.version} "
-          f"content_keys={list(content.keys())} has_entity_graph={has_eg}", flush=True)
+          f"content_keys={list(content.keys())} has_entity_graph={has_eg} has_delta={has_delta} "
+          f"delta_bodies_size={len(content.get('delta_bodies', [])) if isinstance(content.get('delta_bodies'), list) else 'N/A'} "
+          f"deleted_uuids_size={len(content.get('deleted_uuids', [])) if isinstance(content.get('deleted_uuids'), list) else 'N/A'}",
+          flush=True)
+    print(f"[_send_latest_model_saved_event]   routing to: {'entity_graph_saved' if has_eg else 'model_saved'}",
+          flush=True)
     # 如果最新版本是用 entity_graph 路径写入的，必须按 entity_graph_saved 事件广播，
     # 否则接收端会按 model_saved 走"清空+restore"路径，丢掉已有的 entity_graph 节点对齐信息。
     if has_eg:

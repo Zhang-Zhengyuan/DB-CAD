@@ -1,6 +1,6 @@
 # DBCAD 多人协作系统 — 技术路线与方案全览
 
-> 最后更新：2026-07-31 | 阶段里程碑：客户端-服务端增量同步端到端跑通
+> 最后更新：2026-08-03 | 阶段里程碑：客户端-服务端增量同步 + 删除闭环端到端跑通
 
 ---
 
@@ -297,41 +297,59 @@ acis_get_noattrib_toplevel_active_entities(el);  // pull 后实体可能不在 a
 ENTITY_LIST el = curWindow->getEntityList();     // 从 entity_tree 获取，准确性有保证
 ```
 
-### 5.5 端到端验证（2026-07-31）
+### 5.5 增量同步端到端验证（2026-07-31）
 
 测试场景：A 端 push 立方体 → B 端 pull → B 端本地加球体 → B 端 push → A 端自动收到。
 
-**A 端日志关键帧**：
+**A 端日志关键帧**（清理后）：
 ```
-[Collab][DEBUG] >>> handleFastAPISyncMessage type= entity_graph_saved ...
+[Collab] handleFastAPISyncMessage type= entity_graph_saved ...
 [Collab] shouldApply decision: isPullResponse= false trigger= manual-push final= false
-[Collab][DEBUG] handleFastAPISyncMessage: shouldApply=false, parking as pending
-[Collab][DEBUG] >>> onCollabPullButtonClicked ENTER
-[Collab][DEBUG] >>> requestFastAPISyncNow
-[Collab][DEBUG] <<< onCollabPullButtonClicked EXIT (sync_now sent)
-[Collab][DEBUG] >>> handleFastAPISyncMessage type= model_saved hasTrigger= sync_now
-[Collab] model_saved delta path check: delta_bodies.size= 1 deleted_uuids.size= 0
+[Collab] onCollabPullButtonClicked: requesting sync_now
+[Collab] handleFastAPISyncMessage type= model_saved hasTrigger= sync_now
 [Collab] model_saved try incremental delta path, + 1  - 0
 ```
 
-**B 端日志关键帧**：
+**B 端日志关键帧**（清理后）：
 ```
 [FINGERPRINT-2026-07-31] applyRemoteIncrementalDelta CALLED
-[Collab][Delta] applyRemoteIncrementalDelta ENTER, delta_bodies=1 deleted_uuids=0
-[Collab][Delta]   acis_restore_entity_list returned, ok=1 el.count=1 err=
-[Collab][Delta]   probing el[0], el.count=1
-[Collab][Delta]   el[0]=000002143495D800
-[Collab][Delta]   el[0]->identity=268435456
-[Collab][Delta]   calling addEntity idx=0 uuid=...
-[Collab][DEBUG] >>> Window::addEntity ENTER name=远端增量0 ...
+[Collab][Delta] >>> applyRemoteIncrementalDelta ENTER delta_bodies.size=1 deleted_uuids.size=0
+[Collab][Delta]   body[0] temp SAT ready, path= ... bytes=...
 [CreateMeshFromEntity] e=BODY
-[CreateMeshFromEntity] api_facet_entity ok=1
 [CreateMeshFromEntity] direct topology: lumps=1 shells=1 faces=6
 [Window::updateMeshData] display_data=1 totalFaces=6
 [GLWidget::uploadMeshDataToGpu] uploaded face=216 floats  ← 立方体 GPU 上传成功
 [Collab][Delta] applyRemote: + 1 / 1   - 0 / 0
 [Collab] remoteApply | Connected_Idle | v=1
 ```
+
+### 5.6 删除闭环端到端验证（2026-08-03）
+
+测试场景：A 端 push 立方体 → A 端删除立方体 → B 端 Pull → B 端 tree widget 同步删除。
+
+**A 端日志关键帧**：
+```
+[Collab][Delta] deleteEntityByIndexForCollaboration ENTER index=1
+[Collab]    # 删除只入 pendingEntityChanges，未自动 publish
+[Collab][Delta] submitIncrementalDelta ENTER pendingEntityChanges.size=1 (ADD=0 REMOVE=1)
+[Collab][Delta] submitIncrementalDelta SENT delta_bodies=0 deleted=1
+[Collab]    submitOk v=3
+```
+
+**B 端日志关键帧**：
+```
+[Collab] onCollabPullButtonClicked: requesting sync_now
+[Collab][Delta] applyRemoteIncrementalDelta ENTER delta_bodies.size=0 deleted_uuids.size=1
+[Collab][Delta]   del[0] uuid=... localHas=true
+[Collab][Delta]   afterDelete: updateMeshData + updateTreeWidget called, entityTree.size=0
+[Collab][Delta] <<< applyRemoteIncrementalDelta EXIT appliedDelete=1 skippedDelete=0
+[Collab] remoteApply | Connected_Idle | v=3
+```
+
+**关键不变量**：
+- 删除后**没有自动 Push**——本地 `modelVersion` 在删除那刻保持不变
+- 删除被正确记到 `pendingEntityChanges`（REMOVE=1），点 Push 后才上去
+- 远端 Pull 走 `applyRemoteIncrementalDelta` → `appliedDelete=1` → `updateTreeWidget` 重绘
 
 ---
 
@@ -343,7 +361,7 @@ ENTITY_LIST el = curWindow->getEntityList();     // 从 entity_tree 获取，准
 - B 端 pull 后进程**不崩**，applyRemoteIncrementalDelta EXIT success
 - 版本号正常升 v=1
 - 但画布空，GLWidget::uploadMeshDataToGpu 没被调用
-- log 末尾 `[Collab][Delta]   activeList.count=0` → `no BODY found in activeList, skip`
+- 旧版本 log 显示 `activeList.count=0` → `no BODY found in activeList, skip`（该 fallback 路径已在 2026-08-03 清理中移除）
 
 **尝试 1**：放弃 `el[]`，改走 `acis_get_noattrib_toplevel_active_entities`——失败，因为 active list 本身是空的，绕了一圈还是 0。
 
@@ -367,13 +385,25 @@ try {
 } catch (...) { ... }
 ```
 
-### 6.2 B 端 SIGABRT 崩溃（在 6.1 修复前）
+### 6.2 删除-不再自动推（行为契约 2026-08-03）
 
-**症状**：`acis_restore_entity_list returned, ok=1 el.count=1` 后下一行 fprintf 之后整进程 SIGABRT。
+**问题**：早期 `deleteEntityByIndexForCollaboration` 在 ACIS 删除后会**自动**调度 `publishFastAPIAutoSnapshot`，导致：
 
-**根因**：与 6.1 同根——API_NOP 嵌套导致 ACIS 状态机错乱，restore 完的 entity 不在有效内部状态。
+- 删除一个 body 立刻把远端版本拉过来一把冲掉本地画布（远端还没该 REMOVE）
+- 与添加实体的"按 Push 提交"行为契约不一致
+- 调试期日志里 `entity_graph_saved ... parking as pending` 频繁出现，浪费一次往返
 
-**附带教训**：
+**修复**：删除只把 REMOVE 写入 `pendingEntityChanges`，**不调度任何自动 publish**。与添加完全对齐，全部由用户点 Push 按钮统一提交。
+
+```cpp
+// 修复后：删除只入 pendingEntityChanges，由 Push 按钮统一提交
+for (int i = 0; i < (int)toRemoveIndices.size(); ++i) {
+    recordEntityRemoved(toRemoveIndices[i]);   // 同步 entityIndexToUuid
+}
+// 之后不再调 publishFastAPIAutoSnapshot / scheduleFastAPIAutoPublish
+```
+
+**附带教训**（6.1 + 6.2 共享）：
 - `QTemporaryFile::setAutoRemove(false)` + 先 `close()` 再 `fopen` 是必须的
 - **不要在 ACIS wrapper 外面再嵌套 `API_NOP_BEGIN/END`**——wrapper 已经做了
 - 调试时在每个 ACIS 调用前后加 `fprintf(stderr, ...)` 写 stderr，比 `qDebug()` 更可靠（崩溃时 qDebug 消息可能未 flush，stderr 直接落盘）
@@ -489,23 +519,32 @@ MainWindow 维护 `fastapi_collaborators: QHash<QString, QString>` (client_id �
 4. **撤销栈同步**——本地 Undo/Redo 暂未通过协作广播
 5. **`api_for_all` / `api_get_entities` 之外的 active entity 收集路径**——保留为 fallback
 
+### 已完成（2026-08-03 清理）
+- ✅ 删除-不再自动推：删除只入 `pendingEntityChanges`，由 Push 按钮统一提交
+- ✅ 删除闭环端到端（带 `updateTreeWidget`）跑通，A/B 两端 v=5，画布一致
+- ✅ `[Collab][DEBUG]` 调试日志全部收敛到 `[Collab]` / `[Collab][Delta]` 两个语义前缀
+- ✅ FINGERPRINT 日期从 2026-07-31 推到 2026-08-03
+- ✅ `deleteEntityByIndexForCollaboration` 顶部 6 条"修复要点"长注释合并为 1 行任务说明
+
 ---
 
 ## 附录 A：日志约定
 
-协作相关日志使用统一前缀：
+协作相关日志使用统一前缀（2026-08-03 清理后）：
 
 | 前缀 | 含义 |
 |---|---|
-| `[CollabSession]` | 状态机转移 |
-| `[Collab][DEBUG]` | 通用协作调试 |
-| `[Collab][Delta]` | 增量同步细节 |
+| `[CollabSession]` | 状态机转移（按 event 限频去重） |
+| `[Collab]` | 通用协作事件（WS 连接、Pull / Push 入口、关键路由决策） |
+| `[Collab][Delta]` | 增量同步细节（submitIncrementalDelta / applyRemoteIncrementalDelta 路径） |
 | `[CreateMeshFromEntity]` | ACIS → 三角面片 |
 | `[GLWidget::*]` | 渲染上传 |
 | `[Window::addEntity]` / `[Window::updateMeshData]` | Qt 层实体树管理 |
 | `[FINGERPRINT-YYYY-MM-DD]` | 代码指纹——快速确认运行的是最新二进制 |
 
 调试时优先看：
-- `[FINGERPRINT-2026-07-31]` 在不在 → 新代码生效没
+- `[FINGERPRINT-2026-08-03]` 在不在 → 新代码生效没
 - `[Collab][Delta]` applyRemoteIncrementalDelta 段 → 增量同步走到哪一步
 - `[CollabSession]` 状态转移 → 协作状态机是否正常
+- `[Collab] Conflict merge` → 冲突合并路径触发节点
+- `[Collab] onCollabPullButtonClicked` / `Pull applyRemoteSat` → Pull 链路
