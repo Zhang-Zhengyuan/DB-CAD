@@ -45,6 +45,7 @@
 #include <QJsonValue>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QComboBox>
 #include <QLabel>
 #include <QListWidget>
 #include <QCheckBox>
@@ -1667,17 +1668,23 @@ void MainWindow::requestFastAPISyncNow() {
 
 void MainWindow::notifyModelChangedForCollaboration() {
     auto& session = CollabSession::instance();
+    std::fprintf(stderr, "[Collab][DEBUG] >>> notifyModelChangedForCollaboration ENTER\n");
+    std::fprintf(stderr, "[Collab][DEBUG] isApplyingRemote=%d isPublishing=%d\n",
+                 session.isApplyingRemoteSnapshot() ? 1 : 0, session.isPublishingSnapshot() ? 1 : 0);
 
     if (session.isApplyingRemoteSnapshot() || session.isPublishingSnapshot()) {
+        std::fprintf(stderr, "[Collab][DEBUG] notifyModelChangedForCollaboration: early exit (apply/publish)\n");
         return;
     }
 
     QAction* checkedAct = setModeActGroup ? setModeActGroup->checkedAction() : nullptr;
     if (checkedAct != setFASTAPIModeAct) {
+        std::fprintf(stderr, "[Collab][DEBUG] notifyModelChangedForCollaboration: early exit (not FASTAPI mode)\n");
         return;
     }
 
     if (fastapi_project_id.isEmpty() || fastapi_project_name.isEmpty()) {
+        std::fprintf(stderr, "[Collab][DEBUG] notifyModelChangedForCollaboration: early exit (no project)\n");
         return;
     }
 
@@ -1694,6 +1701,7 @@ void MainWindow::notifyModelChangedForCollaboration() {
         session.onUserEdit();
     }
     updateCollabPanelUi();
+    std::fprintf(stderr, "[Collab][DEBUG] <<< notifyModelChangedForCollaboration EXIT\n");
 }
 
 void MainWindow::scheduleFastAPIAutoPublish(const QString& reason) {
@@ -1864,63 +1872,312 @@ bool MainWindow::submitACISEntityGraph(const QString& reason) {
     return true;
 }
 
-bool MainWindow::pullACISEntityGraph(int version, const QJsonObject& entityGraphJson) {
+bool MainWindow::pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, const QString& satContent) {
     if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
+        qWarning() << "[Collab] pullACISEntityGraph: curWindow or fastapi_project_id is null";
         return false;
     }
 
+    const QJsonArray nodes = entityGraphJson.value("nodes").toArray();
     qDebug().noquote() << "[Collab] pullACISEntityGraph: version=" << version
-                       << "entityGraph nodes=" << entityGraphJson.value("nodes").toArray().size()
-                       << "rels=" << entityGraphJson.value("rels").toArray().size();
+                       << "nodes=" << nodes.size()
+                       << "sat.size=" << satContent.size();
 
-    DeserializedEntityGraph result;
-    QString deserializeError;
-    if (!deserializeACISEntityGraph(entityGraphJson, &result, &deserializeError)) {
-        qWarning().noquote() << "[Collab] pullACISEntityGraph: deserialize failed:" << deserializeError;
-        return false;
-    }
+    // =========================================================================
+    // 策略：优先尝试纯 JSON 反序列化（deserializeACISEntityGraph），
+    //       完全不用 SAT，完整利用 entity_graph 的拓扑/几何数据。
+    //       如果失败（不支持的几何类型等），fallback 到 SAT restore。
+    // =========================================================================
 
-    if (result.entities->count() == 0) {
-        qWarning().noquote() << "[Collab] pullACISEntityGraph: deserialize returned 0 entities";
-        delete result.entities;
-        return false;
-    }
-
-    qDebug().noquote() << "[Collab] pullACISEntityGraph: deserialize OK, bodies=" << result.entities->count();
-
-    // 清空本地画布
-    curWindow->clear();
-    qDebug().noquote() << "[Collab] pullACISEntityGraph: after clear, entity_tree.size=" << curWindow->getEntityList().count();
-
-    // 将反序列化出的 BODY 加入 entity_tree（用 result.uuidToEntity 反查每个 body 的 UUID）
-    int addedCount = 0;
-    for (int i = 0; i < result.entities->count(); ++i) {
-        ENTITY* body = (*result.entities)[i];
-        if (!body) {
-            qWarning() << "[Collab] pullACISEntityGraph: body is null at index" << i;
-            continue;
+    // 1. 收集本地现有 UUID（merge 基准线）
+    fprintf(stderr, "[Collab] pullACISEntityGraph: stage 1 collecting local uuids, curWindow=%p\n", (void*)curWindow);
+    fflush(stderr);
+    QSet<QString> localUuids;
+    QHash<QString, void*> localUuidToPtr;
+    const auto& localTree = curWindow->getEntityTree();
+    fprintf(stderr, "[Collab] pullACISEntityGraph: stage 1 localTree.size()=%d\n", (int)localTree.size());
+    fflush(stderr);
+    for (const auto& eti : localTree) {
+        if (!eti.uuid.empty()) {
+            const QString u = QString::fromStdString(eti.uuid);
+            localUuids.insert(u);
+            localUuidToPtr.insert(u, eti.ptrEntity);
         }
-        if (is_BODY(body)) {
-            for (auto it = result.uuidToEntity.constBegin(); it != result.uuidToEntity.constEnd(); ++it) {
-                if (it.value() == (void*)body) {
-                    const QString uuid = it.key();
-                    if (!uuid.isEmpty()) {
-                        const int newIndex = entityIndexToUuid.size();
-                        entityIndexToUuid[newIndex] = uuid;
+    }
+    fprintf(stderr, "[Collab] pullACISEntityGraph: stage 1 done, localUuids=%d\n", (int)localUuids.size());
+
+    // 2. 标记正在应用远端快照（过滤 recordEntityRemoved）
+    CollabSession::instance().setApplyingRemoteSnapshot(true);
+
+    // 3. 优先：纯 JSON 反序列化（严格三阶段，见 entity_graph_serializer.cpp）
+    DeserializedEntityGraph deserialized;
+    deserialized.entities = nullptr;
+    deserialized.uuidToEntity.clear();
+    QString jsonError;
+    bool fromJson = deserializeACISEntityGraph(entityGraphJson, &deserialized, &jsonError);
+
+    ENTITY_LIST remoteBodies;
+    QHash<QString, void*> remoteUuidToBody; // UUID → BODY*
+
+    if (fromJson && deserialized.entities && deserialized.entities->count() > 0) {
+        // deserializeACISEntityGraph 成功：body 节点 id = UUID（serialize 时直接设 node.id = uuid）
+        fprintf(stderr, "[Collab] pullACISEntityGraph: STAGE A about to copy remoteBodies/remoteUuidToBody\n");
+        remoteBodies = *deserialized.entities;
+        fprintf(stderr, "[Collab] pullACISEntityGraph: STAGE A1 remoteBodies copied, count=%d\n", (int)remoteBodies.count());
+        remoteUuidToBody = deserialized.uuidToEntity;
+        fprintf(stderr, "[Collab] pullACISEntityGraph: STAGE A2 remoteUuidToBody copied, size=%d\n", (int)remoteUuidToBody.size());
+        int bodyCount = (int)remoteBodies.count();
+        int uuidCount = (int)remoteUuidToBody.size();
+        fprintf(stderr, "[Collab] pullACISEntityGraph [JSON]: deserialized %d bodies, UUID map size=%d\n",
+                bodyCount, uuidCount);
+    fprintf(stderr, "[Collab] pullACISEntityGraph: about to enter merge loop, bodies=%d\n", bodyCount);
+    } else {
+        // JSON 反序列化失败，用 SAT restore
+        qDebug().noquote() << "[Collab] pullACISEntityGraph [JSON] failed:" << jsonError
+                           << "falling back to SAT restore";
+        delete deserialized.entities;
+
+        if (satContent.isEmpty()) {
+            qWarning() << "[Collab] pullACISEntityGraph: both JSON failed and satContent empty";
+            CollabSession::instance().setApplyingRemoteSnapshot(false);
+            return false;
+        }
+
+        // SAT restore 并用 body 节点 id 对齐 UUID
+        if (!restoreSatWithUuidAlignment(satContent, entityGraphJson, remoteBodies, remoteUuidToBody)) {
+            qWarning() << "[Collab] pullACISEntityGraph: SAT restore failed";
+            CollabSession::instance().setApplyingRemoteSnapshot(false);
+            return false;
+        }
+    }
+
+    fprintf(stderr, "[Collab] pullACISEntityGraph: about to construct remoteUuids QSet\n");
+    fprintf(stderr, "[Collab] pullACISEntityGraph: remoteUuidToBody.size()=%d\n", (int)remoteUuidToBody.size());
+    for (auto it = remoteUuidToBody.constBegin(); it != remoteUuidToBody.constEnd(); ++it) {
+        fprintf(stderr, "[Collab] pullACISEntityGraph: remoteUuidToBody key=%s value=%p\n",
+                it.key().toUtf8().constData(), it.value());
+    }
+    fprintf(stderr, "[Collab] pullACISEntityGraph: about to call keys()\n");
+    QList<QString> keysList = remoteUuidToBody.keys();
+    fprintf(stderr, "[Collab] pullACISEntityGraph: keys() returned size=%d\n", (int)keysList.size());
+    QSet<QString> remoteUuids = QSet<QString>(keysList.begin(), keysList.end());
+    fprintf(stderr, "[Collab] pullACISEntityGraph: remoteUuids QSet constructed ok, size=%d\n", (int)remoteUuids.size());
+    int willAdd = 0, willUpdate = 0;
+    for (auto it = remoteUuids.constBegin(); it != remoteUuids.constEnd(); ++it) {
+        if (localUuids.contains(*it)) willUpdate++;
+        else willAdd++;
+    }
+    int addedCount = 0, updatedCount = 0, deletedCount = 0;
+    QStringList bodiesToDeleteLocal;
+    for (auto it = localUuids.constBegin(); it != localUuids.constEnd(); ++it) {
+        if (!remoteUuids.contains(*it))
+            bodiesToDeleteLocal.append(*it);
+    }
+    fprintf(stderr, "[Collab] pullACISEntityGraph: remoteUuids=%d localUuids=%d willAdd=%d willUpdate=%d willDelete=%d\n",
+            (int)remoteUuids.size(), (int)localUuids.size(), willAdd, willUpdate, (int)bodiesToDeleteLocal.size());
+    qDebug().noquote() << "[Collab] pullACISEntityGraph: remote bodies=" << remoteBodies.count()
+                       << "local=" << (int)localUuids.size()
+                       << "will add=" << willAdd
+                       << "will update=" << willUpdate
+                       << "will delete=" << bodiesToDeleteLocal.size();
+
+    // 5a. 按 body 在 remoteBodies 中的顺序处理（对应 entity_graph 节点顺序）
+    for (int i = 0; i < remoteBodies.count(); ++i) {
+        ENTITY* body = remoteBodies[i];
+        if (!body || !is_BODY(body)) continue;
+
+        // 找这个 body 的 UUID（deserialize 路径用 uuidToEntity，SAT 路径用 index 对齐）
+        QString uuid;
+        BODY* remoteBodyPtr = (BODY*)body;
+        if (!remoteUuidToBody.isEmpty()) {
+            // 从 uuidToEntity 找（JSON 路径）或 index 对齐（SAT 路径）
+            // remoteUuidToBody 的 key = node.id (UUID)
+            for (auto it = remoteUuidToBody.constBegin(); it != remoteUuidToBody.constEnd(); ++it) {
+                if (it.value() == (void*)body) { uuid = it.key(); break; }
+            }
+            if (uuid.isEmpty() && i < remoteUuidToBody.size()) {
+                // SAT 路径：按顺序对应（bodyUuidOrder）
+                const QJsonArray bodyNodes = entityGraphJson.value("nodes").toArray();
+                int bodyIdx = 0;
+                for (const QJsonValue& nv : bodyNodes) {
+                    const QJsonObject n = nv.toObject();
+                    const QJsonArray labels = n.value("labels").toArray();
+                    bool isBody = false;
+                    for (const QJsonValue& lv : labels) {
+                        if (lv.toString() == QStringLiteral("body")) { isBody = true; break; }
                     }
-                    break;
+                    if (!isBody) continue;
+                    if (bodyIdx == i) {
+                        uuid = n.value("id").toString();
+                        break;
+                    }
+                    bodyIdx++;
                 }
             }
-            const QString name = QString::fromUtf8("导入实体%1").arg(curWindow->getEntityList().count());
+        }
+
+        bool wasLocal = !uuid.isEmpty() && localUuids.contains(uuid);
+
+        // 如果本地已有，替换旧 body
+        if (wasLocal) {
+            ENTITY* oldBody = (ENTITY*)localUuidToPtr.value(uuid, nullptr);
+            if (oldBody && oldBody != body) {
+                // 删除旧 body（从 entity_tree 摘除，不调 delete_all_delta_states）
+                auto& etiList = curWindow->getEntityTree();
+                for (int k = (int)etiList.size() - 1; k >= 0; --k) {
+                    if (QString::fromStdString(etiList[k].uuid) == uuid) {
+                        int removedIdx = etiList[k].index;
+                        etiList.erase(etiList.begin() + k);
+                        entityIndexToUuid.remove(removedIdx);
+                        break;
+                    }
+                }
+                API_NOP_BEGIN;
+                api_del_entity(oldBody);
+                API_NOP_END;
+            }
+            updatedCount++;
+        }
+
+        // addEntity 新/替换后的 body
+        fprintf(stderr, "[Collab] pullACISEntityGraph: i=%d body=%p uuid=%s about to call addEntity\n", i, (void*)body, qPrintable(uuid));
+        const QString name = (fromJson ? QString::fromUtf8("远端JSON%1") : QString::fromUtf8("远端EntityGraph%1")).arg(i);
+        try {
             curWindow->addEntity(body, name.toStdString(), -1);
-            addedCount++;
-        } else {
-            qWarning() << "[Collab] pullACISEntityGraph: body[" << i << "] is not a BODY";
+            fprintf(stderr, "[Collab] pullACISEntityGraph: addEntity returned OK for i=%d\n", i);
+        } catch (const std::exception& e) {
+            qWarning().noquote() << "[Collab] pullACISEntityGraph: addEntity threw:" << e.what();
+            continue;
+        } catch (...) {
+            qWarning() << "[Collab] pullACISEntityGraph: addEntity threw unknown";
+            continue;
+        }
+
+        // 修正 UUID（addEntity 会生成新 UUID）
+        if (!uuid.isEmpty()) {
+            int last = (int)curWindow->getEntityTree().size() - 1;
+            if (last >= 0) {
+                curWindow->getEntityTree()[last].uuid = uuid.toStdString();
+                entityIndexToUuid[last] = uuid;
+            }
+        }
+        addedCount++;
+    }
+
+    // 5b. 删除本地多余 body
+    qDebug() << "[Collab] pullACISEntityGraph: merge loop done, entering delete phase";
+    if (!bodiesToDeleteLocal.isEmpty()) {
+        auto& etiList = curWindow->getEntityTree();
+        for (int i = (int)etiList.size() - 1; i >= 0; --i) {
+            const QString u = QString::fromStdString(etiList[i].uuid);
+            if (bodiesToDeleteLocal.contains(u)) {
+                ENTITY* oldBody = etiList[i].ptrEntity;
+                int removedIdx = etiList[i].index;
+                if (oldBody) {
+                    API_NOP_BEGIN;
+                    api_del_entity(oldBody);
+                    API_NOP_END;
+                }
+                etiList.erase(etiList.begin() + i);
+                entityIndexToUuid.remove(removedIdx);
+                deletedCount++;
+            }
         }
     }
 
-    qDebug().noquote() << "[Collab] pullACISEntityGraph: ADDED" << addedCount << "bodies";
-    delete result.entities;
+    // 6. 清理
+    delete deserialized.entities;
+    CollabSession::instance().setApplyingRemoteSnapshot(false);
+    CollabSession::instance().onRemoteApplied(version);
+
+    // 7. 刷新显示
+    curWindow->updateTreeWidget();
+    curWindow->updateMeshData();
+
+    qDebug().noquote() << "[Collab] pullACISEntityGraph: ["
+                       << (fromJson ? "JSON" : "SAT")
+                       << "] ADDED=" << addedCount
+                       << "UPDATED=" << updatedCount
+                       << "DELETED=" << deletedCount;
+    return true;
+}
+
+// =========================================================================
+// 辅助函数：SAT restore + UUID 对齐（EntityGraph fallback 路径）
+// SAT 中的 body 顺序与 entity_graph 中 body 节点顺序一致（serialize 时
+// 按 entity_tree 顺序遍历，对应 entity_graph 节点顺序）
+// =========================================================================
+bool MainWindow::restoreSatWithUuidAlignment(
+    const QString& satContent,
+    const QJsonObject& entityGraphJson,
+    ENTITY_LIST& outBodies,
+    QHash<QString, void*>& outUuidToBody
+) {
+    // 1. 收集 body UUID 顺序（按 entity_graph 节点顺序）
+    QStringList bodyUuidOrder;
+    {
+        const QJsonArray nodes = entityGraphJson.value("nodes").toArray();
+        for (const QJsonValue& nv : nodes) {
+            const QJsonObject nodeObj = nv.toObject();
+            const QJsonArray labels = nodeObj.value("labels").toArray();
+            bool isBody = false;
+            for (const QJsonValue& lv : labels) {
+                if (lv.toString() == QStringLiteral("body")) { isBody = true; break; }
+            }
+            if (!isBody) continue;
+            const QString uuid = nodeObj.value("id").toString();
+            if (!uuid.isEmpty()) bodyUuidOrder.append(uuid);
+        }
+    }
+    qDebug().noquote() << "[Collab] restoreSatWithUuidAlignment: collected" << bodyUuidOrder.size()
+                       << "body UUIDs from entity_graph";
+
+    // 2. SAT restore
+    QTemporaryFile satTmp(QDir::tempPath() + "/dbcad_pull_eg_XXXXXX.sat");
+    satTmp.setAutoRemove(false);
+    if (!satTmp.open()) {
+        qWarning() << "[Collab] restoreSatWithUuidAlignment: cannot open temp sat";
+        return false;
+    }
+    satTmp.write(satContent.toUtf8());
+    satTmp.flush();
+    satTmp.close();
+    const std::string tmpPath = satTmp.fileName().toStdString();
+
+    bool restoreOk = false;
+    QString restoreErr;
+    {
+        FILE* f = std::fopen(tmpPath.c_str(), "rb");
+        if (f == nullptr) {
+            restoreErr = QStringLiteral("open temp sat failed");
+        } else {
+            try {
+                acis_restore_entity_list(outBodies, f, 2, 0, 1);
+                restoreOk = true;
+            } catch (const std::exception& e) {
+                restoreErr = QString::fromUtf8(e.what());
+            } catch (...) {
+                restoreErr = QStringLiteral("unknown ACIS exception");
+            }
+            std::fclose(f);
+        }
+    }
+    QFile::remove(satTmp.fileName());
+
+    if (!restoreOk) {
+        qWarning().noquote() << "[Collab] restoreSatWithUuidAlignment: acis_restore_entity_list failed:" << restoreErr;
+        return false;
+    }
+    qDebug().noquote() << "[Collab] restoreSatWithUuidAlignment: restored" << outBodies.count() << "bodies";
+
+    // 3. 按顺序对齐 UUID（outBodies[i] → bodyUuidOrder[i]）
+    for (int i = 0; i < outBodies.count() && i < bodyUuidOrder.size(); ++i) {
+        ENTITY* body = outBodies[i];
+        if (!body || !is_BODY(body)) continue;
+        const QString& uuid = bodyUuidOrder[i];
+        outUuidToBody.insert(uuid, (void*)body);
+    }
+
     return true;
 }
 
@@ -2214,10 +2471,15 @@ bool MainWindow::submitIncrementalDelta(const QString& reason) {
     qDebug().noquote() << "[Collab][Delta]   deletedUuidsJson.total=" << (int)deletedUuidsJson.size()
                        << "(fromAcisDelta=" << fromAcisDelta << " fromPendingChanges=" << fromPending << ")";
 
+    // 序列化完整的 entity_graph（包含所有本地实体）
+    const ENTITY_LIST& allEntities = curWindow->getEntityList();
+    QJsonObject entityGraph = serializeACISEntityGraph(entityIndexToUuid, allEntities);
+
     QJsonObject content;
     content["sat"] = fullSat;
     content["delta_bodies"] = deltaBodiesJson;
     content["deleted_uuids"] = deletedUuidsJson;
+    content["entity_graph"] = entityGraph;  // 完整的 entity_graph，用于精细合并
     content["delta_created_count"] = (int)deltaBodiesJson.size();
     content["delta_deleted_count"] = (int)deletedUuidsJson.size();
 
@@ -2236,7 +2498,8 @@ bool MainWindow::submitIncrementalDelta(const QString& reason) {
 
     fastapiSyncSocket->sendTextMessage(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact)));
     qDebug().noquote() << "[Collab][Delta] >>> submitIncrementalDelta SENT delta_bodies=" << (int)deltaBodiesJson.size()
-                       << " deleted=" << (int)deletedUuidsJson.size() << " fullSat.size=" << fullSat.size();
+                       << " deleted=" << (int)deletedUuidsJson.size() << " fullSat.size=" << fullSat.size()
+                       << " entity_graph nodes=" << entityGraph.value("nodes").toArray().size();
     statusBar()->showMessage(tr("正在提交增量变更... (delta +%1 -%2)")
                                  .arg((int)delta.created_or_updated.size())
                                  .arg((int)deletedUuidsJson.size()), 2000);
@@ -2266,6 +2529,12 @@ bool MainWindow::applyRemoteIncrementalDelta(const QJsonObject& remoteContent, Q
         if (!eti.uuid.empty()) {
             localUuids.insert(QString::fromStdString(eti.uuid));
         }
+    }
+    qDebug().noquote() << "[Collab][Delta]   localUuids count=" << localUuids.size()
+                       << " entity_tree.size=" << localTree.size();
+    for (int i = 0; i < localTree.size(); ++i) {
+        qDebug().noquote() << "[Collab][Delta]   local[" << i << "] uuid="
+                          << (localTree[i].uuid.empty() ? "(empty)" : QString::fromStdString(localTree[i].uuid).left(8) + "...");
     }
 
     int appliedAdd = 0;
@@ -2369,9 +2638,9 @@ bool MainWindow::applyRemoteIncrementalDelta(const QJsonObject& remoteContent, Q
         }
 
         if (foundBody != nullptr) {
-            int idx = static_cast<int>(curWindow->getEntityTree().size());
+            int idxBeforeAdd = static_cast<int>(curWindow->getEntityTree().size());
             try {
-                curWindow->addEntity(foundBody, tr("远端增量%1").arg(idx).toStdString(), -1);
+                curWindow->addEntity(foundBody, tr("远端增量%1").arg(idxBeforeAdd).toStdString(), -1);
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "[Collab][Delta]   body[%d] addEntity threw std::exception: %s\n", bodyIdx, e.what());
                 skippedAdd++;
@@ -2381,7 +2650,16 @@ bool MainWindow::applyRemoteIncrementalDelta(const QJsonObject& remoteContent, Q
                 skippedAdd++;
                 continue;
             }
-            entityIndexToUuid[idx] = uuid;
+            // addEntity 会往 entity_tree 末尾添加一项（uuid 是新生成的），需要更正为远端 UUID
+            int idxAfterAdd = static_cast<int>(curWindow->getEntityTree().size()) - 1;
+            auto& etiList = curWindow->getEntityTree();
+            if (idxAfterAdd >= 0 && idxAfterAdd < static_cast<int>(etiList.size())) {
+                etiList[idxAfterAdd].uuid = uuid.toStdString();
+                qDebug().noquote() << "[Collab][Delta]   body[" << bodyIdx << "] uuid updated:"
+                                   << " local=" << QString::fromStdString(etiList[idxAfterAdd].uuid)
+                                   << " remote=" << uuid;
+            }
+            entityIndexToUuid[idxAfterAdd] = uuid;
             appliedAdd++;
         } else {
             qDebug().noquote() << "[Collab][Delta]   body[" << bodyIdx << "] no entity found in el, skip";
@@ -2391,13 +2669,16 @@ bool MainWindow::applyRemoteIncrementalDelta(const QJsonObject& remoteContent, Q
 
     // 3. 处理删除列表（只删除本地有的）
     const QJsonArray deletedUuids = remoteContent["deleted_uuids"].toArray();
+    qDebug().noquote() << "[Collab][Delta]   deleting uuids:" << deletedUuids;
     for (int delIdx = 0; delIdx < deletedUuids.size(); ++delIdx) {
         const QString uuid = deletedUuids[delIdx].toString();
         if (uuid.isEmpty()) {
+            qDebug().noquote() << "[Collab][Delta]   del[" << delIdx << "] skip: uuid empty";
             skippedDelete++;
             continue;
         }
         if (!localUuids.contains(uuid)) {
+            qDebug().noquote() << "[Collab][Delta]   del[" << delIdx << "] skip: uuid not found locally:" << uuid;
             skippedDelete++;
             continue;
         }
@@ -3140,14 +3421,54 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
             return;
         }
 
-        // 优先尝试增量 delta 路径（content.delta_bodies / content.deleted_uuids）。
-        // Pull 应答如果是增量 push 来的，这里就能直接走增量合并；否则才落到下面
-        // 的 entity_graph / SAT 全量恢复路径。
+        // 预取 delta 数据（供 IncrementalDelta 路径使用）
         const QJsonArray deltaBodiesPull = content.value("delta_bodies").toArray();
         const QJsonArray deletedUuidsPull = content.value("deleted_uuids").toArray();
-        if (!deltaBodiesPull.isEmpty() || !deletedUuidsPull.isEmpty()) {
-            qDebug().noquote() << "[Collab] Pull try incremental delta path, +"
-                               << deltaBodiesPull.size() << " -" << deletedUuidsPull.size();
+        const QJsonObject entityGraphJson = content.value("entity_graph").toObject();
+        qDebug().noquote() << "[Collab] Pull: chosen mode=" << static_cast<int>(collabPullMode)
+                           << "sat.size=" << satContent.size()
+                           << "delta=" << (int)deltaBodiesPull.size()
+                           << "deleted=" << (int)deletedUuidsPull.size()
+                           << "entity_graph nodes=" << entityGraphJson.value("nodes").toArray().size();
+
+        // === 按用户选择的模式分发 Pull 路径（不再有优先级链，互相独立）===
+        // 模式说明：
+        //   • IncrementalDelta（默认）：按 UUID 去重 add / 真正 delete，不破坏本地未推送变更，已验证稳定
+        //   • FullSat：clear + restore 整段 SAT，全量替换本地画布（远端为准），丢弃本地未推送
+        //   • EntityGraph：用 content.sat 单独 restore（与 delta 路径一样的 restore 方式，不调 clear），
+        //                 用 entity_graph JSON 对齐 UUID，删除本地多余，已修复 clear 崩溃问题
+
+        // IncrementalDelta 失败时需要 rollback tryBeginApplyRemote，再 fallback 到 FullSat
+        auto rollbackToPending = [&](const QString& why) {
+            session.rollbackApply();
+            session.onRemotePending(remoteVersion);
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            updateCollabPanelUi();
+        };
+
+        if (collabPullMode == CollabPullMode::IncrementalDelta) {
+            if (deltaBodiesPull.isEmpty() && deletedUuidsPull.isEmpty()) {
+                qWarning().noquote() << "[Collab] Pull IncrementalDelta: no delta in content, fallback to FullSat";
+                // 不 rollback apply 标志，继续用 FullSat
+                qDebug().noquote() << "[Collab] Pull [FullSat] sat.size=" << satContent.size();
+                if (applyRemoteSatSnapshot(satContent, reason)) {
+                    session.onRemoteApplied(remoteVersion);
+                    fastapi_model_version = session.modelVersion();
+                    fastapi_pending_remote_version = session.pendingRemoteVersion();
+                    pendingEntityChanges.clear();
+                    if (!fastapi_project_name.isEmpty()) {
+                        setCurrentPartName(fastapi_project_name);
+                    }
+                    updateCollabPanelUi();
+                    statusBar()->showMessage(tr("Pull 全量替换完成 v%1（SAT）").arg(fastapi_model_version), 3000);
+                } else {
+                    rollbackToPending(QStringLiteral("FullSat after IncrementalDelta fallback"));
+                    statusBar()->showMessage(tr("Pull 全量替换失败，已重新排队"), 5000);
+                }
+                return;
+            }
+            qDebug().noquote() << "[Collab] Pull [IncrementalDelta] +" << deltaBodiesPull.size()
+                               << " -" << deletedUuidsPull.size();
             QString deltaErr;
             if (applyRemoteIncrementalDelta(content, &deltaErr)) {
                 session.onRemoteApplied(remoteVersion);
@@ -3164,26 +3485,17 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
                                              .arg(deletedUuidsPull.size()), 3000);
                 return;
             }
-            qWarning().noquote() << "[Collab] Pull incremental delta failed:" << deltaErr
-                                 << "→ fallback to entity_graph/SAT";
+            qWarning().noquote() << "[Collab] Pull [IncrementalDelta] failed:" << deltaErr
+                                 << "→ fallback to FullSat";
+            // IncrementalDelta 失败：rollback apply 标志（apply 内可能已部分修改 entity_tree，需要清理）
+            rollbackToPending(deltaErr);
+            statusBar()->showMessage(tr("Pull 增量合并失败，已重新排队"), 5000);
+            return;
         }
 
-        // 从 content.entity_graph 直接获取 entity_graph JSON，
-        // 不再依赖 Python neo4j API（_entity_graph_version）。
-        // 新路径：submitACISEntityGraph 把 entity_graph 存在 storage_bridge 的 content_text 里，
-        // storage_bridge 返回完整 content 时会携带 entity_graph。
-
-        // 冲突检测：在清空本地之前先抓取本地 entity graph
-        const QJsonObject entityGraphJson = content.value("entity_graph").toObject();
-        // 注意：entity_graph 反序列化是占位实现（见 entity_graph_serializer.cpp 注释）。
-        // 反序列化出的 ACIS 实体未正确注册到 ACIS bulletin board，后续操作会 crash。
-        // 当前统一走 SAT fallback 路径，SAT 由 submitACISEntityGraph 随 entity_graph
-        // 一起发出，是完整的 ACIS 顶级 body SAT 内容，api_restore_entity_list 可完整重建。
-        if (false && !entityGraphJson.isEmpty() && !entityGraphJson.value("nodes").toArray().isEmpty()) {
-            qDebug().noquote() << "[Collab] Pull try entity_graph path, nodes="
-                              << entityGraphJson.value("nodes").toArray().size()
-                              << "rels=" << entityGraphJson.value("rels").toArray().size();
-            if (pullACISEntityGraph(remoteVersion, entityGraphJson)) {
+        if (collabPullMode == CollabPullMode::FullSat) {
+            qDebug().noquote() << "[Collab] Pull [FullSat] sat.size=" << satContent.size();
+            if (applyRemoteSatSnapshot(satContent, reason)) {
                 session.onRemoteApplied(remoteVersion);
                 fastapi_model_version = session.modelVersion();
                 fastapi_pending_remote_version = session.pendingRemoteVersion();
@@ -3192,53 +3504,49 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
                     setCurrentPartName(fastapi_project_name);
                 }
                 updateCollabPanelUi();
-                statusBar()->showMessage(tr("已拉取远端版本 %1（Entity Graph 格式）").arg(fastapi_model_version), 3000);
-                return;
+                statusBar()->showMessage(tr("Pull 全量替换完成 v%1（SAT）").arg(fastapi_model_version), 3000);
             } else {
-                qWarning().noquote() << "[Collab] Pull entity_graph path failed, falling back to SAT";
+                rollbackToPending(QStringLiteral("FullSat failed"));
+                statusBar()->showMessage(tr("Pull 全量替换失败，已重新排队"), 5000);
+                qWarning() << "[Collab] Pull [FullSat] applyRemoteSatSnapshot failed, parked as pending. v=" << remoteVersion;
             }
-        }
-
-        if (satContent.isEmpty()) {
-            session.rollbackApply();
-            session.onRemotePending(remoteVersion);
-            fastapi_pending_remote_version = session.pendingRemoteVersion();
-            updateCollabPanelUi();
-            statusBar()->showMessage(tr("远端版本%1无SAT文本且Entity Graph重建失败，请刷新后重试").arg(remoteVersion), 5000);
             return;
         }
 
-        qDebug().noquote() << "[Collab] Pull applyRemoteSat start, sat.size=" << satContent.size();
-        // SAT fallback：调用 master 同款的 clear() + restoreFastAPIModelFromSat() 全量替换路径。
-        const bool ok = applyRemoteSatSnapshot(satContent, reason);
-        if (ok) {
-            session.onRemoteApplied(remoteVersion);
-            fastapi_model_version = session.modelVersion();
-            fastapi_pending_remote_version = session.pendingRemoteVersion();
-            // 远端 apply 后清空本地未 push 的变更（它们已经在远端版本里）。
-            pendingEntityChanges.clear();
-            if (!fastapi_project_name.isEmpty()) {
-                setCurrentPartName(fastapi_project_name);
+        if (collabPullMode == CollabPullMode::EntityGraph) {
+            qDebug().noquote() << "[Collab] Pull [EntityGraph] nodes="
+                               << entityGraphJson.value("nodes").toArray().size();
+            if (entityGraphJson.isEmpty() || entityGraphJson.value("nodes").toArray().isEmpty()) {
+                rollbackToPending(QStringLiteral("EntityGraph empty in content"));
+                statusBar()->showMessage(tr("Pull JSON 反序列化失败（无 Entity Graph 数据），已重新排队"), 5000);
+                return;
             }
-            updateCollabPanelUi();
-            statusBar()->showMessage(tr("已拉取远端版本 %1").arg(fastapi_model_version), 3000);
-        } else {
-            // apply 失败时回滚 applying 标志，让用户再点 Pull 还能重试。
-            session.rollbackApply();
-            session.onRemotePending(remoteVersion);
-            fastapi_model_version = session.modelVersion();
-            fastapi_pending_remote_version = session.pendingRemoteVersion();
-            updateCollabPanelUi();
-            qWarning() << "[Collab] Pull applyRemoteSatSnapshot failed, parked as pending for retry. v=" << remoteVersion;
+            if (pullACISEntityGraph(remoteVersion, entityGraphJson, satContent)) {
+                session.onRemoteApplied(remoteVersion);
+                fastapi_model_version = session.modelVersion();
+                fastapi_pending_remote_version = session.pendingRemoteVersion();
+                pendingEntityChanges.clear();
+                if (!fastapi_project_name.isEmpty()) {
+                    setCurrentPartName(fastapi_project_name);
+                }
+                updateCollabPanelUi();
+                statusBar()->showMessage(tr("Pull JSON 反序列化完成 v%1").arg(fastapi_model_version), 3000);
+            } else {
+                rollbackToPending(QStringLiteral("EntityGraph path failed"));
+                statusBar()->showMessage(tr("Pull JSON 反序列化失败，已重新排队"), 5000);
+                qWarning() << "[Collab] Pull [EntityGraph] pullACISEntityGraph failed, parked as pending. v=" << remoteVersion;
+            }
+            return;
         }
-        return;
+
+        // 未识别的模式（不应该到这里，因为 enum 只有 3 个值）
+        qWarning().noquote() << "[Collab] Pull: unknown collabPullMode=" << static_cast<int>(collabPullMode);
+        rollbackToPending(QStringLiteral("unknown pull mode"));
     }
 
     if (messageType != "model_saved") {
         return;
     }
-
-    qDebug().noquote() << "[Collab] handleFastAPISyncMessage: entering model_saved branch";
 
     const QString projectId = root.value("project_id").toString();
     if (projectId != fastapi_project_id) {
@@ -3292,85 +3600,41 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
     const QJsonObject contentJson = root.value("content").toObject();
     const QString satContent = contentJson.value("sat").toString();
     const QString reason = root.value("trigger").toString("model_saved");
-    qDebug().noquote() << "[Collab] model_saved branch: hasSat=" << !satContent.isEmpty()
+    qDebug().noquote() << "[Collab] model_saved branch: chosen mode=" << static_cast<int>(collabPullMode)
+                       << "hasSat=" << !satContent.isEmpty()
                        << "sat.size=" << satContent.size() << "reason=" << reason
                        << "satSubmitInFlight=" << session.isSatSubmitInFlight();
 
-    // 优先尝试 entity_graph 反序列化路径（如果 content 包含 entity_graph）
     const QJsonObject entityGraphJson = contentJson.value("entity_graph").toObject();
-    if (!entityGraphJson.isEmpty() && !entityGraphJson.value("nodes").toArray().isEmpty()) {
-        qDebug().noquote() << "[Collab] model_saved try entity_graph path, nodes="
-                           << entityGraphJson.value("nodes").toArray().size();
-        if (pullACISEntityGraph(remoteVersion, entityGraphJson)) {
-            session.onRemoteApplied(remoteVersion);
-            fastapi_model_version = session.modelVersion();
-            fastapi_pending_remote_version = session.pendingRemoteVersion();
-            pendingEntityChanges.clear();
-            if (!fastapi_project_name.isEmpty()) {
-                setCurrentPartName(fastapi_project_name);
-            }
-            updateCollabPanelUi();
-            statusBar()->showMessage(tr("已通过 ACIS Entity Graph 拉取远端版本 %1").arg(fastapi_model_version), 3000);
-            return;
-        }
-        qDebug().noquote() << "[Collab] model_saved entity_graph path returned false, falling back to delta/SAT";
-    }
 
     if (curWindow == nullptr) {
         return;
     }
 
-    // 优先尝试增量 delta 路径（content.delta_bodies / content.deleted_uuids）：
-    // push 端 submitIncrementalDelta 路径下的标配载荷，仅按 UUID 去重 add / 真正删除
-    // （不 clear 画布，不破坏本地未推送的实体），与 pull 端 push 增量对称。
-    const QJsonArray deltaBodies = contentJson.value("delta_bodies").toArray();
-    const QJsonArray deletedUuids = contentJson.value("deleted_uuids").toArray();
-    if (!deltaBodies.isEmpty() || !deletedUuids.isEmpty()) {
-        qDebug().noquote() << "[Collab] model_saved try incremental delta path, +"
-                           << deltaBodies.size() << " -" << deletedUuids.size();
-        QString deltaErr;
-        if (applyRemoteIncrementalDelta(contentJson, &deltaErr)) {
-            session.onRemoteApplied(remoteVersion);
-            fastapi_model_version = session.modelVersion();
+    // === 按用户选择的模式分发（与 sync_now 应答一致的 dispatch 策略）===
+    switch (collabPullMode) {
+    case CollabPullMode::IncrementalDelta:
+    default: {
+        const QJsonArray deltaBodies = contentJson.value("delta_bodies").toArray();
+        const QJsonArray deletedUuids = contentJson.value("deleted_uuids").toArray();
+        if (deltaBodies.isEmpty() && deletedUuids.isEmpty()) {
+            qWarning().noquote() << "[Collab] model_saved IncrementalDelta: no delta in content, fallback to FullSat";
+            goto do_full_sat_model_saved;
+        }
+        CollabSession::ApplyDecision applyDecision = session.tryBeginApplyRemote(remoteVersion, reason);
+        if (applyDecision.kind != CollabSession::ApplyDecision::Allow) {
+            qWarning() << "[Collab] model_saved [IncrementalDelta] apply rejected:" << applyDecision.reasonTr;
+            session.onRemotePending(remoteVersion);
             fastapi_pending_remote_version = session.pendingRemoteVersion();
-            pendingEntityChanges.clear();
-            if (!fastapi_project_name.isEmpty()) {
-                setCurrentPartName(fastapi_project_name);
-            }
             updateCollabPanelUi();
-            statusBar()->showMessage(tr("已通过增量合并拉取远端版本 %1（+%2 -%3）")
-                                         .arg(fastapi_model_version)
-                                         .arg(deltaBodies.size())
-                                         .arg(deletedUuids.size()), 3000);
             return;
         }
-        qWarning().noquote() << "[Collab] model_saved incremental delta failed:" << deltaErr
-                             << "→ fallback to SAT snapshot";
-    }
-
-    if (satContent.isEmpty()) {
-        session.onRemotePending(remoteVersion);
-        fastapi_pending_remote_version = session.pendingRemoteVersion();
-        statusBar()->showMessage(
-            tr("远端版本%1不包含SAT文本，无法自动拉取，请刷新后重试").arg(remoteVersion),
-            5000);
-        updateCollabPanelUi();
-        return;
-    }
-
-    CollabSession::ApplyDecision applyDecision = session.tryBeginApplyRemote(remoteVersion, reason);
-    qDebug().noquote() << "[Collab] model_saved tryBeginApplyRemote kind=" << (int)applyDecision.kind
-                       << "reason=" << applyDecision.reasonTr;
-    if (applyDecision.kind != CollabSession::ApplyDecision::Allow) {
-        qWarning() << "[Collab] model_saved apply rejected:" << applyDecision.reasonTr;
-        session.onRemotePending(remoteVersion);
-        fastapi_pending_remote_version = session.pendingRemoteVersion();
-        updateCollabPanelUi();
-        return;
-    }
-
-    const bool ok = applyRemoteSatSnapshot(satContent, reason);
-    if (ok) {
+        QString deltaErr;
+        if (!applyRemoteIncrementalDelta(contentJson, &deltaErr)) {
+            qWarning().noquote() << "[Collab] model_saved [IncrementalDelta] failed:" << deltaErr
+                                << "→ fallback to FullSat";
+            goto do_full_sat_model_saved;
+        }
         session.onRemoteApplied(remoteVersion);
         fastapi_model_version = session.modelVersion();
         fastapi_pending_remote_version = session.pendingRemoteVersion();
@@ -3379,14 +3643,86 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
             setCurrentPartName(fastapi_project_name);
         }
         updateCollabPanelUi();
-        statusBar()->showMessage(tr("已拉取远端版本 %1（SAT 格式）").arg(fastapi_model_version), 3000);
-    } else {
-        session.rollbackApply();
-        session.onRemotePending(remoteVersion);
-        fastapi_model_version = session.modelVersion();
-        fastapi_pending_remote_version = session.pendingRemoteVersion();
-        updateCollabPanelUi();
-        qWarning() << "[Collab] model_saved applyRemoteSatSnapshot failed, parked as pending for retry. v=" << remoteVersion;
+        statusBar()->showMessage(tr("已通过增量合并拉取远端版本 %1（+%2 -%3）")
+                                     .arg(fastapi_model_version)
+                                     .arg(deltaBodies.size())
+                                     .arg(deletedUuids.size()), 3000);
+        return;
+    }
+
+    case CollabPullMode::FullSat:
+    do_full_sat_model_saved:
+        if (satContent.isEmpty()) {
+            session.onRemotePending(remoteVersion);
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            statusBar()->showMessage(
+                tr("远端版本%1不包含SAT文本，无法全量替换，请刷新后重试").arg(remoteVersion),
+                5000);
+            updateCollabPanelUi();
+            return;
+        }
+        {
+            CollabSession::ApplyDecision applyDecision = session.tryBeginApplyRemote(remoteVersion, reason);
+            if (applyDecision.kind != CollabSession::ApplyDecision::Allow) {
+                qWarning() << "[Collab] model_saved [FullSat] apply rejected:" << applyDecision.reasonTr;
+                session.onRemotePending(remoteVersion);
+                fastapi_pending_remote_version = session.pendingRemoteVersion();
+                updateCollabPanelUi();
+                return;
+            }
+            if (applyRemoteSatSnapshot(satContent, reason)) {
+                session.onRemoteApplied(remoteVersion);
+                fastapi_model_version = session.modelVersion();
+                fastapi_pending_remote_version = session.pendingRemoteVersion();
+                pendingEntityChanges.clear();
+                if (!fastapi_project_name.isEmpty()) {
+                    setCurrentPartName(fastapi_project_name);
+                }
+                updateCollabPanelUi();
+                statusBar()->showMessage(tr("已通过全量替换拉取远端版本 %1").arg(fastapi_model_version), 3000);
+            } else {
+                session.rollbackApply();
+                session.onRemotePending(remoteVersion);
+                fastapi_pending_remote_version = session.pendingRemoteVersion();
+                updateCollabPanelUi();
+                statusBar()->showMessage(tr("全量替换失败，已重新排队"), 5000);
+            }
+        }
+        return;
+
+    case CollabPullMode::EntityGraph:
+        if (entityGraphJson.isEmpty() || entityGraphJson.value("nodes").toArray().isEmpty()) {
+            qWarning().noquote() << "[Collab] model_saved [EntityGraph] no entity_graph in content, fallback to FullSat";
+            goto do_full_sat_model_saved;
+        }
+        {
+            CollabSession::ApplyDecision applyDecision = session.tryBeginApplyRemote(remoteVersion, reason);
+            if (applyDecision.kind != CollabSession::ApplyDecision::Allow) {
+                qWarning() << "[Collab] model_saved [EntityGraph] apply rejected:" << applyDecision.reasonTr;
+                session.onRemotePending(remoteVersion);
+                fastapi_pending_remote_version = session.pendingRemoteVersion();
+                updateCollabPanelUi();
+                return;
+            }
+            if (pullACISEntityGraph(remoteVersion, entityGraphJson, satContent)) {
+                session.onRemoteApplied(remoteVersion);
+                fastapi_model_version = session.modelVersion();
+                fastapi_pending_remote_version = session.pendingRemoteVersion();
+                pendingEntityChanges.clear();
+                if (!fastapi_project_name.isEmpty()) {
+                    setCurrentPartName(fastapi_project_name);
+                }
+                updateCollabPanelUi();
+                statusBar()->showMessage(tr("已通过 JSON 反序列化拉取远端版本 %1").arg(fastapi_model_version), 3000);
+            } else {
+                session.rollbackApply();
+                session.onRemotePending(remoteVersion);
+                fastapi_pending_remote_version = session.pendingRemoteVersion();
+                updateCollabPanelUi();
+                statusBar()->showMessage(tr("JSON 反序列化失败，已重新排队"), 5000);
+            }
+        }
+        return;
     }
 }
 
@@ -4040,6 +4376,17 @@ void MainWindow::createActions() {
     collabPullButton = new QPushButton(tr("拉取(Pull)"), collabBody);
     collabReconnectButton = new QPushButton(tr("重连"), collabBody);
 
+    collabPullModeCombo = new QComboBox(collabBody);
+    collabPullModeCombo->addItem(tr("增量合并 (推荐)"), static_cast<int>(CollabPullMode::IncrementalDelta));
+    collabPullModeCombo->addItem(tr("全量替换 (SAT)"), static_cast<int>(CollabPullMode::FullSat));
+    collabPullModeCombo->addItem(tr("JSON 反序列化 (高级)"), static_cast<int>(CollabPullMode::EntityGraph));
+    collabPullModeCombo->setCurrentIndex(static_cast<int>(collabPullMode));
+    collabPullModeCombo->setToolTip(tr(
+        "Pull 模式:\n"
+        "  • 增量合并 — 按 UUID 去重 add 远端新增 body，按 UUID 删远端删除 body，保留本地未推送变更（最安全）\n"
+        "  • 全量替换 — clear + restore 完整 SAT，丢弃本地未推送变更（远端为准）\n"
+        "  • JSON 反序列化 — 用 entity_graph JSON 反序列化重建（高级/调试用）"));
+
     connect(collabAutoFollowCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
         fastapiAutoFollowRemote = checked;
         updateCollabPanelUi();
@@ -4048,6 +4395,14 @@ void MainWindow::createActions() {
     connect(collabPushButton, &QPushButton::clicked, this, &MainWindow::onCollabPushButtonClicked);
     connect(collabPullButton, &QPushButton::clicked, this, &MainWindow::onCollabPullButtonClicked);
     connect(collabReconnectButton, &QPushButton::clicked, this, &MainWindow::reconnectFastAPISync);
+    connect(collabPullModeCombo,
+            static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
+            this,
+            [this](int index) {
+                collabPullMode = static_cast<CollabPullMode>(collabPullModeCombo->itemData(index).toInt());
+                qDebug().noquote() << "[Collab] Pull mode changed to:" << static_cast<int>(collabPullMode);
+                updateCollabPanelUi();
+            });
 
     collabLayout->addWidget(new QLabel(tr("连接状态"), collabBody));
     collabLayout->addWidget(collabConnectionLabel);
@@ -4058,7 +4413,15 @@ void MainWindow::createActions() {
     collabLayout->addWidget(collabMembersList);
     collabLayout->addWidget(collabAutoFollowCheckBox);
     collabLayout->addWidget(collabPushButton);
-    collabLayout->addWidget(collabPullButton);
+
+    // Pull 按钮 + 模式选择放在同一行
+    {
+        QHBoxLayout* pullRow = new QHBoxLayout;
+        pullRow->addWidget(collabPullButton, /*stretch=*/2);
+        pullRow->addWidget(collabPullModeCombo, /*stretch=*/3);
+        collabLayout->addLayout(pullRow);
+    }
+
     collabLayout->addWidget(collabSyncNowButton);
     collabLayout->addWidget(collabReconnectButton);
     collabLayout->addStretch();
@@ -4825,7 +5188,7 @@ void MainWindow::commitData(QSessionManager& manager) {
         if (!maybeSave()) manager.cancel();
     } else {
         // 自动保存
-        if (curWindow->getIsModified()) save();
+        if (curWindow != nullptr && curWindow->getIsModified()) save();
     }
 }
 #endif

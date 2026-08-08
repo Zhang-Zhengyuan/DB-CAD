@@ -124,6 +124,7 @@ public:
     bool isLocalDirty() const { return state_ == State::Connected_LocalDirty; }
     void clearLocalDirtyDuringSubmit() { snapshot_.localDirtyDuringSubmit = false; mirrorToLegacy(); }
     bool isApplyingRemoteSnapshot() const  { return snapshot_.applyingRemoteSnapshot; }
+    void setApplyingRemoteSnapshot(bool v) { snapshot_.applyingRemoteSnapshot = v; }
     bool isPublishingSnapshot() const      { return snapshot_.publishingSnapshot; }
     const QString& submitRequestId() const       { return snapshot_.submitRequestId; }
     const QString& lastPublishReason() const    { return snapshot_.lastPublishReason; }

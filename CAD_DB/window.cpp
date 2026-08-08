@@ -945,17 +945,19 @@ ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, i
     eti.subOperatorType = sot;
     eti.index_base = index_base;
     entity_tree.push_back(eti);
+    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity after entity_tree.push_back, size=%zu\n", entity_tree.size());
     for (auto index : index_base) {
         for (auto& e : entity_tree) {
             if (e.index == index) e.index_support.push_back(eti.index);
         }
     }
-    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity before updateTreeWidget, entity_tree.size=%zu\n", entity_tree.size());
+    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity before updateTreeWidget\n");
     this->updateTreeWidget();
-    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity before updateMeshData\n");
+    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity after updateTreeWidget, before updateMeshData\n");
     this->updateMeshData();
     std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity after updateMeshData\n");
     mainWindow->notifyModelChangedForCollaboration();
+    std::fprintf(stderr, "[Collab][DEBUG] Window::addEntity after notifyModelChangedForCollaboration\n");
 
     // 只有在"非 apply remote snapshot / 非 publishing snapshot"时才记录增量变更，
     // 否则会把远端实体的"添加"动作记录成本地 ADD change，下次提交造成回环上传。
@@ -1012,22 +1014,30 @@ void Window::updateMeshData() {
     std::vector<GmeMesh::DisplayData*>& md = glWidget->getMeshData();
     md.clear();
     size_t entitiesWithNoMesh = 0;
-    for (auto& e : entity_tree) {
+    for (size_t idx = 0; idx < entity_tree.size(); ++idx) {
+        auto& e = entity_tree[idx];
+        std::fprintf(stderr, "[Window::updateMeshData] processing idx=%zu ptrEntity=%p visible=%d\n",
+                     idx, (void*)e.ptrEntity, (int)e.visible);
         if (e.visible) {
             if (e.ptrDisplayData == nullptr) {
+                std::fprintf(stderr, "[Window::updateMeshData] calling CreateMeshFromEntity for idx=%zu\n", idx);
                 GmeMesh::DisplayData* dd = new GmeMesh::DisplayData;
                 // 生成面片数据
                 if (CreateMeshFromEntity(e.ptrEntity, *dd)) {
+                    std::fprintf(stderr, "[Window::updateMeshData] CreateMeshFromEntity SUCCESS for idx=%zu\n", idx);
                     dd->displayType = e.displayType;
                     e.ptrDisplayData = dd;
                     md.push_back(dd);
                 } else {
+                    std::fprintf(stderr, "[Window::updateMeshData] CreateMeshFromEntity FAILED for idx=%zu\n", idx);
                     ++entitiesWithNoMesh;
                     delete dd;
                 }
                 isModified = true;
-            } else
+            } else {
+                std::fprintf(stderr, "[Window::updateMeshData] using existing ptrDisplayData for idx=%zu\n", idx);
                 md.push_back(e.ptrDisplayData);
+            }
         }
     }
     if (entitiesWithNoMesh > 0) {
@@ -1043,6 +1053,7 @@ void Window::updateMeshData() {
                  md.size(), totalFaces, totalEdges, entitiesWithNoMesh);
     api_logging(TRUE);
 
+    std::fprintf(stderr, "[Window::updateMeshData] calling glWidget->updateMeshData()\n");
     glWidget->updateMeshData();
     std::fprintf(stderr, "[Collab][DEBUG] <<< Window::updateMeshData EXIT\n");
 }

@@ -494,8 +494,8 @@ MainWindow 维护 `fastapi_collaborators: QHash<QString, QString>` (client_id �
 - ✅ **单 body SAT 序列化** `serializeBodyToSat()`：完整实现，与 push 端对齐
 - ✅ **增量回放** `applyRemoteIncrementalDelta()`：2026-07-31 端到端跑通
 - ✅ **UUID 去重 + 本地索引映射**：`entityIndexToUuid[idx] = uuid`
-- ⏳ **Entity Graph JSON 序列化** `serializeACISEntityGraph()`：完整实现 BODY / LUMP / SHELL / FACE / LOOP / COEDGE / EDGE / VERTEX / TRANSFORM 遍历
-- ⏳ **Entity Graph 反序列化** `deserializeACISEntityGraph()`：占位实现（返回 false，调用 SAT fallback）—— 当前由 SAT 单 body 路径替代
+- ✅ **Entity Graph JSON 序列化** `serializeACISEntityGraph()`：完整实现 BODY / LUMP / SHELL / FACE / LOOP / COEDGE / EDGE / VERTEX / TRANSFORM 遍历
+- ✅ **Entity Graph 反序列化** `deserializeACISEntityGraph()`：真正实现（2026-08-05），两遍遍历重建 ACIS 实体
 
 ---
 
@@ -513,11 +513,19 @@ MainWindow 维护 `fastapi_collaborators: QHash<QString, QString>` (client_id �
 
 ## 十一、后续工作
 
-1. **`deserializeACISEntityGraph()`** 真正实现——目前 SAT 单 body 路径已稳定可用
+1. ~~`deserializeACISEntityGraph()` 真正实现~~ —— ✅ 已完成（2026-08-05）
 2. **`applyRemoteIncrementalDelta` 扩展支持 MODIFY 变更**——目前只处理 ADD 和 REMOVE
 3. **冲突可视化**——当两个客户端同时改同一 UUID 的 body 时，目前后到者 reject，前端需提示用户
 4. **撤销栈同步**——本地 Undo/Redo 暂未通过协作广播
 5. **`api_for_all` / `api_get_entities` 之外的 active entity 收集路径**——保留为 fallback
+
+### 已完成（2026-08-05 清理）
+- ✅ **Entity Graph JSON 反序列化** `deserializeACISEntityGraph()` 真正实现（2026-08-05）
+  - 两遍遍历：先创建实体再链接拓扑
+  - 修复 VERTEX 坐标设置问题
+  - 补充缺失的拓扑关系链接
+  - 修复 parseInterval 数组索引问题
+  - Pull 路径已启用：优先尝试 entity_graph，失败则 fallback 到 SAT
 
 ### 已完成（2026-08-03 清理）
 - ✅ 删除-不再自动推：删除只入 `pendingEntityChanges`，由 Push 按钮统一提交

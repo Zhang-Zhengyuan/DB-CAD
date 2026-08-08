@@ -8,8 +8,10 @@
  *   和属性提取逻辑，但将 mg_* 类型转换为 JSON 类型。
  *
  * 反序列化逻辑（deserializeACISEntityGraph）：
- *   返回 false（暂未实现），调用方应使用 SAT fallback。
- *   后续可扩展为调用 access.cpp 的 api_restore_entity_list_neo4j。
+ *   严格分三阶段（参考 access.cpp api_restore_entity_list_neo4j）：
+ *   1. Pass1: 创建所有实体骨架（全部包裹在 API_BEGIN/API_END 内）
+ *   2. Pass2: 设置几何属性（全部包裹在 API_BEGIN/API_END 内）
+ *   3. Pass3: 处理拓扑链接
  */
 
 #include "entity_graph_serializer.h"
@@ -17,9 +19,12 @@
 #include <acis/include/api.hxx>
 #include <acis/include/cstrapi.hxx>
 #include <acis/include/kernapi.hxx>
+#include <acis/include/fct_utl.hxx>
+#include <acis/include/rnd_api.hxx>
 #include <acis/include/allcurve.hxx>
 #include <acis/include/allsurf.hxx>
 #include <acis/include/alltop.hxx>
+#include <acis/include/body.hxx>
 #include <acis/include/curve.hxx>
 #include <acis/include/surface.hxx>
 #include <acis/include/point.hxx>
@@ -32,6 +37,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStack>
+#include <QQueue>
 #include <QDebug>
 #include <unordered_set>
 
@@ -80,23 +86,29 @@ inline QJsonArray intervalToJson(const SPAinterval& iv) {
 }
 
 // SPApar_box → [u0, u1, v0, v1]
-// SPApar_box 自身没有 start/end 等便捷访问，访问它有两种方式：
-//   (1) box.u_range() / box.v_range() 返回 SPAinterval，可拆 start_pt()/end_pt()
-//   (2) 调用 API 函数 get_range / subset_range（在 surface 上）
-// 这里用 (1)：逻辑清晰、对部分 box（range 为空）情况友好
 inline QJsonArray parBoxToJson(const SPApar_box& box) {
+    QJsonArray arr;
     SPAinterval uRange = box.u_range();
     SPAinterval vRange = box.v_range();
-    double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
-    if (!uRange.empty()) {
-        u0 = uRange.start_pt();
-        u1 = uRange.end_pt();
+    // 格式与 parseParBox 一致：[u_start, u_end, v_start, v_end]
+    // u_range/v_range 可能是 empty（退化），用 0..1 占位
+    double u0 = 0.0, u1 = 1.0, v0 = 0.0, v1 = 1.0;
+    if (!uRange.empty()) { u0 = uRange.start_pt(); u1 = uRange.end_pt(); }
+    if (!vRange.empty()) { v0 = vRange.start_pt(); v1 = vRange.end_pt(); }
+    arr.append(u0); arr.append(u1);
+    arr.append(v0); arr.append(v1);
+    return arr;
+}
+
+// 辅助：从 JSON 数组 [u0, u1, v0, v1] 解析 SPApar_box
+static SPApar_box parseParBox(const QJsonArray& arr) {
+    if (arr.size() >= 4) {
+        return SPApar_box(
+            SPAinterval(arr[0].toDouble(), arr[1].toDouble()),
+            SPAinterval(arr[2].toDouble(), arr[3].toDouble())
+        );
     }
-    if (!vRange.empty()) {
-        v0 = vRange.start_pt();
-        v1 = vRange.end_pt();
-    }
-    return QJsonArray{ u0, u1, v0, v1 };
+    return SPApar_box();
 }
 
 // SPAmatrix → [9 floats]（列主序，与 access.cpp getmglist_SPAmatrix 完全一致）
@@ -176,31 +188,35 @@ QJsonObject serializeACISEntityGraph(
         QString label;
         QJsonObject props;
     };
-    QHash<const void*, IntNode> ptrToNode;
+    // 关键：必须用 std::vector（保留插入顺序）而非 QHash（迭代无序），
+    // 否则 nodes 数组的 body 节点顺序与用户 addEntity 顺序不一致，
+    // 导致远端 merge loop 中 remoteBodies[0]/[1] 与 A 端错位。
+    std::vector<std::pair<const void*, IntNode>> orderedNodes;
 
-    QStack<ENTITY*> stack;
+    QQueue<ENTITY*> queue;
     std::unordered_set<const void*> visited;
 
     // 初始化：从顶级实体开始 BFS
+    // topLevelEntities 的顺序就是用户 addEntity 的顺序，这是我们要保留的
     for (int i = 0; i < topLevelEntities.count(); ++i) {
         ENTITY* e = topLevelEntities[i];
         if (e && visited.insert(e).second) {
-            stack.push(e);
+            queue.enqueue(e);
         }
     }
 
-    // 子节点入栈辅助
-    auto push = [&](ENTITY* child) {
+    // 子节点入队辅助
+    auto enqueueChild = [&](ENTITY* child) {
         if (child && visited.insert(child).second) {
-            stack.push(child);
+            queue.enqueue(child);
         }
     };
 
-    while (!stack.isEmpty()) {
-        ENTITY* e = stack.pop();
+    while (!queue.isEmpty()) {
+        ENTITY* e = queue.dequeue();
         if (!e) continue;
         const void* ePtr = static_cast<const void*>(e);
-        if (ptrToNode.contains(ePtr)) continue;
+        if (ptrToId.contains(ePtr)) continue;
 
         IntNode node;
         node.props = QJsonObject();
@@ -221,13 +237,11 @@ QJsonObject serializeACISEntityGraph(
             if (node.id.isEmpty()) node.id = genNodeId(e, BODY_ID);
             QJsonObject props;
             props["entity_type"] = "body";
-            // BODY 本身不暴露 SPAtransf 接口（没有 transform() 成员）。
-            // 实体的 transform 信息保存在关联的 TRANSFORM 实体节点里（push 后会被单独遍历）。
             node.props = props;
-            ptrToNode[ePtr] = node;
+            orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
-            push((ENTITY*)body->lump());
-            push((ENTITY*)body->wire());
+            enqueueChild((ENTITY*)body->lump());
+            enqueueChild((ENTITY*)body->wire());
             break;
         }
         case LUMP_ID: {
@@ -236,12 +250,11 @@ QJsonObject serializeACISEntityGraph(
             node.id = genNodeId(e, LUMP_ID);
             QJsonObject props;
             props["entity_type"] = "lump";
-            // LUMP 同样不暴露 transform()，实体 transform 信息保存在 TRANSFORM 节点里
             node.props = props;
-            ptrToNode[ePtr] = node;
+            orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
-            push((ENTITY*)lump->shell());
-            push((ENTITY*)lump->next());
+            enqueueChild((ENTITY*)lump->shell());
+            enqueueChild((ENTITY*)lump->next());
             break;
         }
         case SHELL_ID: {
@@ -249,12 +262,12 @@ QJsonObject serializeACISEntityGraph(
             node.label = "shell";
             node.id = genNodeId(e, SHELL_ID);
             node.props["entity_type"] = "shell";
-            ptrToNode[ePtr] = node;
+            orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
-            push((ENTITY*)shell->next());
-            push((ENTITY*)shell->face());
-            push((ENTITY*)shell->wire());
-            push((ENTITY*)shell->lump());
+            enqueueChild((ENTITY*)shell->next());
+            enqueueChild((ENTITY*)shell->face());
+            enqueueChild((ENTITY*)shell->wire());
+            enqueueChild((ENTITY*)shell->lump());
             break;
         }
         case FACE_ID: {
@@ -270,7 +283,6 @@ QJsonObject serializeACISEntityGraph(
                 ENTITY* geom = face->geometry();
                 QJsonObject gj;
                 gj["type"] = surfaceTypeName(geom);
-                // subset_range 是 surface 真实存在的 API（acis.cpp:119 gme_get_subset_range）
                 SPApar_box uvrange = ((surface*)geom)->gme_get_subset_range();
                 gj["uv_range"] = parBoxToJson(uvrange);
                 switch (geom->identity(2)) {
@@ -311,11 +323,11 @@ QJsonObject serializeACISEntityGraph(
                 props["geometry"] = gj;
             }
             node.props = props;
-            ptrToNode[ePtr] = node;
+            orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
-            push((ENTITY*)face->next());
-            push((ENTITY*)face->loop());
-            push((ENTITY*)face->shell());
+            enqueueChild((ENTITY*)face->next());
+            enqueueChild((ENTITY*)face->loop());
+            enqueueChild((ENTITY*)face->shell());
             break;
         }
         case LOOP_ID: {
@@ -323,11 +335,11 @@ QJsonObject serializeACISEntityGraph(
             node.label = "loop";
             node.id = genNodeId(e, LOOP_ID);
             node.props["entity_type"] = "loop";
-            ptrToNode[ePtr] = node;
+            orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
-            push((ENTITY*)loop->next());
-            push((ENTITY*)loop->start());
-            push((ENTITY*)loop->face());
+            enqueueChild((ENTITY*)loop->next());
+            enqueueChild((ENTITY*)loop->start());
+            enqueueChild((ENTITY*)loop->face());
             break;
         }
         case COEDGE_ID: {
@@ -336,17 +348,16 @@ QJsonObject serializeACISEntityGraph(
             node.id = genNodeId(e, COEDGE_ID);
             node.props["entity_type"] = "coedge";
             node.props["sense"] = co->sense();
-            ptrToNode[ePtr] = node;
+            orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
-            push((ENTITY*)co->next());
-            push((ENTITY*)co->edge());
+            enqueueChild((ENTITY*)co->next());
+            enqueueChild((ENTITY*)co->edge());
             break;
         }
         case EDGE_ID: {
             EDGE* edge = (EDGE*)e;
             node.label = "edge";
             node.id = genNodeId(e, EDGE_ID);
-            // EDGE 的两个端点 VERTEX*：start() / end() 各指向一个顶点
             SPAposition sp, ep;
             bool haveSp = false, haveEp = false;
             if (edge->start()) {
@@ -363,7 +374,6 @@ QJsonObject serializeACISEntityGraph(
                     haveEp = true;
                 }
             }
-            // 按 sense 反向
             if (edge->sense() != 0) {
                 std::swap(sp, ep);
                 std::swap(haveSp, haveEp);
@@ -400,10 +410,10 @@ QJsonObject serializeACISEntityGraph(
                 props["geometry"] = gj;
             }
             node.props = props;
-            ptrToNode[ePtr] = node;
+            orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
-            push((ENTITY*)edge->start());
-            push((ENTITY*)edge->end());
+            enqueueChild((ENTITY*)edge->start());
+            enqueueChild((ENTITY*)edge->end());
             break;
         }
         case VERTEX_ID: {
@@ -412,13 +422,12 @@ QJsonObject serializeACISEntityGraph(
             node.id = genNodeId(e, VERTEX_ID);
             node.props["entity_type"] = "vertex";
             if (vtx->geometry()) {
-                // APOINT 是 vertex 的几何（指向 SPAposition 的点）
                 if (vtx->geometry()->identity(0) == APOINT_ID) {
                     SPAposition pos = ((APOINT*)vtx->geometry())->coords();
                     node.props["position"] = posToJson(pos);
                 }
             }
-            ptrToNode[ePtr] = node;
+            orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
             break;
         }
@@ -428,7 +437,7 @@ QJsonObject serializeACISEntityGraph(
             node.id = genNodeId(e, TRANSFORM_ID);
             node.props = transfToJson(tf->transform());
             node.props["entity_type"] = "transform";
-            ptrToNode[ePtr] = node;
+            orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
             break;
         }
@@ -487,7 +496,7 @@ QJsonObject serializeACISEntityGraph(
         }
         case FACE_ID: {
             FACE* face = (FACE*)e;
-            if (face->geometry()) { emitRel("face_geometry", ePtr, face->geometry()); push2(face->geometry()); }
+            // 几何内嵌在 face.props.geometry 中，不再发布 face_geometry 关系
             if (face->loop()) { emitRel("face_loop", ePtr, face->loop()); push2((ENTITY*)face->loop()); }
             if (face->next()) { emitRel("face_next", ePtr, face->next()); push2((ENTITY*)face->next()); }
             break;
@@ -516,12 +525,25 @@ QJsonObject serializeACISEntityGraph(
     }
 
     // 构建最终 JSON
-    for (auto it = ptrToNode.begin(); it != ptrToNode.end(); ++it) {
-        const IntNode& n = it.value();
+    fprintf(stderr, "[Collab] serializeACISEntityGraph: nodes total=%zu\n", orderedNodes.size());
+    int bodyIdx = 0;
+    for (const auto& entry : orderedNodes) {
+        const IntNode& n = entry.second;
         QJsonObject nodeJson;
         nodeJson["id"] = n.id;
         nodeJson["labels"] = QJsonArray{ n.label };
         nodeJson["props"] = n.props;
+        if (n.label == "body") {
+            fprintf(stderr, "[Collab] serialize: body node idx=%d id=%s\n", bodyIdx, n.id.toUtf8().constData());
+            bodyIdx++;
+        }
+        if (n.label == "face") {
+            // 调试：打印 face 的完整 props（含 geometry 字段）
+            QJsonDocument fd(n.props);
+            QString fs = QString::fromUtf8(fd.toJson(QJsonDocument::Compact));
+            fprintf(stderr, "[Collab] serialize: face id=%s props=%s\n",
+                    n.id.toUtf8().constData(), fs.toUtf8().constData());
+        }
         nodesJson.append(nodeJson);
     }
 
@@ -573,40 +595,44 @@ static SPAmatrix parseMatrix(const QJsonArray& arr) {
 }
 
 // 辅助：从 JSON 数组解析 SPAinterval
+// 格式: [type1, val1, type2, val2]
 static SPAinterval parseInterval(const QJsonArray& arr) {
-    if (arr.size() >= 2) {
-        return SPAinterval(arr[0].toDouble(), arr[1].toDouble());
+    if (arr.size() >= 4) {
+        double start = 0.0, end = 1.0;
+        int type1 = arr[0].toInt(1);
+        if (type1 == 2) start = arr[1].toDouble();
+        int type2 = arr[2].toInt(1);
+        if (type2 == 2) end = arr[3].toDouble();
+        return SPAinterval(start, end);
     }
     return SPAinterval(0, 1);
 }
 
 // 辅助：从 JSON 对象解析 surface，返回 APISESSION 分配的指针
+// 注意：此函数应始终在 API_BEGIN/API_END 事务块内调用
 static surface* parseSurface(const QJsonObject& gj, QString* error) {
     const QString type = gj.value("type").toString();
     if (type == "plane") {
         SPAposition root = parsePosition(gj.value("root_point").toArray());
         SPAunit_vector normal = parseUnitVector(gj.value("normal").toArray());
         SPAvector u_deriv = parseVector(gj.value("u_deriv").toArray());
-        SPApar_box uvrange = SPApar_box(
-            parseInterval(gj.value("uv_range").toArray()).start_pt(),
-            parseInterval(gj.value("uv_range").toArray()).end_pt()
-        );
         plane* def = ACIS_NEW plane(root, normal, u_deriv);
-        def->gme_set_subset_range(uvrange);
-        PLANE* pl = nullptr;
-        API_BEGIN;
-            pl = ACIS_NEW PLANE(*def);
-        API_END;
+        // 仅在 uv_range 有效时设置 subset_range。
+        // A 端原始 PLANE 的 gme_get_subset_range() 默认是 empty，
+        // 若强制设置退化的 uv_range（如 [0,0,0,0]）会破坏后续 facet 行为，
+        // 导致 B 端 CreateMeshFromEntity 拿到 0 face coord。
+        SPApar_box uvrange = parseParBox(gj.value("uv_range").toArray());
+        if (!uvrange.u_range().empty() && !uvrange.v_range().empty()) {
+            def->gme_set_subset_range(uvrange);
+        }
+        PLANE* pl = ACIS_NEW PLANE(*def);
         ACIS_DELETE def;
         return (surface*)pl;
     } else if (type == "sphere") {
         SPAposition centre = parsePosition(gj.value("centre").toArray());
         double radius = gj.value("radius").toDouble(1.0);
         sphere* def = ACIS_NEW sphere(centre, radius);
-        SPHERE* sp = nullptr;
-        API_BEGIN;
-            sp = ACIS_NEW SPHERE(*def);
-        API_END;
+        SPHERE* sp = ACIS_NEW SPHERE(*def);
         ACIS_DELETE def;
         return (surface*)sp;
     } else if (type == "torus") {
@@ -615,10 +641,7 @@ static surface* parseSurface(const QJsonObject& gj, QString* error) {
         double major = gj.value("major_radius").toDouble(1.0);
         double minor = gj.value("minor_radius").toDouble(0.1);
         torus* def = ACIS_NEW torus(centre, normal, major, minor);
-        TORUS* tr = nullptr;
-        API_BEGIN;
-            tr = ACIS_NEW TORUS(*def);
-        API_END;
+        TORUS* tr = ACIS_NEW TORUS(*def);
         ACIS_DELETE def;
         return (surface*)tr;
     } else if (type == "cone") {
@@ -628,38 +651,35 @@ static surface* parseSurface(const QJsonObject& gj, QString* error) {
         double rratio = gj.value("base_radius_ratio").toDouble(1.0);
         double sine = gj.value("sine_angle").toDouble(0.0);
         double cosine = gj.value("cosine_angle").toDouble(1.0);
-        // CONE 需要先创建 base ellipse，设置 subset_range，然后创建 cone
         ellipse* gem_base = ACIS_NEW ellipse(base_centre, base_normal, major_axis, rratio);
         SPAinterval base_u_range = parseInterval(gj.value("uv_range").toArray());
-        gem_base->gme_set_subset_range(base_u_range);
+        if (!base_u_range.empty()) {
+            gem_base->gme_set_subset_range(base_u_range);
+        }
         cone* def = ACIS_NEW cone(*gem_base, sine, cosine);
         ACIS_DELETE gem_base;
-        CONE* cn = nullptr;
-        API_BEGIN;
-            cn = ACIS_NEW CONE(*def);
-        API_END;
+        CONE* cn = ACIS_NEW CONE(*def);
         ACIS_DELETE def;
         return (surface*)cn;
     }
-    // 暂不支持的几面类型
     if (error) *error = QString::fromUtf8("unsupported surface type: %1").arg(type);
     return nullptr;
 }
 
 // 辅助：从 JSON 对象解析 curve，返回 APISESSION 分配的指针
+// 注意：此函数应始终在 API_BEGIN/API_END 事务块内调用
 static curve* parseCurve(const QJsonObject& gj, QString* error) {
     const QString type = gj.value("type").toString();
     if (type == "straight") {
         SPAposition root = parsePosition(gj.value("root_point").toArray());
         SPAvector direction = parseVector(gj.value("direction").toArray());
-        SPAinterval range = parseInterval(gj.value("range").toArray());
         straight* def = ACIS_NEW straight(root, normalise(direction));
         def->gme_set_param_scale(direction.len());
-        if (def) def->gme_set_subset_range(range);
-        STRAIGHT* st = nullptr;
-        API_BEGIN;
-            st = ACIS_NEW STRAIGHT(*def);
-        API_END;
+        SPAinterval range = parseInterval(gj.value("range").toArray());
+        if (!range.empty()) {
+            def->gme_set_subset_range(range);
+        }
+        STRAIGHT* st = ACIS_NEW STRAIGHT(*def);
         ACIS_DELETE def;
         return (curve*)st;
     } else if (type == "ellipse") {
@@ -667,13 +687,12 @@ static curve* parseCurve(const QJsonObject& gj, QString* error) {
         SPAunit_vector normal = parseUnitVector(gj.value("normal").toArray());
         SPAvector major_axis = parseVector(gj.value("major_axis").toArray());
         double ratio = gj.value("radius_ratio").toDouble(1.0);
-        SPAinterval range = parseInterval(gj.value("range").toArray());
         ellipse* def = ACIS_NEW ellipse(centre, normal, major_axis, ratio);
-        if (def) def->gme_set_subset_range(range);
-        ELLIPSE* el = nullptr;
-        API_BEGIN;
-            el = ACIS_NEW ELLIPSE(*def);
-        API_END;
+        SPAinterval range = parseInterval(gj.value("range").toArray());
+        if (!range.empty()) {
+            def->gme_set_subset_range(range);
+        }
+        ELLIPSE* el = ACIS_NEW ELLIPSE(*def);
         ACIS_DELETE def;
         return (curve*)el;
     }
@@ -683,12 +702,27 @@ static curve* parseCurve(const QJsonObject& gj, QString* error) {
 
 } // namespace JsonDeserialize
 
+/**
+ * 反序列化 JSON entity_graph 为 ACIS ENTITY_LIST
+ *
+ * 严格分三阶段执行（参考 access.cpp api_restore_entity_list_neo4j）：
+ *   Pass 1: 创建所有实体骨架（全部包裹在 API_BEGIN/API_END 内）
+ *   Pass 2: 设置几何属性（全部包裹在 API_BEGIN/API_END 内）
+ *   Pass 3: 处理拓扑链接
+ *
+ * @param graphJson JSON 对象，包含 nodes[] 和 rels[]
+ * @param outResult 输出结果，包含 entities 和 uuidToEntity 映射
+ * @param errorMessage 错误信息
+ * @return 成功返回 true
+ */
 bool deserializeACISEntityGraph(
     const QJsonObject& graphJson,
     DeserializedEntityGraph* outResult,
     QString* errorMessage
 ) {
     using namespace JsonDeserialize;
+
+    fprintf(stderr, "[Collab] deserializeACISEntityGraph: ENTER, nodes=%lld\n", (long long)graphJson.value("nodes").toArray().size());
 
     if (errorMessage) errorMessage->clear();
     if (!outResult) {
@@ -698,20 +732,182 @@ bool deserializeACISEntityGraph(
     outResult->entities = new ENTITY_LIST();
     outResult->uuidToEntity.clear();
 
-    API_BEGIN;
-
     const QJsonArray nodes = graphJson.value("nodes").toArray();
     const QJsonArray rels = graphJson.value("rels").toArray();
 
     if (nodes.isEmpty()) {
         if (errorMessage) *errorMessage = QString::fromUtf8("entity_graph nodes is empty");
+        delete outResult->entities;
+        outResult->entities = nullptr;
         return false;
     }
 
-    // id → ENTITY* 映射（用于 rels 链接）
+    // id → ENTITY* 映射（用于后续阶段）
     QHash<QString, ENTITY*> idToEntity;
 
-    // 第一遍：创建所有实体（拓扑结构 + 几何）
+    // 统计
+    int createdBody = 0, createdLump = 0, createdShell = 0, createdWire = 0,
+        createdFace = 0, createdLoop = 0, createdCoedge = 0, createdEdge = 0,
+        createdVertex = 0, createdTransform = 0, skippedUnknown = 0;
+
+    // =========================================================================
+    // Pass 1: 创建所有实体骨架（参考 access.cpp，全部包裹在 API_BEGIN/API_END）
+    // 禁止在此阶段设置几何或拓扑链接
+    // =========================================================================
+    {
+    for (const QJsonValue& nv : nodes) {
+        const QJsonObject node = nv.toObject();
+        const QString id = node.value("id").toString();
+        const QJsonArray labels = node.value("labels").toArray();
+        if (labels.isEmpty()) {
+            qWarning() << "[Collab] deserialize: node has no labels, id=" << id;
+            continue;
+        }
+        const QString label = labels[0].toString();
+
+        ENTITY* ent = nullptr;
+
+        if (label == "body") {
+            BODY* body = nullptr;
+            api_body(body);
+            if (body) {
+                ent = (ENTITY*)body;
+                createdBody++;
+            } else {
+                qWarning().noquote() << "[Collab] deserialize: api_body failed, skipping body id=" << id;
+            }
+        } else if (label == "lump") {
+            LUMP* lump = nullptr;
+            API_BEGIN;
+                lump = ACIS_NEW LUMP();
+            API_END;
+            ent = (ENTITY*)lump;
+            createdLump++;
+        } else if (label == "shell") {
+            SHELL* shell = nullptr;
+            API_BEGIN;
+                shell = ACIS_NEW SHELL();
+            API_END;
+            ent = (ENTITY*)shell;
+            createdShell++;
+        } else if (label == "wire") {
+            WIRE* wire = nullptr;
+            API_BEGIN;
+                wire = ACIS_NEW WIRE();
+            API_END;
+            ent = (ENTITY*)wire;
+            createdWire++;
+        } else if (label == "face") {
+            FACE* face = nullptr;
+            API_BEGIN;
+                face = ACIS_NEW FACE();
+            API_END;
+            ent = (ENTITY*)face;
+            createdFace++;
+        } else if (label == "loop") {
+            LOOP* loop = nullptr;
+            API_BEGIN;
+                loop = ACIS_NEW LOOP();
+            API_END;
+            ent = (ENTITY*)loop;
+            createdLoop++;
+        } else if (label == "coedge") {
+            COEDGE* co = nullptr;
+            API_BEGIN;
+                co = ACIS_NEW COEDGE();
+            API_END;
+            ent = (ENTITY*)co;
+            createdCoedge++;
+        } else if (label == "edge") {
+            EDGE* edge = nullptr;
+            API_BEGIN;
+                edge = ACIS_NEW EDGE();
+            API_END;
+            ent = (ENTITY*)edge;
+            createdEdge++;
+        } else if (label == "vertex") {
+            VERTEX* vtx = nullptr;
+            API_BEGIN;
+                vtx = ACIS_NEW VERTEX();
+            API_END;
+            ent = (ENTITY*)vtx;
+            createdVertex++;
+        } else if (label == "transform") {
+            SPAvector trans = parseVector(node.value("props").toObject().value("translation").toArray());
+            SPAmatrix aff = parseMatrix(node.value("props").toObject().value("affine").toArray());
+            double scaling = node.value("props").toObject().value("scaling").toDouble(1.0);
+            int rotate = node.value("props").toObject().value("rotate").toInt(0);
+            int reflect = node.value("props").toObject().value("reflect").toInt(0);
+            int shear = node.value("props").toObject().value("shear").toInt(0);
+            SPAtransf tf_data(aff, trans, scaling, rotate, reflect, shear);
+            TRANSFORM* tf = nullptr;
+            API_BEGIN;
+                tf = ACIS_NEW TRANSFORM(tf_data);
+            API_END;
+            ent = (ENTITY*)tf;
+            createdTransform++;
+        } else if (label == "straight") {
+            SPAposition root = parsePosition(node.value("props").toObject().value("root_point").toArray());
+            SPAvector direction = parseVector(node.value("props").toObject().value("direction").toArray());
+            SPAinterval range = parseInterval(node.value("props").toObject().value("range").toArray());
+            straight* def = ACIS_NEW straight(root, normalise(direction));
+            def->gme_set_param_scale(direction.len());
+            def->gme_set_subset_range(range);
+            STRAIGHT* st = nullptr;
+            API_BEGIN;
+                st = ACIS_NEW STRAIGHT(*def);
+            API_END;
+            ACIS_DELETE def;
+            ent = (ENTITY*)st;
+        } else if (label == "ellipse") {
+            SPAposition centre = parsePosition(node.value("props").toObject().value("centre").toArray());
+            SPAunit_vector normal = parseUnitVector(node.value("props").toObject().value("normal").toArray());
+            SPAvector major_axis = parseVector(node.value("props").toObject().value("major_axis").toArray());
+            double ratio = node.value("props").toObject().value("radius_ratio").toDouble(1.0);
+            SPAinterval range = parseInterval(node.value("props").toObject().value("range").toArray());
+            ellipse* def = ACIS_NEW ellipse(centre, normal, major_axis, ratio);
+            def->gme_set_subset_range(range);
+            ELLIPSE* el = nullptr;
+            API_BEGIN;
+                el = ACIS_NEW ELLIPSE(*def);
+            API_END;
+            ACIS_DELETE def;
+            ent = (ENTITY*)el;
+        } else if (label == "apoint") {
+            SPAposition coords = parsePosition(node.value("props").toObject().value("position").toArray());
+            APOINT* apt = nullptr;
+            API_BEGIN;
+                apt = ACIS_NEW APOINT(coords);
+            API_END;
+            ent = (ENTITY*)apt;
+        } else {
+            qWarning() << "[Collab] deserialize: unknown label=" << label << "id=" << id;
+            skippedUnknown++;
+            continue;
+        }
+
+        if (ent) {
+            idToEntity[id] = ent;
+            if (label == "body") {
+                outResult->entities->add(ent);
+                outResult->uuidToEntity[id] = (void*)ent;
+            }
+        }
+    }
+    }
+
+    qDebug().noquote() << "[Collab] deserialize: pass1 done. body=" << createdBody << "lump=" << createdLump
+                       << "shell=" << createdShell << "wire=" << createdWire << "face=" << createdFace
+                       << "loop=" << createdLoop << "coedge=" << createdCoedge << "edge=" << createdEdge
+                       << "vertex=" << createdVertex << "transform=" << createdTransform
+                       << "skipped=" << skippedUnknown << "idToEntity.size=" << idToEntity.size();
+    fprintf(stderr, "[Collab] deserialize: PASS 2 (geometry attrs)\n");
+
+    // =========================================================================
+    // Pass 2: 设置几何属性（包裹在 API_BEGIN/API_END 内）
+    // 参考 access.cpp geometry 设置方式
+    // =========================================================================
+    {
     for (const QJsonValue& nv : nodes) {
         const QJsonObject node = nv.toObject();
         const QString id = node.value("id").toString();
@@ -720,139 +916,77 @@ bool deserializeACISEntityGraph(
         const QString label = labels[0].toString();
         const QJsonObject props = node.value("props").toObject();
 
-        ENTITY* ent = nullptr;
-        QString localError;
+        ENTITY* ent = idToEntity.value(id);
+        if (!ent) continue;
 
-        if (label == "body") {
-            BODY* body = nullptr;
+        if (label == "face") {
+            FACE* face = (FACE*)ent;
+            const QJsonObject geom = props.value("geometry").toObject();
+            surface* surf = nullptr;
+            QString err;
+            // parseSurface 内部使用 ACIS_NEW PLANE/SPHERE/...，必须整个在 API_BEGIN 内执行
+            if (!geom.isEmpty()) {
+                API_BEGIN;
+                    surf = parseSurface(geom, &err);
+                API_END;
+            }
             API_BEGIN;
-                api_body(body);
-            API_END;
-            ent = (ENTITY*)body;
-            // uuid 存储在 idToEntity 的 key 里
-        } else if (label == "lump") {
-            LUMP* lump = nullptr;
-            API_BEGIN;
-                lump = ACIS_NEW LUMP();
-            API_END;
-            ent = (ENTITY*)lump;
-        } else if (label == "shell") {
-            SHELL* shell = nullptr;
-            API_BEGIN;
-                shell = ACIS_NEW SHELL();
-            API_END;
-            ent = (ENTITY*)shell;
-        } else if (label == "wire") {
-            WIRE* wire = nullptr;
-            API_BEGIN;
-                wire = ACIS_NEW WIRE();
-            API_END;
-            ent = (ENTITY*)wire;
-        } else if (label == "face") {
-            FACE* face = nullptr;
-            API_BEGIN;
-                face = ACIS_NEW FACE();
-            API_END;
-            if (face) {
                 face->set_sense(props.value("sense").toInt(1));
                 int sides = props.value("sides").toInt(1);
                 face->set_sides(sides != 0);
-                if (sides != 0) {
-                    face->set_cont(props.value("cont").toInt(0));
+                if (sides != 0) face->set_cont(props.value("cont").toInt(0));
+                if (surf) {
+                    face->set_geometry((SURFACE*)surf);
                 }
-                // 几何
-                const QJsonObject geom = props.value("geometry").toObject();
-                if (!geom.isEmpty()) {
-                    surface* surf = parseSurface(geom, &localError);
-                    if (surf) {
-                        API_BEGIN;
-                            face->set_geometry((SURFACE*)surf);
-                        API_END;
-                    } else {
-                        // 不支持的几面类型，通过 API 删除 face
-                        if (errorMessage && !localError.isEmpty()) {
-                            *errorMessage = QString::fromUtf8("face geometry error: %1").arg(localError);
-                        }
-                        outcome r;
-                        API_BEGIN;
-                            r = api_del_entity(face);
-                        API_END;
-                        Q_UNUSED(r);
-                        ent = nullptr;
-                    }
-                }
-            }
-            ent = (ENTITY*)face;
-        } else if (label == "loop") {
-            LOOP* loop = nullptr;
-            API_BEGIN;
-                loop = ACIS_NEW LOOP();
             API_END;
-            ent = (ENTITY*)loop;
+            if (surf == nullptr && !geom.isEmpty()) {
+                qWarning().noquote() << "[Collab] deserialize face geometry:" << err;
+            }
         } else if (label == "coedge") {
-            COEDGE* co = nullptr;
-            API_BEGIN;
-                co = ACIS_NEW COEDGE();
-            API_END;
-            if (co) co->set_sense(props.value("sense").toInt(1));
-            ent = (ENTITY*)co;
+            COEDGE* co = (COEDGE*)ent;
+            co->set_sense(props.value("sense").toInt(1));
         } else if (label == "edge") {
-            EDGE* edge = nullptr;
-            API_BEGIN;
-                edge = ACIS_NEW EDGE();
-            API_END;
-            if (edge) {
-                edge->set_sense(props.value("sense").toInt(1));
-                // 几何
-                const QJsonObject geom = props.value("geometry").toObject();
-                if (!geom.isEmpty()) {
-                    curve* crv = parseCurve(geom, &localError);
-                    if (crv) {
-                        API_BEGIN;
-                            edge->set_geometry((CURVE*)crv);
-                        API_END;
-                    } else {
-                        if (errorMessage && !localError.isEmpty()) {
-                            *errorMessage = QString::fromUtf8("edge geometry error: %1").arg(localError);
-                        }
-                    }
-                }
-                // 端点（通过 rels 链接，暂不在这里处理）
+            EDGE* edge = (EDGE*)ent;
+            const QJsonObject geom = props.value("geometry").toObject();
+            curve* crv = nullptr;
+            QString err;
+            // parseCurve 内部使用 ACIS_NEW STRAIGHT/ELLIPSE/...，必须整个在 API_BEGIN 内执行
+            if (!geom.isEmpty()) {
+                API_BEGIN;
+                    crv = parseCurve(geom, &err);
+                API_END;
             }
-            ent = (ENTITY*)edge;
+            API_BEGIN;
+                edge->set_sense(props.value("sense").toInt(1));
+                if (crv) {
+                    edge->set_geometry((CURVE*)crv);
+                }
+            API_END;
+            if (crv == nullptr && !geom.isEmpty()) {
+                qWarning().noquote() << "[Collab] deserialize edge geometry:" << err;
+            }
         } else if (label == "vertex") {
-            VERTEX* vtx = nullptr;
-            API_BEGIN;
-                vtx = ACIS_NEW VERTEX();
-            API_END;
-            ent = (ENTITY*)vtx;
-        } else if (label == "transform") {
-            SPAvector trans = parseVector(props.value("translation").toArray());
-            SPAmatrix aff = parseMatrix(props.value("affine").toArray());
-            double scaling = props.value("scaling").toDouble(1.0);
-            int rotate = props.value("rotate").toInt(0);
-            int reflect = props.value("reflect").toInt(0);
-            int shear = props.value("shear").toInt(0);
-            SPAtransf tf_data(aff, trans, scaling, rotate, reflect, shear);
-            TRANSFORM* tf = nullptr;
-            API_BEGIN;
-                tf = ACIS_NEW TRANSFORM(tf_data);
-            API_END;
-            ent = (ENTITY*)tf;
-        }
-
-        if (ent) {
-            idToEntity[id] = ent;
-            // BODY 加入结果列表
-            if (label == "body") {
-                outResult->entities->add(ent);
-                // uuid 映射：key = id, value = body ptr
-                outResult->uuidToEntity[id] = (void*)ent;
+            VERTEX* vtx = (VERTEX*)ent;
+            const QJsonArray posArr = props.value("position").toArray();
+            if (posArr.size() >= 3) {
+                SPAposition pos = parsePosition(posArr);
+                // 与 access.cpp apoint case 一致：APOINT 创建必须包在 API_BEGIN 内
+                API_BEGIN;
+                    APOINT* apt = ACIS_NEW APOINT(pos);
+                    vtx->set_geometry(apt);
+                API_END;
             }
         }
     }
+    }
 
-    // 第二遍：处理关系链接
+    fprintf(stderr, "[Collab] deserialize: PASS 2 done\n");
+    fprintf(stderr, "[Collab] deserializeACISEntityGraph: PASS 3 (topology links)\n");
+    // =========================================================================
+    // Pass 3: 处理拓扑链接（参考 access.cpp api_restore_entity_list_neo4j）
+    // 关系类型名与序列化端一致，不带 _ptr 后缀
+    // =========================================================================
+    int linkSuccess = 0, linkFail = 0;
     for (const QJsonValue& rv : rels) {
         const QJsonObject rel = rv.toObject();
         const QString type = rel.value("type").toString();
@@ -861,77 +995,98 @@ bool deserializeACISEntityGraph(
 
         ENTITY* startEnt = idToEntity.value(startId);
         ENTITY* endEnt = idToEntity.value(endId);
-        if (!startEnt || !endEnt) continue;
+        if (!startEnt || !endEnt) {
+            linkFail++;
+            continue;
+        }
 
         if (type == "body_lump") {
-            BODY* body = (BODY*)startEnt;
-            LUMP* lump = (LUMP*)endEnt;
-            API_BEGIN;
-                body->set_lump(lump);
-            API_END;
-        } else if (type == "lump_shell") {
-            LUMP* lump = (LUMP*)startEnt;
-            SHELL* shell = (SHELL*)endEnt;
-            API_BEGIN;
-                lump->set_shell(shell);
-            API_END;
-        } else if (type == "shell_face") {
-            SHELL* shell = (SHELL*)startEnt;
-            FACE* face = (FACE*)endEnt;
-            API_BEGIN;
-                shell->set_face(face);
-            API_END;
-        } else if (type == "face_loop") {
-            FACE* face = (FACE*)startEnt;
-            LOOP* loop = (LOOP*)endEnt;
-            API_BEGIN;
-                face->set_loop(loop);
-            API_END;
-        } else if (type == "loop_coedge") {
-            LOOP* loop = (LOOP*)startEnt;
-            COEDGE* co = (COEDGE*)endEnt;
-            API_BEGIN;
-                loop->set_start(co);
-            API_END;
-        } else if (type == "loop_start") {
-            LOOP* loop = (LOOP*)startEnt;
-            COEDGE* co = (COEDGE*)endEnt;
-            API_BEGIN;
-                loop->set_start(co);
-            API_END;
-        } else if (type == "coedge_edge") {
-            COEDGE* co = (COEDGE*)startEnt;
-            EDGE* edge = (EDGE*)endEnt;
-            API_BEGIN;
-                co->set_edge(edge);
-            API_END;
-        } else if (type == "edge_start" || type == "edge_end") {
-            EDGE* edge = (EDGE*)startEnt;
-            VERTEX* vtx = (VERTEX*)endEnt;
-            if (type == "edge_start") {
-                API_BEGIN;
-                    edge->set_start(vtx);
-                API_END;
-            } else {
-                API_BEGIN;
-                    edge->set_end(vtx);
-                API_END;
-            }
+            ((BODY*)startEnt)->set_lump((LUMP*)endEnt);
+            linkSuccess++;
         } else if (type == "body_wire") {
-            BODY* body = (BODY*)startEnt;
-            WIRE* wire = (WIRE*)endEnt;
-            API_BEGIN;
-                body->set_wire(wire);
-            API_END;
+            ((BODY*)startEnt)->set_wire((WIRE*)endEnt);
+            linkSuccess++;
+        } else if (type == "body_transform") {
+            ((BODY*)startEnt)->set_transform((TRANSFORM*)endEnt);
+            linkSuccess++;
+        } else if (type == "lump_shell") {
+            ((LUMP*)startEnt)->set_shell((SHELL*)endEnt);
+            linkSuccess++;
+        } else if (type == "shell_lump") {
+            ((SHELL*)startEnt)->set_lump((LUMP*)endEnt);
+            linkSuccess++;
+        } else if (type == "shell_face") {
+            ((SHELL*)startEnt)->set_face((FACE*)endEnt);
+            linkSuccess++;
         } else if (type == "shell_wire") {
-            SHELL* shell = (SHELL*)startEnt;
-            WIRE* wire = (WIRE*)endEnt;
-            API_BEGIN;
-                shell->set_wire(wire);
-            API_END;
+            ((SHELL*)startEnt)->set_wire((WIRE*)endEnt);
+            linkSuccess++;
+        } else if (type == "shell_next") {
+            ((SHELL*)startEnt)->set_next((SHELL*)endEnt);
+            linkSuccess++;
+        } else if (type == "wire_coedge") {
+            ((WIRE*)startEnt)->set_coedge((COEDGE*)endEnt);
+            linkSuccess++;
+        } else if (type == "wire_next") {
+            ((WIRE*)startEnt)->set_next((WIRE*)endEnt);
+            linkSuccess++;
+        } else if (type == "face_loop") {
+            ((FACE*)startEnt)->set_loop((LOOP*)endEnt);
+            linkSuccess++;
+        } else if (type == "face_next") {
+            ((FACE*)startEnt)->set_next((FACE*)endEnt);
+            linkSuccess++;
+        } else if (type == "loop_start") {
+            ((LOOP*)startEnt)->set_start((COEDGE*)endEnt);
+            linkSuccess++;
+        } else if (type == "loop_face") {
+            ((LOOP*)startEnt)->set_face((FACE*)endEnt);
+            linkSuccess++;
+        } else if (type == "loop_next") {
+            ((LOOP*)startEnt)->set_next((LOOP*)endEnt);
+            linkSuccess++;
+        } else if (type == "coedge_next") {
+            ((COEDGE*)startEnt)->set_next((COEDGE*)endEnt);
+            linkSuccess++;
+        } else if (type == "coedge_edge") {
+            ((COEDGE*)startEnt)->set_edge((EDGE*)endEnt);
+            linkSuccess++;
+        } else if (type == "edge_start") {
+            ((EDGE*)startEnt)->set_start((VERTEX*)endEnt);
+            linkSuccess++;
+        } else if (type == "edge_end") {
+            ((EDGE*)startEnt)->set_end((VERTEX*)endEnt);
+            linkSuccess++;
+        } else if (type == "edge_coedge") {
+            ((EDGE*)startEnt)->set_coedge((COEDGE*)endEnt);
+            linkSuccess++;
+        } else if (type == "lump_next") {
+            ((LUMP*)startEnt)->set_next((LUMP*)endEnt);
+            linkSuccess++;
         }
     }
 
-    API_END;
-    return !outResult->entities->count() == 0;
+    qDebug().noquote() << "[Collab] deserialize: pass3 done. linkSuccess=" << linkSuccess << "linkFail=" << linkFail << "rels.size=" << rels.size();
+    fprintf(stderr, "[Collab] deserializeACISEntityGraph: EXIT, returning %s\n", outResult->entities->count() > 0 ? "true" : "false");
+
+    // 关键：deserialize 完成后立即对所有 body 调用 api_facet_entity，
+    // 让 face 上注册 mesh attribute (af_serializable_mesh)，否则后续
+    // get_triangles_from_faceted_face 中 GetSerializableMesh(face) 返回 nullptr，
+    // 导致 B 端 CreateMeshFromEntity 拿到 0 个 face coord。
+    // 注意：必须包在 API_BEGIN/API_END 内。
+    {
+        API_BEGIN;
+        for (ENTITY* ent = outResult->entities->first(); ent; ent = outResult->entities->next()) {
+            if (is_BODY(ent)) {
+                outcome fc = api_facet_entity(ent);
+                fprintf(stderr, "[Collab] deserialize: post-facet body=%p ok=%d err=%d\n",
+                        (void*)ent, fc.ok() ? 1 : 0, (int)fc.error_number());
+                // 深度诊断已移除
+                ENTITY_LIST faces;
+                api_get_faces(ent, faces);
+            }
+        }
+        API_END;
+    }
+    return outResult->entities->count() > 0;
 }

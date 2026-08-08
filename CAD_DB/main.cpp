@@ -66,6 +66,9 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
+    // 调试：把 stderr 改成无缓冲，保证崩溃前 fprintf 的内容能立即落盘
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    setvbuf(stdout, nullptr, _IONBF, 0);
 
     QCoreApplication::setApplicationName("DBCAD");
     configureQtPluginPath(argv[0]);

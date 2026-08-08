@@ -65,6 +65,7 @@ class QListWidget;
 class QCheckBox;
 class QPushButton;
 class QDockWidget;
+class QComboBox;
 
 typedef outcome(*GME_fp)(ENTITY_LIST&, AcisOptions*);
 
@@ -128,9 +129,18 @@ public:
     // 把远端 SAT 文本增量 restore 到画布（不 clear，UUID 去重）
     int restoreRemoteDeltaSat(const QString& remoteSat, const QJsonObject& collabSnapshot, QString* errorMessage);
 
-    // 拉取：从 Python neo4j_entity_store 拉取 entity graph（已改为走 storage_bridge content_text）
-    // 优先走 entity graph 路径；失败则用 SAT fallback
-    bool pullACISEntityGraph(int version, const QJsonObject& entityGraphJson);
+    // 拉取：用 entity_graph JSON（拓扑/UUID）+ content.sat（restore 用）做合并
+    // 用户在协作面板选择 "JSON 反序列化" 模式时调用此路径。
+    // 优先尝试纯 JSON 反序列化（deserializeACISEntityGraph），失败则 fallback 到 SAT restore。
+    // 不调用 Window::clear()，避免破坏 restore 出来的 body。
+    bool pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, const QString& satContent);
+    // SAT restore + UUID 对齐辅助函数（EntityGraph fallback 路径）
+    bool restoreSatWithUuidAlignment(
+        const QString& satContent,
+        const QJsonObject& entityGraphJson,
+        ENTITY_LIST& outBodies,
+        QHash<QString, void*>& outUuidToBody
+    );
 
     // ========== 其他 public 方法 ==========
     void setCurWindow(Window* w) { curWindow = w; }
@@ -273,6 +283,14 @@ private:
     QPushButton* collabPushButton = nullptr;
     QPushButton* collabPullButton = nullptr;
     QPushButton* collabReconnectButton = nullptr;
+    QComboBox* collabPullModeCombo = nullptr;
+
+    enum class CollabPullMode {
+        IncrementalDelta = 0,  // 增量合并：按 UUID 去重 add / 真正 delete，不 clear，不破坏本地未推送
+        FullSat          = 1,  // 全量替换：clear + restore 完整 SAT，丢弃本地未推送变更
+        EntityGraph      = 2,  // JSON 反序列化：用 entity_graph JSON 重建（高级/调试）
+    };
+    CollabPullMode collabPullMode = CollabPullMode::IncrementalDelta;
     std::unique_ptr<PgService> m_pgService;
     // PG menu actions — kept as members so they can be enabled/disabled
     // based on m_pgService->isInitialized().
