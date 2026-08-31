@@ -2,13 +2,13 @@
 [CollabSession] bound: [+3ms] | [CollabSession] | bound | Disconnected | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [GLWidget::paintGL] pendingGpuUpload=false paintCount=1
 [GLWidget::paintGL] pendingGpuUpload=false paintCount=2
-[DEBUG] loadFile: setFASTAPIModeAct, fileName =part20260830173547
+[DEBUG] loadFile: setFASTAPIModeAct, fileName =part20260831141338
 [DEBUG] loadFile: client.isConfigured() =1 baseUrl =http://127.0.0.1:8000
 [GLWidget::paintGL] pendingGpuUpload=false paintCount=3
-[DEBUG] loadFile: getProjectByName returned has_value=1 project_id='1282baf0-0b43-408e-8e23-0c78d07f3536'
-[DEBUG] loadFile: branch=join-no-model project_id='1282baf0-0b43-408e-8e23-0c78d07f3536'
-[DEBUG] reconnectFastAPISync ENTER pid=31844 ts=1788082554834 project_id=1282baf0-0b43-408e-8e23-0c78d07f3536 base_url=http://127.0.0.1:8000
-[DEBUG] disconnectFastAPISync ENTER pid=31844 has_socket=0 base_url_len=21
+[DEBUG] loadFile: getProjectByName returned has_value=1 project_id='8294d750-068b-4a28-9bb2-9aef18d56156'
+[DEBUG] loadFile: branch=join-no-model project_id='8294d750-068b-4a28-9bb2-9aef18d56156'
+[DEBUG] reconnectFastAPISync ENTER pid=42156 ts=1788156825564 project_id=8294d750-068b-4a28-9bb2-9aef18d56156 base_url=http://127.0.0.1:8000
+[DEBUG] disconnectFastAPISync ENTER pid=42156 has_socket=0 base_url_len=21
 [+0ms] | [CollabSession] | disconnect | Disconnected | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [DEBUG] disconnectFastAPISync after  setCollabConnectionState base_url_len=21
 [DEBUG] disconnectFastAPISync after  updateCollabPanelUi base_url_len=21
@@ -16,29 +16,33 @@
 [DEBUG] reconnectFastAPISync after disconnectFastAPISync
 [DEBUG] reconnectFastAPISync post-disconnect: project_id.isEmpty=0 base_url.empty=0 base_url_len=21 base_url='http://127.0.0.1:8000'
 [DEBUG] reconnectFastAPISync label='连接中' set
-[DEBUG] reconnectFastAPISync ws_url=ws://127.0.0.1:8000/ws/projects/1282baf0-0b43-408e-8e23-0c78d07f3536?client_id=90dbae91-ce22-47fe-9db6-5ac5628a32d5&author=dbcad-exe&password=ggng_FrGnHx3B2Jo8-as3YAed2naLGPY
-[DEBUG] reconnectFastAPISync new QWebSocket=00000277CEE7F2C0
+[DEBUG] reconnectFastAPISync ws_url=ws://127.0.0.1:8000/ws/projects/8294d750-068b-4a28-9bb2-9aef18d56156?client_id=7f0cffc6-d1fd-41a0-9de6-db375aa49a5d&author=dbcad-exe&password=ggng_FrGnHx3B2Jo8-as3YAed2naLGPY
+[DEBUG] reconnectFastAPISync new QWebSocket=000001C72E29F700
 [Collab] opening WebSocket...
 [Collab] after open() called socket_state=2
-[Collab] WS connected lambda FIRED pid=31844
+[Collab] WS connected lambda FIRED pid=42156
 [+0ms] | [CollabSession] | reconnect | Connected_Idle | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [+0ms] | [CollabSession] | ws_msg | Connected_Idle | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [Collab] handleFastAPISyncMessage type= presence_snapshot hasTrigger=
+[+6638ms] | [CollabSession] | ws_msg | Connected_Idle | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab] handleFastAPISyncMessage type= mode1_delta_saved hasTrigger= http_save_delta
+[Collab] mode1_delta_saved received: v= 1 author= dbcad-exe delta= 1 deleted= 0
+[+0ms] | [CollabSession] | remotePending | Connected_RemotePending_Dirty | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=F | publish=F
+[+3359ms] | [CollabSession] | ws_msg | Connected_RemotePending_Dirty | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab] handleFastAPISyncMessage type= pong hasTrigger=
 [Collab] Mode changed to: 1
 [Mode1] >>> pullMode1Delta ENTER
-[backend_api_client getDelta] GET /projects/1282baf0-0b43-408e-8e23-0c78d07f3536/delta base_version=0
-[+10644ms] | [CollabSession] | ws_msg | Connected_Idle | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab] handleFastAPISyncMessage type= pong hasTrigger=
+[backend_api_client getDelta] GET /projects/8294d750-068b-4a28-9bb2-9aef18d56156/delta base_version=0
 [backend_api_client getDelta] SUCCESS v=1 delta_bodies=1 deleted_uuids=0
 [Mode1] getDelta SUCCESS v= 1  delta_bodies= 1  deleted_uuids= 0
 [Mode1] pull_added= 1  pull_removed= 0
-[+0ms] | [CollabSession] | applyStart | Connected_ApplyingRemote | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=T | publish=F
-[Collab][DEBUG] >>> Window::addEntity ENTER name=远端f7486fea-97f9-4a65-bc04-7236fed82aad ptrEntity=00000277D5466670 sot=-1 index_base.size=0 ot=1
+[+0ms] | [CollabSession] | applyStart | Connected_ApplyingRemote | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=T | publish=F
+[Collab][DEBUG] >>> Window::addEntity ENTER name=远端52b3e8d0-3fac-428a-8fc8-4ea8f2a3da5f ptrEntity=000001C7795BCB10 sot=-1 index_base.size=0 ot=1
 [Collab][DEBUG] Window::addEntity after entity_tree.push_back, size=1
 [Collab][DEBUG] Window::addEntity before updateTreeWidget
 [Collab][DEBUG] Window::addEntity after updateTreeWidget, before updateMeshData
 [Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=1
-[Window::updateMeshData] processing idx=0 ptrEntity=00000277D5466670 visible=1
+[Window::updateMeshData] processing idx=0 ptrEntity=000001C7795BCB10 visible=1
 [Window::updateMeshData] calling CreateMeshFromEntity for idx=0
 [CreateMeshFromEntity] e=BODY
 [CreateMeshFromEntity] api_facet_entity ok=1 err#=0
@@ -59,30 +63,27 @@
 [Collab][DEBUG] Window::addEntity after notifyModelChangedForCollaboration
 [Collab][DEBUG] Window::addEntity isApplyingRemote=1 isPublishing=0
 [Collab][DEBUG] <<< Window::addEntity EXIT OK
-[Mode1] added body uuid= f7486fea-97f9-4a65-bc04-7236fed82aad
-[+0ms] | [CollabSession] | applyEnd | Connected_Idle | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Mode1] added body uuid= 52b3e8d0-3fac-428a-8fc8-4ea8f2a3da5f
+[+0ms] | [CollabSession] | applyEnd | Connected_RemotePending_Dirty | v=0 | pv=1 | in_flight=F | dirty_during=F | apply=F | publish=F
 [Mode1] <<< pullMode1Delta EXIT appliedAdd= 1  appliedDelete= 0  skippedAdd= 0  skippedDelete= 0
 [Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=1
-[Window::updateMeshData] processing idx=0 ptrEntity=00000277D5466670 visible=1
+[Window::updateMeshData] processing idx=0 ptrEntity=000001C7795BCB10 visible=1
 [Window::updateMeshData] using existing ptrDisplayData for idx=0
 [Window::updateMeshData] display_data=1 totalFaces=6 totalEdges=12 no-mesh entities=0
 [Window::updateMeshData] calling glWidget->updateMeshData()
 [GLWidget::updateMeshData] pendingGpuUpload=true data_face=216 data_edge=72 count_face=216 count_edge=72 radius=1.5
 [Collab][DEBUG] <<< Window::updateMeshData EXIT
+[+0ms] | [CollabSession] | remoteApply | Connected_Idle | v=1 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [GLWidget::paintGL] pendingGpuUpload=true, calling uploadMeshDataToGpu
 [GLWidget::uploadMeshDataToGpu] uploaded face=216 floats edge=72 floats
-[+9342ms] | [CollabSession] | ws_msg | Connected_Idle | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab] handleFastAPISyncMessage type= pong hasTrigger=
-[+9996ms] | [CollabSession] | ws_msg | Connected_Idle | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab] handleFastAPISyncMessage type= pong hasTrigger=
-[Collab][DEBUG] >>> Window::addEntity ENTER name=球体 ptrEntity=00000277D5464C30 sot=1 index_base.size=0 ot=1
+[Collab][DEBUG] >>> Window::addEntity ENTER name=球体 ptrEntity=000001C7795AE150 sot=1 index_base.size=0 ot=1
 [Collab][DEBUG] Window::addEntity after entity_tree.push_back, size=2
 [Collab][DEBUG] Window::addEntity before updateTreeWidget
 [Collab][DEBUG] Window::addEntity after updateTreeWidget, before updateMeshData
 [Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=2
-[Window::updateMeshData] processing idx=0 ptrEntity=00000277D5466670 visible=1
+[Window::updateMeshData] processing idx=0 ptrEntity=000001C7795BCB10 visible=1
 [Window::updateMeshData] using existing ptrDisplayData for idx=0
-[Window::updateMeshData] processing idx=1 ptrEntity=00000277D5464C30 visible=1
+[Window::updateMeshData] processing idx=1 ptrEntity=000001C7795AE150 visible=1
 [Window::updateMeshData] calling CreateMeshFromEntity for idx=1
 [CreateMeshFromEntity] e=BODY
 [CreateMeshFromEntity] api_facet_entity ok=1 err#=0
@@ -99,35 +100,66 @@
 [Collab][DEBUG] Window::addEntity after updateMeshData
 [Collab][DEBUG] >>> notifyModelChangedForCollaboration ENTER
 [Collab][DEBUG] isApplyingRemote=0 isPublishing=0
-[+1ms] | [CollabSession] | userEdit | Connected_LocalDirty | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[+0ms] | [CollabSession] | userEdit | Connected_LocalDirty | v=1 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [Collab][DEBUG] <<< notifyModelChangedForCollaboration EXIT
 [Collab][DEBUG] Window::addEntity after notifyModelChangedForCollaboration
 [Collab][DEBUG] Window::addEntity isApplyingRemote=0 isPublishing=0
 [Collab][DEBUG] <<< Window::addEntity EXIT OK
 [GLWidget::paintGL] pendingGpuUpload=true, calling uploadMeshDataToGpu
 [GLWidget::uploadMeshDataToGpu] uploaded face=24840 floats edge=72 floats
-[+10007ms] | [CollabSession] | ws_msg | Connected_LocalDirty | v=0 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[Collab] handleFastAPISyncMessage type= pong hasTrigger=
-[+0ms] | [CollabSession] | submitStart | Connected_SubmitInFlight | v=0 | pv=0 | in_flight=T | dirty_during=F | apply=F | publish=F | req=2537099d
+[+0ms] | [CollabSession] | submitStart | Connected_SubmitInFlight | v=1 | pv=0 | in_flight=T | dirty_during=F | apply=F | publish=F | req=54161227
 [Mode1] >>> submitMode1Delta ENTER
 [Mode1] delta_uuids= 1  delta_sat_segments= 1  removed_uuids= 0
-[backend_api_client saveDelta] POST /projects/1282baf0-0b43-408e-8e23-0c78d07f3536/delta delta_uuids=1 delta_sat_segments=1 removed_uuids=0
-[backend_api_client saveDelta] SUCCESS v=2 projectId=1282baf0-0b43-408e-8e23-0c78d07f3536
+[backend_api_client saveDelta] POST /projects/8294d750-068b-4a28-9bb2-9aef18d56156/delta delta_uuids=1 delta_sat_segments=1 removed_uuids=0 source_client_id=(empty)
+[+10421ms] | [CollabSession] | ws_msg | Connected_SubmitInFlight | v=1 | pv=0 | in_flight=T | dirty_during=F | apply=F | publish=F | req=54161227
+[Collab] handleFastAPISyncMessage type= mode1_delta_saved hasTrigger= http_save_delta
+[Collab] mode1_delta_saved received: v= 2 author= dbcad-exe delta= 1 deleted= 0
+[+0ms] | [CollabSession] | remotePending | Connected_SubmitInFlight | v=1 | pv=2 | in_flight=T | dirty_during=F | apply=F | publish=F | req=54161227
+[backend_api_client saveDelta] SUCCESS v=2 projectId=8294d750-068b-4a28-9bb2-9aef18d56156
 [Mode1] <<< submitMode1Delta SUCCESS v= 2
 [+0ms] | [CollabSession] | submitOk | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
-[+9993ms] | [CollabSession] | ws_msg | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+
 [Collab] handleFastAPISyncMessage type= pong hasTrigger=
-[Collab][Delta] deleteEntityByIndexForCollaboration ENTER index= 1
-[Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=1
-[Window::updateMeshData] processing idx=0 ptrEntity=00000277D5466670 visible=1
+[+9571ms] | [CollabSession] | ws_msg | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab] handleFastAPISyncMessage type= pong hasTrigger=
+[Collab][DEBUG] >>> Window::addEntity ENTER name=圆环 ptrEntity=000001C7795B18F0 sot=3 index_base.size=0 ot=1
+[Collab][DEBUG] Window::addEntity after entity_tree.push_back, size=3
+[Collab][DEBUG] Window::addEntity before updateTreeWidget
+[Collab][DEBUG] Window::addEntity after updateTreeWidget, before updateMeshData
+[Collab][DEBUG] >>> Window::updateMeshData ENTER entity_tree.size=3
+[Window::updateMeshData] processing idx=0 ptrEntity=000001C7795BCB10 visible=1
 [Window::updateMeshData] using existing ptrDisplayData for idx=0
-[Window::updateMeshData] display_data=1 totalFaces=6 totalEdges=12 no-mesh entities=0
+[Window::updateMeshData] processing idx=1 ptrEntity=000001C7795AE150 visible=1
+[Window::updateMeshData] using existing ptrDisplayData for idx=1
+[Window::updateMeshData] processing idx=2 ptrEntity=000001C7795B18F0 visible=1
+[Window::updateMeshData] calling CreateMeshFromEntity for idx=2
+[CreateMeshFromEntity] e=BODY
+[CreateMeshFromEntity] api_facet_entity ok=1 err#=0
+[CreateMeshFromEntity] direct topology: lumps=1 shells=1 faces=1
+[CreateMeshFromEntity] PAT_IGNORE faces=1
+[CreateMeshFromEntity] api_get_faces ok=1 numFaces=1
+[CreateMeshFromEntity] api_get_edges ok=1 numEdges=0
+[CreateMeshFromEntity] after fill: faceCoords.size=3024 triangles.size=6048 edgeCoords.size=0
+[Window::updateMeshData] CreateMeshFromEntity SUCCESS for idx=2
+[Window::updateMeshData] display_data=3 totalFaces=8 totalEdges=12 no-mesh entities=0
 [Window::updateMeshData] calling glWidget->updateMeshData()
-[GLWidget::updateMeshData] pendingGpuUpload=true data_face=216 data_edge=72 count_face=216 count_edge=72 radius=1.5
+[GLWidget::updateMeshData] pendingGpuUpload=true data_face=61128 data_edge=72 count_face=61128 count_edge=72 radius=2.2
 [Collab][DEBUG] <<< Window::updateMeshData EXIT
+[Collab][DEBUG] Window::addEntity after updateMeshData
+[Collab][DEBUG] >>> notifyModelChangedForCollaboration ENTER
+[Collab][DEBUG] isApplyingRemote=0 isPublishing=0
+[+0ms] | [CollabSession] | userEdit | Connected_LocalDirty | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab][DEBUG] <<< notifyModelChangedForCollaboration EXIT
+[Collab][DEBUG] Window::addEntity after notifyModelChangedForCollaboration
+[Collab][DEBUG] Window::addEntity isApplyingRemote=0 isPublishing=0
+[Collab][DEBUG] <<< Window::addEntity EXIT OK
 [GLWidget::paintGL] pendingGpuUpload=true, calling uploadMeshDataToGpu
-[GLWidget::uploadMeshDataToGpu] uploaded face=216 floats edge=72 floats
-[+10010ms] | [CollabSession] | ws_msg | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[GLWidget::uploadMeshDataToGpu] uploaded face=61128 floats edge=72 floats
+[+10006ms] | [CollabSession] | ws_msg | Connected_LocalDirty | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [Collab] handleFastAPISyncMessage type= pong hasTrigger=
-[+9991ms] | [CollabSession] | ws_msg | Connected_Idle | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[+9999ms] | [CollabSession] | ws_msg | Connected_LocalDirty | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab] handleFastAPISyncMessage type= pong hasTrigger=
+[+9998ms] | [CollabSession] | ws_msg | Connected_LocalDirty | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
+[Collab] handleFastAPISyncMessage type= pong hasTrigger=
+[+9995ms] | [CollabSession] | ws_msg | Connected_LocalDirty | v=2 | pv=0 | in_flight=F | dirty_during=F | apply=F | publish=F
 [Collab] handleFastAPISyncMessage type= pong hasTrigger=

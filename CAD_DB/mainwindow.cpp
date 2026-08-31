@@ -2980,6 +2980,11 @@ bool MainWindow::submitMode1Delta(const QString& reason) {
     // 7. 清理 submit in-flight 状态（Mode1 HTTP 成功等同于 submit accepted）
     session.onSubmitAccepted(result->version);
 
+    // 7.5 同步 mirror 字段并刷新协作面板 UI（与 submit_accepted / submit_delta 路径一致）
+    fastapi_model_version = session.modelVersion();
+    fastapi_pending_remote_version = session.pendingRemoteVersion();
+    updateCollabPanelUi();
+
     // 8. 推进 delta 基准线，防止增量路径下次包含已提交的全量内容
     api_advance_delta_since(collabCtx);
 
@@ -3028,6 +3033,13 @@ void MainWindow::pullMode1Delta() {
     // 如果 baseVersion >= latestVersion，无 delta
     if (result->version <= baseVersion) {
         qDebug().noquote() << "[Mode1] already at latest version" << baseVersion;
+        // 即使没有增量也要把本地版本号对齐到服务端最新版本（清掉可能残留的 pendingRemoteVersion）
+        if (result->version > session.modelVersion()) {
+            session.onRemoteApplied(result->version);
+            fastapi_model_version = session.modelVersion();
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            updateCollabPanelUi();
+        }
         statusBar()->showMessage(tr("已是最新版本 v=%1").arg(result->version), 3000);
         return;
     }
@@ -3211,6 +3223,16 @@ void MainWindow::pullMode1Delta() {
 
     // 更新 session 的 pushed_version（拉取后变为同步）
     session.setPushedVersion(result->version);
+
+    // 标记本地已经把远端版本合并过来：
+    //   - modelVersion 提升到 result->version（"本地版本"标签刷新）
+    //   - pendingRemoteVersion 清零（"待同步版本"标签变为"无"）
+    session.onRemoteApplied(result->version);
+
+    // 同步 mirror 字段并刷新协作面板 UI（与 submit_accepted / submit_delta 路径一致）
+    fastapi_model_version = session.modelVersion();
+    fastapi_pending_remote_version = session.pendingRemoteVersion();
+    updateCollabPanelUi();
 }
 
 bool MainWindow::submitFastAPIModelOverSocket(const QString& satContent, const QString& reason, bool interactiveConflict) {
@@ -3787,6 +3809,50 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
             updateCollabPanelUi();
             statusBar()->showMessage(tr("增量合并完成，版本 v%1").arg(remoteVersion), 2500);
         }
+        return;
+    }
+
+    // =============================================================
+    // mode1_delta_saved：Mode1 增量推送广播（A 端 HTTP POST /delta 成功后的 WebSocket 广播）
+    // 不触发自动 Pull（Pull 必须是手动的），只更新远程版本号通知，让用户知道有新版本可以拉。
+    // =============================================================
+    if (messageType == "mode1_delta_saved") {
+        const QString projectId = root.value("project_id").toString();
+        if (projectId != fastapi_project_id) {
+            return;
+        }
+
+        const int remoteVersion = root.value("version").toInt(0);
+        const QString author = root.value("author").toString();
+        const int deltaCount = root.value("delta_count").toInt(0);
+        const int deletedCount = root.value("deleted_count").toInt(0);
+
+        qDebug().noquote() << "[Collab] mode1_delta_saved received: v=" << remoteVersion
+                           << "author=" << author
+                           << "delta=" << deltaCount << "deleted=" << deletedCount;
+
+        auto& session = CollabSession::instance();
+
+        // 忽略旧版本或自己发出的广播（自己发出时会通过 submit_accepted 路径处理）
+        if (remoteVersion <= session.modelVersion()) {
+            return;
+        }
+
+        // 登记远程待合并版本，但不自动 apply（用户需手动 Pull）
+        session.onRemotePending(remoteVersion);
+        fastapi_pending_remote_version = session.pendingRemoteVersion();
+
+        // 提示用户有远端更新，可手动 Pull
+        if (deletedCount > 0) {
+            statusBar()->showMessage(
+                tr("%1 已推送新版本 v=%2（+%3 -%4），请手动「Pull」合并").arg(author).arg(remoteVersion).arg(deltaCount).arg(deletedCount),
+                5000);
+        } else {
+            statusBar()->showMessage(
+                tr("%1 已推送新版本 v=%2（+%3 个实体），请手动「Pull」合并").arg(author).arg(remoteVersion).arg(deltaCount),
+                5000);
+        }
+        updateCollabPanelUi();
         return;
     }
 
