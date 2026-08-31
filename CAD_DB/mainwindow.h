@@ -129,6 +129,12 @@ public:
     // 把远端 SAT 文本增量 restore 到画布（不 clear，UUID 去重）
     int restoreRemoteDeltaSat(const QString& remoteSat, const QJsonObject& collabSnapshot, QString* errorMessage);
 
+    // ========== Mode1 Push / Pull（基于 HTTP delta API） ==========
+    // Mode1 Push: pendingEntityChanges → HTTP POST /delta → bridge → Neo4j
+    bool submitMode1Delta(const QString& reason);
+    // Mode1 Pull: HTTP GET /delta → UUID 差量合并
+    void pullMode1Delta();
+
     // 拉取：用 entity_graph JSON（拓扑/UUID）+ content.sat（restore 用）做合并
     // 用户在协作面板选择 "JSON 反序列化" 模式时调用此路径。
     // 优先尝试纯 JSON 反序列化（deserializeACISEntityGraph），失败则 fallback 到 SAT restore。
@@ -283,12 +289,25 @@ private:
     QPushButton* collabPushButton = nullptr;
     QPushButton* collabPullButton = nullptr;
     QPushButton* collabReconnectButton = nullptr;
+    QComboBox* collabModeCombo = nullptr;
     QComboBox* collabPullModeCombo = nullptr;
 
+    // 协作模式（对应技术文档的 mode0/mode1/mode2）
+    // Mode0: SAT 全量 push/pull（WebSocket sync_now）
+    // Mode1: Neo4j 增量 push/pull（HTTP delta API）
+    // Mode2: PostgreSQL 增量 push/pull（待实现）
+    enum class CollabMode {
+        Mode0 = 0,  // SAT 全量 WebSocket 路径
+        Mode1 = 1,  // Neo4j 增量 HTTP 路径
+        Mode2 = 2,  // PostgreSQL 增量（待实现）
+    };
+    CollabMode collabMode = CollabMode::Mode0;
+
+    // Pull 合并模式（用于 Mode0 WebSocket 路径下的合并策略选择）
     enum class CollabPullMode {
-        IncrementalDelta = 0,  // 增量合并：按 UUID 去重 add / 真正 delete，不 clear，不破坏本地未推送
-        FullSat          = 1,  // 全量替换：clear + restore 完整 SAT，丢弃本地未推送变更
-        EntityGraph      = 2,  // JSON 反序列化：用 entity_graph JSON 重建（高级/调试）
+        IncrementalDelta = 0,  // UUID 去重增量合并
+        FullSat = 1,           // 全量 SAT 替换
+        EntityGraph = 2          // JSON entity_graph 反序列化
     };
     CollabPullMode collabPullMode = CollabPullMode::IncrementalDelta;
     std::unique_ptr<PgService> m_pgService;

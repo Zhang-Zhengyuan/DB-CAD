@@ -5,6 +5,8 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
+#include <filesystem>
 
 #include "common.hxx"
 #include "neo4j.hxx"
@@ -33,11 +35,78 @@
 #include <acis/include/transfrm.hxx>
 #include <acis/include/bulletin.hxx>
 
+#include <atomic>
+#include <cstdio>
+#include <cstring>
+#include <mutex>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
+
+// 把诊断日志同时写到 stderr 和 CAD_DB/log/bridge.err.log，方便跨进程收集
+namespace diaglog {
+    static std::mutex g_log_mutex;
+    static const char* kLogDir = "CAD_DB/log";
+    static const char* kLogPath = "CAD_DB/log/bridge.err.log";
+    static inline void ensure_dir() {
+        #ifdef _WIN32
+        _mkdir("CAD_DB");
+        _mkdir("CAD_DB/log");
+        #else
+        mkdir("CAD_DB", 0755);
+        mkdir("CAD_DB/log", 0755);
+        #endif
+    }
+    static inline void write(const char* msg) {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        std::fputs(msg, stderr);
+        std::fflush(stderr);
+        static bool dir_checked = false;
+        if (!dir_checked) {
+            ensure_dir();
+            dir_checked = true;
+        }
+        FILE* fp = std::fopen(kLogPath, "a");
+        if (fp != nullptr) {
+            std::fputs(msg, fp);
+            std::fclose(fp);
+        }
+    }
+    static inline void clear_log() {
+        ensure_dir();
+        FILE* fp = std::fopen(kLogPath, "w");
+        if (fp != nullptr) std::fclose(fp);
+    }
+}
+#define DIAG_LOG(...) do { \
+    char buf[1024]; \
+    std::snprintf(buf, sizeof(buf), __VA_ARGS__); \
+    diaglog::write(buf); \
+} while (0)
+
+// 生成一个 mode1 delta 用的 SAT 临时文件路径。
+// 用 std::filesystem::temp_directory_path() + 进程内单调递增计数，避免 tmpnam_s 的安全性警告。
+namespace mode1_temp {
+    static std::atomic<int> g_seq{0};
+    static inline std::string make_delta_temp_path(const char* tag) {
+        int idx = g_seq.fetch_add(1);
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::path dir = fs::temp_directory_path(ec);
+        if (ec) dir = fs::current_path();
+        std::string name = std::string(tag) + "_" + std::to_string(idx) + ".sat";
+        return (dir / name).string();
+    }
+}
+
 class Node
 {
 public:
     int64_t id;
-    mg_list* labels;
+    std::vector<std::string> labels;  // 存 C++ std::string，析构安全
     std::unordered_map<char, mg_value*> properties;
 
     Node()
@@ -50,7 +119,7 @@ class Relationship
 public:
     Node* u;
     Node* v;
-    mg_value* label;
+    std::string label;  // 存 C++ std::string，析构安全
     std::unordered_map<char, mg_value*> properties;
 
     Relationship(Node* u1, Node* v1) : u(u1), v(v1)
@@ -63,7 +132,7 @@ class Relationship2
 public:
     int64_t uid;
     int64_t vid;
-    mg_value* label;
+    std::string label;  // 存 C++ std::string，析构安全
     std::unordered_map<char, mg_value*> properties;
 
     Relationship2(int64_t uid1, int64_t vid1) : uid(uid1), vid(vid1)
@@ -203,7 +272,7 @@ struct glz_transform
                 Node* a = ptr2node.at(__ptr); \
                 ptr2node[__tmp_ptr] = new Node(); \
                 Relationship* r = new Relationship(a, ptr2node[__tmp_ptr]); \
-                r->label = mg_value_make_string(STR(CAT(__entity_label##_, __member_func_name##_ptr)));\
+                r->label = STR(CAT(__entity_label##_, __member_func_name##_ptr));\
                 r->properties['a'] = mg_value_make_string(STR(CAT(__entity_label##_, __member_func_name##_ptr))) ;\
                 relationship_list.push_back(r);\
                 que.push_back(__tmp_ptr);\
@@ -211,7 +280,7 @@ struct glz_transform
                 Node* a = ptr2node.at(__ptr); \
                 Node* b = ptr2node.at(__tmp_ptr); \
                 Relationship* r = new Relationship(a, b); \
-                r->label = mg_value_make_string(STR(CAT(__entity_label##_, __member_func_name##_ptr)));\
+                r->label = STR(CAT(__entity_label##_, __member_func_name##_ptr));\
                 r->properties['a'] = mg_value_make_string(STR(CAT(__entity_label##_, __member_func_name##_ptr)));\
                 relationship_list.push_back(r);\
             }                                                                                                                                                  \
@@ -559,8 +628,8 @@ namespace AccessUtils
             double fitol = sur->fitol();
 
             Node* ptrnode = new Node();
-            ptrnode->labels = mg_list_make_empty(1);
-            mg_list_append(ptrnode->labels, mg_value_make_string("spl_sur"));
+            ptrnode->labels.clear();
+            ptrnode->labels.push_back("spl_sur");
             ptrnode->properties['a'] = mg_value_make_string("spl_sur");
             ptrnode->properties['b'] = mg_value_make_integer(subtype);
             ptrnode->properties['c'] = mg_value_make_integer(rational_u);
@@ -972,8 +1041,8 @@ namespace AccessUtils
             }
 
             Node* ptrnode = new Node();
-            ptrnode->labels = mg_list_make_empty(1);
-            mg_list_append(ptrnode->labels, mg_value_make_string("int_cur"));
+            ptrnode->labels.clear();
+            ptrnode->labels.push_back("int_cur");
             ptrnode->properties['a'] = mg_value_make_string("int_cur");
             ptrnode->properties['b'] = mg_value_make_integer(subtype);
             ptrnode->properties['c'] = mg_value_make_integer(rational);
@@ -1041,7 +1110,7 @@ namespace AccessUtils
                 {
                     Node* b = sd->spl_node;
                     Relationship* r = new Relationship(ptrnode, b);
-                    r->label = mg_value_make_string("int_cur_surf1_spl_ptr");
+                    r->label = "int_cur_surf1_spl_ptr";
                     r->properties['a'] = mg_value_make_string("int_cur_surf1_spl_ptr");
                     relationship_list.push_back(r);
                 }
@@ -1099,7 +1168,7 @@ namespace AccessUtils
                 {
                     Node* b = sd->spl_node;
                     Relationship* r = new Relationship(ptrnode, b);
-                    r->label = mg_value_make_string("int_cur_surf2_spl_ptr");
+                    r->label = "int_cur_surf2_spl_ptr";
                     r->properties['a'] = mg_value_make_string("int_cur_surf2_spl_ptr");
                     relationship_list.push_back(r);
                 }
@@ -1156,8 +1225,8 @@ namespace AccessUtils
                     surface_data* surf_data = get_surface_data_subgraph(ptr2node, surf);
 
                     Node* ptrnode = new Node();
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("par_cur"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("par_cur");
                     ptrnode->properties['a'] = mg_value_make_string("par_cur");
                     ptrnode->properties['b'] = mg_value_make_integer(subtype);
                     ptrnode->properties['c'] = mg_value_make_integer(rational);
@@ -1226,7 +1295,7 @@ namespace AccessUtils
                         {
                             Node* b = sd->spl_node;
                             Relationship* r = new Relationship(ptrnode, b);
-                            r->label = mg_value_make_string("par_cur_surf_spl_ptr");
+                            r->label = "par_cur_surf_spl_ptr";
                             r->properties['a'] = mg_value_make_string("par_cur_surf_spl_ptr");
                             relationship_list.push_back(r);
                         }
@@ -1806,29 +1875,47 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     BODY * ptr = (BODY*)entity_ptr;
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, body, lump, wire, transform);
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("body"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("body");
                     ptrnode->properties['a'] = mg_value_make_string("body");
+                    DIAG_LOG("[save-body] BODY=%p lump=%p wire=%p transform=%p\n",
+                        (void*)ptr, (void*)ptr->lump(), (void*)ptr->wire(), (void*)ptr->transform());
+                    if (ptr->lump() != nullptr) {
+                        LUMP* L = ptr->lump();
+                        int n_shells = 0;
+                        for (SHELL* s = L->shell(); s != nullptr; s = s->next()) {
+                            ++n_shells;
+                            int n_faces = 0;
+                            for (FACE* f = s->face(); f != nullptr; f = f->next()) ++n_faces;
+                            DIAG_LOG("[save-body]   lump->shell=%p n_shell=%d faces=%d\n",
+                                (void*)s, n_shells, n_faces);
+                        }
+                        DIAG_LOG("[save-body]   total shells in first lump=%d\n", n_shells);
+                    } else {
+                        DIAG_LOG("[save-body]   lump=NULL!\n");
+                    }
                 }
                 break;
             case LUMP_ID:
                 {
                     LUMP * ptr = (LUMP*)entity_ptr;
+                    // 必须用 next 遍历 lump 链表，否则 shell->next()->... 等后续 lump 全丢失
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, lump, next, shell, body);
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("lump"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("lump");
                     ptrnode->properties['a'] = mg_value_make_string("lump");
                 }
                 break;
             case SHELL_ID:
                 {
                     SHELL * ptr = (SHELL*)entity_ptr;
+                    // 必须用 next 遍历 shell 链表，否则 shell->next()->... 等后续 shell 全丢失
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, shell, next, subshell, face, wire,
                                               lump);
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("shell"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("shell");
                     ptrnode->properties['a'] = mg_value_make_string("shell");
                 }
                 break;
@@ -1838,8 +1925,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, subshell, parent, sibling, child, face,
                                               wire);
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("subshell"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("subshell");
                     ptrnode->properties['a'] = mg_value_make_string("subshell");
                 }
                 break;
@@ -1848,8 +1935,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     WIRE * ptr = (WIRE*)entity_ptr;
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, wire, next, coedge, owner, subshell);
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("wire"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("wire");
                     ptrnode->properties['a'] = mg_value_make_string("wire");
                     ptrnode->properties['b'] = mg_value_make_integer(ptr->cont());
                 }
@@ -1862,8 +1949,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     if (ptr->sides())
                     {
                         Node* ptrnode = ptr2node.at(ptr);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("face"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("face");
                         ptrnode->properties['a'] = mg_value_make_string("face");
                         ptrnode->properties['b'] = mg_value_make_integer(ptr->sense());
                         ptrnode->properties['c'] = mg_value_make_integer(1);
@@ -1872,8 +1959,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     else
                     {
                         Node* ptrnode = ptr2node.at(ptr);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("face"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("face");
                         ptrnode->properties['a'] = mg_value_make_string("face");
                         ptrnode->properties['b'] = mg_value_make_integer(ptr->sense());
                         ptrnode->properties['c'] = mg_value_make_integer(0);
@@ -1885,8 +1972,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     LOOP * ptr = (LOOP*)entity_ptr;
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, loop, next, start, face);
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("loop"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("loop");
                     ptrnode->properties['a'] = mg_value_make_string("loop");
                 }
                 break;
@@ -1896,8 +1983,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, coedge, next, previous, partner, edge,
                                               owner, geometry);
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("coedge"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("coedge");
                     ptrnode->properties['a'] = mg_value_make_string("coedge");
                     ptrnode->properties['b'] = mg_value_make_integer(ptr->sense());
                 }
@@ -1907,8 +1994,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     EDGE * ptr = (EDGE*)entity_ptr;
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, edge, start, end, coedge, geometry);
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("edge"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("edge");
                     ptrnode->properties['a'] = mg_value_make_string("edge");
                     ptrnode->properties['b'] = mg_value_make_integer(ptr->sense());
                 }
@@ -1918,8 +2005,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     VERTEX * ptr = (VERTEX*)entity_ptr;
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, vertex, edge, geometry);
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("vertex"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("vertex");
                     ptrnode->properties['a'] = mg_value_make_string("vertex");
                 }
                 break;
@@ -1932,8 +2019,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                         ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, pcurve, ref_curve);
                         SPApar_vec offset = ((PCURVE*)ptr)->offset();
                         Node* ptrnode = ptr2node.at(ptr);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("pcurve"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("pcurve");
                         ptrnode->properties['a'] = mg_value_make_string("pcurve");
                         ptrnode->properties['b'] = mg_value_make_integer(def_type);
                         ptrnode->properties['c'] = mg_value_make_float(double(offset.du));
@@ -1956,13 +2043,13 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                             Node* a = ptr2node.at(ptr);
                             Node* b = ptr2node.at(cur);
                             Relationship* r = new Relationship(a, b);
-                            r->label = mg_value_make_string("pcurve_fit_ptr");
+                            r->label = "pcurve_fit_ptr";
                             r->properties['a'] = mg_value_make_string("pcurve_fit_ptr");
                             relationship_list.push_back(r);
                         }
                         Node* ptrnode = ptr2node.at(ptr);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("pcurve"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("pcurve");
                         ptrnode->properties['a'] = mg_value_make_string("pcurve");
                         ptrnode->properties['b'] = mg_value_make_integer(def_type);
                         ptrnode->properties['c'] = mg_value_make_float(double(offset.du));
@@ -1976,8 +2063,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     APOINT * ptr = (APOINT*)entity_ptr;
                     SPAposition pos = ((APOINT*)ptr)->coords();
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("point"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("point");
                     ptrnode->properties['a'] = mg_value_make_string("point");
                     ptrnode->properties['b'] = mg_value_make_list(AccessUtils::Save::getmglist_SPAposition(pos, 3));
                 }
@@ -1998,8 +2085,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                             direction.set_z(direction.z() * gem.param_scale);
                             SPAinterval range = gem.gme_get_subset_range();
                             Node* ptrnode = ptr2node.at(ptr);
-                            ptrnode->labels = mg_list_make_empty(1);
-                            mg_list_append(ptrnode->labels, mg_value_make_string("straight-curve"));
+                            ptrnode->labels.clear();
+                            ptrnode->labels.push_back("straight-curve");
                             ptrnode->properties['a'] = mg_value_make_string("straight-curve");
                             ptrnode->properties['b'] = mg_value_make_list(
                                 AccessUtils::Save::getmglist_SPAinterval(range));
@@ -2018,8 +2105,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                             SPAvector major_axis = gem.major_axis;
                             SPAinterval range = gem.gme_get_subset_range();
                             Node* ptrnode = ptr2node.at(ptr);
-                            ptrnode->labels = mg_list_make_empty(1);
-                            mg_list_append(ptrnode->labels, mg_value_make_string("ellipse-curve"));
+                            ptrnode->labels.clear();
+                            ptrnode->labels.push_back("ellipse-curve");
                             ptrnode->properties['a'] = mg_value_make_string("ellipse-curve");
                             ptrnode->properties['b'] = mg_value_make_list(
                                 AccessUtils::Save::getmglist_SPAinterval(range));
@@ -2042,8 +2129,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                             SPAinterval helix_range = gem.helix_range();
                             SPAinterval range = gem.gme_get_subset_range();
                             Node* ptrnode = ptr2node.at(ptr);
-                            ptrnode->labels = mg_list_make_empty(1);
-                            mg_list_append(ptrnode->labels, mg_value_make_string("helix-curve"));
+                            ptrnode->labels.clear();
+                            ptrnode->labels.push_back("helix-curve");
                             ptrnode->properties['a'] = mg_value_make_string("helix-curve");
                             ptrnode->properties['b'] = mg_value_make_list(
                                 AccessUtils::Save::getmglist_SPAinterval(range));
@@ -2078,13 +2165,13 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                                 Node* a = ptr2node.at(ptr);
                                 Node* b = ptr2node.at(cur);
                                 Relationship* r = new Relationship(a, b);
-                                r->label = mg_value_make_string("intcurve-curve_fit_ptr");
+                                r->label = "intcurve-curve_fit_ptr";
                                 r->properties['a'] = mg_value_make_string("intcurve-curve_fit_ptr");
                                 relationship_list.push_back(r);
                             }
                             Node* ptrnode = ptr2node.at(ptr);
-                            ptrnode->labels = mg_list_make_empty(1);
-                            mg_list_append(ptrnode->labels, mg_value_make_string("intcurve-curve"));
+                            ptrnode->labels.clear();
+                            ptrnode->labels.push_back("intcurve-curve");
                             ptrnode->properties['a'] = mg_value_make_string("intcurve-curve");
                             ptrnode->properties['b'] = mg_value_make_list(
                                 AccessUtils::Save::getmglist_SPAinterval(range));
@@ -2110,8 +2197,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                             plane gem = ((PLANE*)ptr)->gme_get_def();
                             AccessUtils::Save::plane_data* gem_data = AccessUtils::Save::get_plane_data(&gem);
                             Node* ptrnode = ptr2node.at(ptr);
-                            ptrnode->labels = mg_list_make_empty(1);
-                            mg_list_append(ptrnode->labels, mg_value_make_string("plane-surface"));
+                            ptrnode->labels.clear();
+                            ptrnode->labels.push_back("plane-surface");
                             ptrnode->properties['a'] = mg_value_make_string("plane-surface");
                             ptrnode->properties['b'] = mg_value_make_list(gem_data->subset_range);
                             ptrnode->properties['c'] = mg_value_make_list(gem_data->root_point);
@@ -2127,8 +2214,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                             sphere gem = ((SPHERE*)ptr)->gme_get_def();
                             AccessUtils::Save::sphere_data* gem_data = AccessUtils::Save::get_sphere_data(&gem);
                             Node* ptrnode = ptr2node.at(ptr);
-                            ptrnode->labels = mg_list_make_empty(1);
-                            mg_list_append(ptrnode->labels, mg_value_make_string("sphere-surface"));
+                            ptrnode->labels.clear();
+                            ptrnode->labels.push_back("sphere-surface");
                             ptrnode->properties['a'] = mg_value_make_string("sphere-surface");
                             ptrnode->properties['b'] = mg_value_make_list(gem_data->subset_range);
                             ptrnode->properties['c'] = mg_value_make_list(gem_data->centre);
@@ -2145,8 +2232,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                             torus gem = ((TORUS*)ptr)->gme_get_def();
                             AccessUtils::Save::torus_data* gem_data = AccessUtils::Save::get_torus_data(&gem);
                             Node* ptrnode = ptr2node.at(ptr);
-                            ptrnode->labels = mg_list_make_empty(1);
-                            mg_list_append(ptrnode->labels, mg_value_make_string("torus-surface"));
+                            ptrnode->labels.clear();
+                            ptrnode->labels.push_back("torus-surface");
                             ptrnode->properties['a'] = mg_value_make_string("torus-surface");
                             ptrnode->properties['b'] = mg_value_make_list(gem_data->subset_range);
                             ptrnode->properties['c'] = mg_value_make_list(gem_data->centre);
@@ -2164,8 +2251,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                             cone gem = ((CONE*)ptr)->gme_get_def();
                             AccessUtils::Save::cone_data* gem_data = AccessUtils::Save::get_cone_data(&gem);
                             Node* ptrnode = ptr2node.at(ptr);
-                            ptrnode->labels = mg_list_make_empty(1);
-                            mg_list_append(ptrnode->labels, mg_value_make_string("cone-surface"));
+                            ptrnode->labels.clear();
+                            ptrnode->labels.push_back("cone-surface");
                             ptrnode->properties['a'] = mg_value_make_string("cone-surface");
                             ptrnode->properties['b'] = mg_value_make_list(gem_data->subset_range);
                             ptrnode->properties['c'] = mg_value_make_list(gem_data->base_centre);
@@ -2190,13 +2277,13 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                                 Node* a = ptr2node.at(ptr);
                                 Node* b = gem_data->spl_node;
                                 Relationship* r = new Relationship(a, b);
-                                r->label = mg_value_make_string("spline-surface_spl_ptr");
+                                r->label = "spline-surface_spl_ptr";
                                 r->properties['a'] = mg_value_make_string("spline-surface_spl_ptr");
                                 relationship_list.push_back(r);
                             }
                             Node* ptrnode = ptr2node.at(ptr);
-                            ptrnode->labels = mg_list_make_empty(1);
-                            mg_list_append(ptrnode->labels, mg_value_make_string("spline-surface"));
+                            ptrnode->labels.clear();
+                            ptrnode->labels.push_back("spline-surface");
                             ptrnode->properties['a'] = mg_value_make_string("spline-surface");
                             ptrnode->properties['b'] = mg_value_make_list(gem_data->subset_range);
                             ptrnode->properties['c'] = mg_value_make_integer(gem_data->reversed);
@@ -2218,8 +2305,8 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                     SPAmatrix affine = transf.affine();
                     SPAvector translation = transf.translation();
                     Node* ptrnode = ptr2node.at(ptr);
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("transform"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("transform");
                     ptrnode->properties['a'] = mg_value_make_string("transform");
                     ptrnode->properties['b'] = mg_value_make_list(AccessUtils::Save::getmglist_SPAmatrix(affine));
                     ptrnode->properties['c'] = mg_value_make_list(AccessUtils::Save::getmglist_SPAvector(translation));
@@ -2232,10 +2319,59 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
             default:
                 {
                     // PATTERN, ATTRIB等其他继承于ENTITY的实体
+                    DIAG_LOG("[save-neo4j] BFS default case: ptr=%p identity(1)=%d identity()=%d\n",
+                        (void*)entity_ptr, entity_ptr->identity(1), entity_ptr->identity());
                 }
                 break;
             }
             visited.insert(entity_ptr);
+        }
+        DIAG_LOG("[save-neo4j] BFS done: ptr2node.size=%zu relationship_list.size=%zu\n",
+            ptr2node.size(), relationship_list.size());
+        {
+            // 统计每种节点类型
+            int n_body=0, n_lump=0, n_shell=0, n_face=0, n_loop=0, n_edge=0, n_vert=0, n_other=0;
+            for (auto [ptr, node] : ptr2node) {
+                ENTITY* e = (ENTITY*)ptr;
+                const char* type_name = "(null)";
+                switch (e->identity()) {
+                    case BODY_ID: type_name = "BODY"; break;
+                    case LUMP_ID: type_name = "LUMP"; break;
+                    case SHELL_ID: type_name = "SHELL"; break;
+                    case FACE_ID: type_name = "FACE"; break;
+                    case LOOP_ID: type_name = "LOOP"; break;
+                    case EDGE_ID: type_name = "EDGE"; break;
+                    case VERTEX_ID: type_name = "VERTEX"; break;
+                    case COEDGE_ID: type_name = "COEDGE"; break;
+                    case TRANSFORM_ID: type_name = "TRANSFORM"; break;
+                    default: {
+                        int id1 = e->identity(1);
+                        if (id1 == BODY_ID) type_name = "BODY(id1)";
+                        else if (id1 == LUMP_ID) type_name = "LUMP(id1)";
+                        else if (id1 == SHELL_ID) type_name = "SHELL(id1)";
+                        else if (id1 == FACE_ID) type_name = "FACE(id1)";
+                        else if (id1 == LOOP_ID) type_name = "LOOP(id1)";
+                        else if (id1 == EDGE_ID) type_name = "EDGE(id1)";
+                        else if (id1 == VERTEX_ID) type_name = "VERTEX(id1)";
+                        else type_name = "OTHER";
+                        break;
+                    }
+                }
+                const char* label = "(null)";
+                if (!node->labels.empty()) label = node->labels[0].c_str();
+                if (strcmp(label, "body")==0) ++n_body;
+                else if (strcmp(label, "lump")==0) ++n_lump;
+                else if (strcmp(label, "shell")==0) ++n_shell;
+                else if (strcmp(label, "face")==0) ++n_face;
+                else if (strcmp(label, "loop")==0) ++n_loop;
+                else if (strcmp(label, "edge")==0) ++n_edge;
+                else if (strcmp(label, "vertex")==0) ++n_vert;
+                else ++n_other;
+                DIAG_LOG("[save-neo4j] node ptr=%p type=%s label=%s\n", (void*)e, type_name, label);
+            }
+            DIAG_LOG("[save-neo4j] node counts: body=%d lump=%d shell=%d face=%d loop=%d edge=%d vertex=%d other=%d\n",
+                n_body, n_lump, n_shell, n_face, n_loop, n_edge, n_vert, n_other);
+            DIAG_LOG("[save-neo4j] rel counts: %zu\n", relationship_list.size());
         }
         {
             uint32_t node_list_size = ptr2node.size();
@@ -2245,7 +2381,12 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
             {
                 mg_map* mgm_node = mg_map_make_empty(2 + node->properties.size());
                 mg_map_append(mgm_node, mg_string_make("W"), mg_value_make_integer(nodeidx));
-                mg_map_append(mgm_node, mg_string_make("X"), mg_value_make_list(node->labels));
+                // 将 std::vector<std::string> labels 转换为 mg_list
+                mg_list* mgl_labels = mg_list_make_empty((uint32_t)node->labels.size());
+                for (const std::string& lbl : node->labels) {
+                    mg_list_append(mgl_labels, mg_value_make_string(lbl.c_str()));
+                }
+                mg_map_append(mgm_node, mg_string_make("X"), mg_value_make_list(mgl_labels));
                 for (auto [propkey, propval] : node->properties)
                 {
                     const char propkey_str[2] = {propkey, 0};
@@ -2295,7 +2436,7 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
                 mg_map* mgm_rel = mg_map_make_empty(3 + rel->properties.size());
                 mg_map_append(mgm_rel, mg_string_make("U"), mg_value_make_integer(rel->u->id));
                 mg_map_append(mgm_rel, mg_string_make("V"), mg_value_make_integer(rel->v->id));
-                mg_map_append(mgm_rel, mg_string_make("T"), rel->label);
+                mg_map_append(mgm_rel, mg_string_make("T"), mg_value_make_string(rel->label.c_str()));
                 for (auto [propkey, propval] : rel->properties)
                 {
                     const char propkey_str[2] = {propkey, 0};
@@ -2306,15 +2447,63 @@ void api_save_entity_list_neo4j(const Neo4jPart& conn, const ENTITY_LIST& entity
             mg_map* qparams = mg_map_make_empty(1);
             mg_map_append(qparams, mg_string_make("Y"), mg_value_make_list(mgl_rel_list));
             TMST;
+            // 关键修复：用 `WITH count(*) AS cnt RETURN cnt` 而不是 `RETURN id(rel) LIMIT 1`。
+            //
+            // 第一层 bug（已发现，已修）：原来用 "YIELD rel RETURN null LIMIT 0" 时
+            // LIMIT 0 把整条 query 的副作用（apoc.create.relationship）一起砍掉，
+            // 225 条拓扑关系一条都没真正写进 DB。
+            //
+            // 第二层 bug（本轮发现）：上一轮把 LIMIT 0 改成 LIMIT 1 也不行！
+            // 在 Neo4j 5.15 + APOC 5 下，UNWIND + apoc.create.relationship 是行级流式
+            // procedure，LIMIT 1 会在第一行满足后短路掉 UNWIND 的后续迭代，导致
+            // 225 条里只有 1 条被真正创建。日志里 "[save-neo4j] AFTER write: total rels in DB = 927"
+            // （仅 +2，比期望少 224）就是这个证据。
+            //
+            // Python neo4j 5.28 驱动对照测试结果（5 条 lump）：
+            //   UNWIND + apoc.create.relationship + RETURN id(rel) LIMIT 1  → 1 条
+            //   UNWIND + apoc.create.relationship + RETURN id(rel)          → 5 条 ✅
+            //   UNWIND + apoc.create.relationship + RETURN null             → 5 条 ✅
+            //   UNWIND + apoc.create.relationship + WITH count(*) RETURN cnt → 5 条 ✅
+            //
+            // 选 WITH count(*) RETURN cnt 是因为：副作用完整执行 + 只回 1 行
+            // （single integer），不拖 rel id 回 C++，最省内存；C++ 端接着
+            // discard_all_results() 丢掉这 1 行即可。
             conn.execute_bolt("UNWIND $Y AS Z "
                               "MATCH (W) WHERE id(W) = Z.U "
                               "MATCH (X) WHERE id(X) = Z.V "
-                              "CALL apoc.create.relationship(W,Z.T,{a:Z.a},X)  "
-                              "YIELD rel RETURN null LIMIT 0 ", qparams);
+                              "CALL apoc.create.relationship(W,Z.T,{a:Z.a},X) "
+                              "YIELD rel WITH count(*) AS cnt RETURN cnt ", qparams);
             TMED;
             db_execution_duration += TMDR;
             mg_map_destroy(qparams);
-            conn.discard_all_results();
+            conn.discard_all_results();  // 丢弃 relationship write 的结果
+            // 诊断：检查写入后 Neo4j 里实际有多少关系。
+            // 注意：每次 execute_bolt 必须用自己的 qparams；上一段关系写入的 qparams
+            // 已经在 line 2440 mg_map_destroy(qparams) 释放了，必须重新分配。
+            // 此外不再依赖 APOC 插件，subgraphAll 在不带 APOC 的镜像下会直接报错。
+            {
+                mg_map* qp = mg_map_make_empty(1);
+                conn.execute_bolt("MATCH ()-[r]->() RETURN count(r) AS rel_count", qp);
+                mg_map_destroy(qp);
+                mg_result* r;
+                if (mg_session_fetch(conn.session, &r) == 1) {
+                    const mg_list* row = mg_result_row(r);
+                    int64_t cnt = mg_value_integer(mg_list_at(row, 0));
+                    DIAG_LOG("[save-neo4j] AFTER write: total rels in DB = %lld\n", cnt);
+                }
+                conn.discard_all_results();
+                // subgraphAll 走 APOC，没有插件会 crash；用普通 MATCH/COUNT 替代即可
+                qp = mg_map_make_empty(1);
+                conn.execute_bolt("MATCH (n:part) RETURN count(n) AS part_count", qp);
+                mg_map_destroy(qp);
+                if (mg_session_fetch(conn.session, &r) == 1) {
+                    const mg_list* row = mg_result_row(r);
+                    int64_t nc = mg_value_integer(mg_list_at(row, 0));
+                    DIAG_LOG("[save-neo4j] AFTER write: part nodes = %lld\n", nc);
+                }
+                conn.discard_all_results();  // 丢弃诊断结果
+            }
+            DIAG_LOG("[save-neo4j] written %d relationships to Neo4j\n", (int)rel_list_size);
         }
 
 
@@ -2339,8 +2528,12 @@ void api_restore_entity_list_neo4j(const Neo4jPart& conn, const std::vector<int6
     {
         mg_map* qparams = mg_map_make_empty(1);
         mg_map_append(qparams, mg_string_make("d"), mg_value_make_integer(id_list[id_list_idx]));
+        // relationshipFilter: '>' (OUTGOING) — 从 body 出发沿 body_lump / lump_shell / shell_face 等出边
+        // 走到所有子拓扑节点（vertex / edge / loop / coedge / face / shell / lump ...）。
+        // 原始代码用 '<' (INCOMING) 是反向方向，只能回到 part → body 那一条边，
+        // 永远不会追到子实体，所以 restore 出来的 body 是"空壳"（lump/shell/face/edge 全为 0）。
         conn.execute_bolt("MATCH (n) WHERE id(n) = $d "
-                          "CALL apoc.path.subgraphAll(n, {minLevel:0}) YIELD nodes AS x, relationships AS y return x,y ",
+                          "CALL apoc.path.subgraphAll(n, {minLevel:0,relationshipFilter: '>'}) YIELD nodes AS x, relationships AS y return x,y ",
                           qparams);
         mg_map_destroy(qparams);
 
@@ -2361,6 +2554,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart& conn, const std::vector<int6
                     assert(mg_value_get_type(nodelist_value) == MG_VALUE_TYPE_LIST);
                     const mg_list* nodelist = mg_value_list(nodelist_value);
                     const uint32_t nodelist_size = mg_list_size(nodelist);
+                    DIAG_LOG("[restore-neo4j] subgraphAll returned nodes=%u\n", nodelist_size);
                     for (uint32_t i = 0; i < nodelist_size; i++)
                     {
                         const mg_value* node_value = mg_list_at(nodelist, i);
@@ -2378,6 +2572,8 @@ void api_restore_entity_list_neo4j(const Neo4jPart& conn, const std::vector<int6
                                 BODY * body = nullptr;
                                 api_body(body);
                                 id2ptr[node_id] = body;
+                                DIAG_LOG("[restore-body] node_id=%lld body=%p\n",
+                                    (long long)node_id, (void*)body);
                             }
                             break;
                         case AccessUtils::Restore::Neo4jNode::lump:
@@ -3398,6 +3594,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart& conn, const std::vector<int6
                     assert(mg_value_get_type(rellist_value) == MG_VALUE_TYPE_LIST);
                     const mg_list* rellist = mg_value_list(rellist_value);
                     const uint32_t rellist_size = mg_list_size(rellist);
+                    DIAG_LOG("[restore-neo4j] subgraphAll returned relationships=%u\n", rellist_size);
                     for (uint32_t i = 0; i < rellist_size; i++)
                     {
                         const mg_value* rel_value = mg_list_at(rellist, i);
@@ -3416,6 +3613,8 @@ void api_restore_entity_list_neo4j(const Neo4jPart& conn, const std::vector<int6
                                 BODY * body = (BODY*)id2ptr.at(rel_startnode_id);
                                 LUMP * lump = (LUMP*)id2ptr.at(rel_endnode_id);
                                 body->set_lump(lump);
+                                DIAG_LOG("[restore-rel] body_lump_ptr: body=%p lump=%p\n",
+                                    (void*)body, (void*)lump);
                             }
                             break;
                         case AccessUtils::Restore::Neo4jEdge::body_wire_ptr:
@@ -3444,6 +3643,8 @@ void api_restore_entity_list_neo4j(const Neo4jPart& conn, const std::vector<int6
                                 LUMP * lump = (LUMP*)id2ptr.at(rel_startnode_id);
                                 SHELL * shell = (SHELL*)id2ptr.at(rel_endnode_id);
                                 lump->set_shell(shell);
+                                DIAG_LOG("[restore-rel] lump_shell_ptr: lump=%p shell=%p\n",
+                                    (void*)lump, (void*)shell);
                             }
                             break;
                         case AccessUtils::Restore::Neo4jEdge::lump_body_ptr:
@@ -3472,6 +3673,8 @@ void api_restore_entity_list_neo4j(const Neo4jPart& conn, const std::vector<int6
                                 SHELL * shell = (SHELL*)id2ptr.at(rel_startnode_id);
                                 FACE * face = (FACE*)id2ptr.at(rel_endnode_id);
                                 shell->set_face(face);
+                                DIAG_LOG("[restore-rel] shell_face_ptr: shell=%p face=%p\n",
+                                    (void*)shell, (void*)face);
                             }
                             break;
                         case AccessUtils::Restore::Neo4jEdge::shell_wire_ptr:
@@ -3778,6 +3981,20 @@ void api_restore_entity_list_neo4j(const Neo4jPart& conn, const std::vector<int6
     for (const int64_t s : id_list)
     {
         entity_list.add((ENTITY*)id2ptr.at(s));
+    }
+
+    DIAG_LOG("[restore-end] entity_list.count=%d\n", (int)entity_list.count());
+    for (ENTITY* e : entity_list) {
+        if (e == nullptr) {
+            DIAG_LOG("[restore-end] WARNING: null entity in list\n");
+            continue;
+        }
+        const char* tag = e->identity() == BODY_ID ? "BODY"
+                        : e->identity() == LUMP_ID ? "LUMP"
+                        : e->identity() == SHELL_ID ? "SHELL"
+                        : e->identity() == FACE_ID ? "FACE"
+                        : "OTHER";
+        DIAG_LOG("[restore-end] entity=%p type=%s\n", (void*)e, tag);
     }
 }
 
@@ -4179,8 +4396,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
     Node* generationnode = new Node();
     // ... 设置 generationnode 的标签和属性 ...
     node_list.push_back(generationnode);
-    generationnode->labels = mg_list_make_empty(1);
-    mg_list_append(generationnode->labels, mg_value_make_string("generation"));
+    generationnode->labels.clear();
+    generationnode->labels.push_back("generation");
     generationnode->properties['a'] = mg_value_make_string("generation");
     generationnode->properties['b'] = mg_value_make_integer(partnodenextgeneration);
 
@@ -4199,8 +4416,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("body"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("body");
                 ptrnode->properties['a'] = mg_value_make_string("body");
             }
             break;
@@ -4215,8 +4432,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("lump"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("lump");
                 ptrnode->properties['a'] = mg_value_make_string("lump");
             }
             break;
@@ -4231,8 +4448,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("shell"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("shell");
                 ptrnode->properties['a'] = mg_value_make_string("shell");
             }
             break;
@@ -4247,8 +4464,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("subshell"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("subshell");
                 ptrnode->properties['a'] = mg_value_make_string("subshell");
             }
             break;
@@ -4263,8 +4480,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("wire"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("wire");
                 ptrnode->properties['a'] = mg_value_make_string("wire");
                 ptrnode->properties['b'] = mg_value_make_integer(ptr->cont());
             }
@@ -4282,8 +4499,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 node_list.push_back(ptrnode);
                 if (ptr->sides())
                 {
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("face"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("face");
                     ptrnode->properties['a'] = mg_value_make_string("face");
                     ptrnode->properties['b'] = mg_value_make_integer(ptr->sense());
                     ptrnode->properties['c'] = mg_value_make_integer(1);
@@ -4291,8 +4508,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 else
                 {
-                    ptrnode->labels = mg_list_make_empty(1);
-                    mg_list_append(ptrnode->labels, mg_value_make_string("face"));
+                    ptrnode->labels.clear();
+                    ptrnode->labels.push_back("face");
                     ptrnode->properties['a'] = mg_value_make_string("face");
                     ptrnode->properties['b'] = mg_value_make_integer(ptr->sense());
                     ptrnode->properties['c'] = mg_value_make_integer(0);
@@ -4310,8 +4527,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("loop"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("loop");
                 ptrnode->properties['a'] = mg_value_make_string("loop");
             }
             break;
@@ -4326,8 +4543,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("coedge"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("coedge");
                 ptrnode->properties['a'] = mg_value_make_string("coedge");
                 ptrnode->properties['b'] = mg_value_make_integer(ptr->sense());
             }
@@ -4343,8 +4560,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("edge"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("edge");
                 ptrnode->properties['a'] = mg_value_make_string("edge");
                 ptrnode->properties['b'] = mg_value_make_integer(ptr->sense());
             }
@@ -4360,8 +4577,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("vertex"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("vertex");
                 ptrnode->properties['a'] = mg_value_make_string("vertex");
             }
             break;
@@ -4377,8 +4594,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("point"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("point");
                 ptrnode->properties['a'] = mg_value_make_string("point");
                 ptrnode->properties['b'] = mg_value_make_list(AccessUtils::Save::getmglist_SPAposition(pos, 3));
             }
@@ -4406,8 +4623,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         }
                         ptr2node[ptr] = ptrnode;
                         node_list.push_back(ptrnode);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("straight-curve"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("straight-curve");
                         ptrnode->properties['a'] = mg_value_make_string("straight-curve");
                         ptrnode->properties['b'] = mg_value_make_list(AccessUtils::Save::getmglist_SPAinterval(range));
                         ptrnode->properties['c'] = mg_value_make_list(
@@ -4432,8 +4649,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         }
                         ptr2node[ptr] = ptrnode;
                         node_list.push_back(ptrnode);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("ellipse-curve"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("ellipse-curve");
                         ptrnode->properties['a'] = mg_value_make_string("ellipse-curve");
                         ptrnode->properties['b'] = mg_value_make_list(AccessUtils::Save::getmglist_SPAinterval(range));
                         ptrnode->properties['c'] = mg_value_make_list(
@@ -4462,8 +4679,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         }
                         ptr2node[ptr] = ptrnode;
                         node_list.push_back(ptrnode);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("helix-curve"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("helix-curve");
                         ptrnode->properties['a'] = mg_value_make_string("helix-curve");
                         ptrnode->properties['b'] = mg_value_make_list(AccessUtils::Save::getmglist_SPAinterval(range));
                         ptrnode->properties['c'] = mg_value_make_list(
@@ -4506,8 +4723,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         }
                         ptr2node[ptr] = ptrnode;
                         node_list.push_back(ptrnode);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("plane-surface"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("plane-surface");
                         ptrnode->properties['a'] = mg_value_make_string("plane-surface");
                         ptrnode->properties['b'] = mg_value_make_list(gem_data->subset_range);
                         ptrnode->properties['c'] = mg_value_make_list(gem_data->root_point);
@@ -4530,8 +4747,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         }
                         ptr2node[ptr] = ptrnode;
                         node_list.push_back(ptrnode);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("sphere-surface"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("sphere-surface");
                         ptrnode->properties['a'] = mg_value_make_string("sphere-surface");
                         ptrnode->properties['b'] = mg_value_make_list(gem_data->subset_range);
                         ptrnode->properties['c'] = mg_value_make_list(gem_data->centre);
@@ -4555,8 +4772,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         }
                         ptr2node[ptr] = ptrnode;
                         node_list.push_back(ptrnode);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("torus-surface"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("torus-surface");
                         ptrnode->properties['a'] = mg_value_make_string("torus-surface");
                         ptrnode->properties['b'] = mg_value_make_list(gem_data->subset_range);
                         ptrnode->properties['c'] = mg_value_make_list(gem_data->centre);
@@ -4581,8 +4798,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         }
                         ptr2node[ptr] = ptrnode;
                         node_list.push_back(ptrnode);
-                        ptrnode->labels = mg_list_make_empty(1);
-                        mg_list_append(ptrnode->labels, mg_value_make_string("cone-surface"));
+                        ptrnode->labels.clear();
+                        ptrnode->labels.push_back("cone-surface");
                         ptrnode->properties['a'] = mg_value_make_string("cone-surface");
                         ptrnode->properties['b'] = mg_value_make_list(gem_data->subset_range);
                         ptrnode->properties['c'] = mg_value_make_list(gem_data->base_centre);
@@ -4618,8 +4835,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                 }
                 ptr2node[ptr] = ptrnode;
                 node_list.push_back(ptrnode);
-                ptrnode->labels = mg_list_make_empty(1);
-                mg_list_append(ptrnode->labels, mg_value_make_string("transform"));
+                ptrnode->labels.clear();
+                ptrnode->labels.push_back("transform");
                 ptrnode->properties['a'] = mg_value_make_string("transform");
                 ptrnode->properties['b'] = mg_value_make_list(AccessUtils::Save::getmglist_SPAmatrix(affine));
                 ptrnode->properties['c'] = mg_value_make_list(AccessUtils::Save::getmglist_SPAvector(translation));
@@ -4646,7 +4863,11 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
         {
             mg_map* mgm_node = mg_map_make_empty(2 + node->properties.size());
             mg_map_append(mgm_node, mg_string_make("W"), mg_value_make_integer(nodeidx));
-            mg_map_append(mgm_node, mg_string_make("X"), mg_value_make_list(node->labels));
+            mg_list* mgl_labels = mg_list_make_empty((uint32_t)node->labels.size());
+            for (const std::string& lbl : node->labels) {
+                mg_list_append(mgl_labels, mg_value_make_string(lbl.c_str()));
+            }
+            mg_map_append(mgm_node, mg_string_make("X"), mg_value_make_list(mgl_labels));
             for (auto [propkey, propval] : node->properties)
             {
                 const char propkey_str[2] = {propkey, 0};
@@ -4716,7 +4937,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                           "MATCH (s) WHERE id(s)=t[1] WITH s,p "
                           "UNWIND p AS q "
                           "CALL apoc.create.relationship(startNode(q),type(q),properties(q),s)  "
-                          "YIELD rel RETURN null LIMIT 0 ", qparams);
+                          "YIELD rel WITH count(*) AS cnt RETURN cnt ", qparams);
         mg_map_destroy(qparams);
         conn.discard_all_results();
     }
@@ -4735,7 +4956,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
     //将part与generation节点相连
     {
         Relationship2* r = new Relationship2(partnodeid, generationnode->id);
-        r->label = mg_value_make_string("part_generation_ptr");
+        r->label = "part_generation_ptr";
         r->properties['a'] = mg_value_make_string("part_generation_ptr");
         r->properties['b'] = mg_value_make_integer(partnodenextgeneration);
         relationship_list.push_back(r);
@@ -4745,7 +4966,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
     if (partnodenextgeneration > 1)
     {
         Relationship2* r = new Relationship2(generationnode->id, curgenerationnodeid);
-        r->label = mg_value_make_string("generation_prev_ptr");
+        r->label = "generation_prev_ptr";
         r->properties['a'] = mg_value_make_string("generation_prev_ptr");
         relationship_list.push_back(r);
     }
@@ -4754,14 +4975,14 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
     for (const auto& nodeid : updated_entity_nodeid_list)
     {
         Relationship2* r = new Relationship2(generationnode->id, nodeid);
-        r->label = mg_value_make_string("generation_old_ptr");
+        r->label = "generation_old_ptr";
         r->properties['a'] = mg_value_make_string("generation_old_ptr");
         relationship_list.push_back(r);
     }
     for (const auto& nodeid : deleted_entity_nodeid_list)
     {
         Relationship2* r = new Relationship2(generationnode->id, nodeid);
-        r->label = mg_value_make_string("generation_old_ptr");
+        r->label = "generation_old_ptr";
         r->properties['a'] = mg_value_make_string("generation_old_ptr");
         relationship_list.push_back(r);
     }
@@ -4771,7 +4992,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
         {
             int64_t b = ctx.ptr2nodeid.at(entity_ptr);
             Relationship2* r = new Relationship2(generationnode->id, b);
-            r->label = mg_value_make_string("generation_new_ptr");
+            r->label = "generation_new_ptr";
             r->properties['a'] = mg_value_make_string("generation_new_ptr");
             relationship_list.push_back(r);
         }
@@ -4787,7 +5008,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("body_lump_ptr");
+                        r->label = "body_lump_ptr";
                         r->properties['a'] = mg_value_make_string("body_lump_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4799,7 +5020,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("body_wire_ptr");
+                        r->label = "body_wire_ptr";
                         r->properties['a'] = mg_value_make_string("body_wire_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4811,7 +5032,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("body_transform_ptr");
+                        r->label = "body_transform_ptr";
                         r->properties['a'] = mg_value_make_string("body_transform_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4828,7 +5049,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("lump_next_ptr");
+                        r->label = "lump_next_ptr";
                         r->properties['a'] = mg_value_make_string("lump_next_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4840,7 +5061,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("lump_shell_ptr");
+                        r->label = "lump_shell_ptr";
                         r->properties['a'] = mg_value_make_string("lump_shell_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4852,7 +5073,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("lump_body_ptr");
+                        r->label = "lump_body_ptr";
                         r->properties['a'] = mg_value_make_string("lump_body_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4869,7 +5090,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("shell_next_ptr");
+                        r->label = "shell_next_ptr";
                         r->properties['a'] = mg_value_make_string("shell_next_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4881,7 +5102,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("shell_subshell_ptr");
+                        r->label = "shell_subshell_ptr";
                         r->properties['a'] = mg_value_make_string("shell_subshell_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4893,7 +5114,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("shell_face_ptr");
+                        r->label = "shell_face_ptr";
                         r->properties['a'] = mg_value_make_string("shell_face_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4905,7 +5126,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("shell_wire_ptr");
+                        r->label = "shell_wire_ptr";
                         r->properties['a'] = mg_value_make_string("shell_wire_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4917,7 +5138,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("shell_lump_ptr");
+                        r->label = "shell_lump_ptr";
                         r->properties['a'] = mg_value_make_string("shell_lump_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4934,7 +5155,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("subshell_parent_ptr");
+                        r->label = "subshell_parent_ptr";
                         r->properties['a'] = mg_value_make_string("subshell_parent_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4946,7 +5167,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("subshell_sibling_ptr");
+                        r->label = "subshell_sibling_ptr";
                         r->properties['a'] = mg_value_make_string("subshell_sibling_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4958,7 +5179,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("subshell_child_ptr");
+                        r->label = "subshell_child_ptr";
                         r->properties['a'] = mg_value_make_string("subshell_child_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4970,7 +5191,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("subshell_face_ptr");
+                        r->label = "subshell_face_ptr";
                         r->properties['a'] = mg_value_make_string("subshell_face_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4982,7 +5203,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("subshell_wire_ptr");
+                        r->label = "subshell_wire_ptr";
                         r->properties['a'] = mg_value_make_string("subshell_wire_ptr");
                         relationship_list.push_back(r);
                     }
@@ -4999,7 +5220,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("wire_next_ptr");
+                        r->label = "wire_next_ptr";
                         r->properties['a'] = mg_value_make_string("wire_next_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5011,7 +5232,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("wire_coedge_ptr");
+                        r->label = "wire_coedge_ptr";
                         r->properties['a'] = mg_value_make_string("wire_coedge_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5023,7 +5244,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("wire_owner_ptr");
+                        r->label = "wire_owner_ptr";
                         r->properties['a'] = mg_value_make_string("wire_owner_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5035,7 +5256,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("wire_subshell_ptr");
+                        r->label = "wire_subshell_ptr";
                         r->properties['a'] = mg_value_make_string("wire_subshell_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5052,7 +5273,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("face_next_ptr");
+                        r->label = "face_next_ptr";
                         r->properties['a'] = mg_value_make_string("face_next_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5064,7 +5285,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("face_loop_ptr");
+                        r->label = "face_loop_ptr";
                         r->properties['a'] = mg_value_make_string("face_loop_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5076,7 +5297,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("face_shell_ptr");
+                        r->label = "face_shell_ptr";
                         r->properties['a'] = mg_value_make_string("face_shell_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5088,7 +5309,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("face_subshell_ptr");
+                        r->label = "face_subshell_ptr";
                         r->properties['a'] = mg_value_make_string("face_subshell_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5100,7 +5321,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("face_geometry_ptr");
+                        r->label = "face_geometry_ptr";
                         r->properties['a'] = mg_value_make_string("face_geometry_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5117,7 +5338,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("loop_next_ptr");
+                        r->label = "loop_next_ptr";
                         r->properties['a'] = mg_value_make_string("loop_next_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5129,7 +5350,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("loop_start_ptr");
+                        r->label = "loop_start_ptr";
                         r->properties['a'] = mg_value_make_string("loop_start_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5141,7 +5362,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("loop_face_ptr");
+                        r->label = "loop_face_ptr";
                         r->properties['a'] = mg_value_make_string("loop_face_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5158,7 +5379,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("coedge_next_ptr");
+                        r->label = "coedge_next_ptr";
                         r->properties['a'] = mg_value_make_string("coedge_next_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5170,7 +5391,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("coedge_previous_ptr");
+                        r->label = "coedge_previous_ptr";
                         r->properties['a'] = mg_value_make_string("coedge_previous_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5182,7 +5403,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("coedge_partner_ptr");
+                        r->label = "coedge_partner_ptr";
                         r->properties['a'] = mg_value_make_string("coedge_partner_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5194,7 +5415,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("coedge_edge_ptr");
+                        r->label = "coedge_edge_ptr";
                         r->properties['a'] = mg_value_make_string("coedge_edge_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5206,7 +5427,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("coedge_owner_ptr");
+                        r->label = "coedge_owner_ptr";
                         r->properties['a'] = mg_value_make_string("coedge_owner_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5218,7 +5439,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("coedge_geometry_ptr");
+                        r->label = "coedge_geometry_ptr";
                         r->properties['a'] = mg_value_make_string("coedge_geometry_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5235,7 +5456,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("edge_start_ptr");
+                        r->label = "edge_start_ptr";
                         r->properties['a'] = mg_value_make_string("edge_start_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5247,7 +5468,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("edge_end_ptr");
+                        r->label = "edge_end_ptr";
                         r->properties['a'] = mg_value_make_string("edge_end_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5259,7 +5480,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("edge_coedge_ptr");
+                        r->label = "edge_coedge_ptr";
                         r->properties['a'] = mg_value_make_string("edge_coedge_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5271,7 +5492,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("edge_geometry_ptr");
+                        r->label = "edge_geometry_ptr";
                         r->properties['a'] = mg_value_make_string("edge_geometry_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5288,7 +5509,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("vertex_edge_ptr");
+                        r->label = "vertex_edge_ptr";
                         r->properties['a'] = mg_value_make_string("vertex_edge_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5300,7 +5521,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
                         int64_t a = ctx.ptr2nodeid.at(ptr);
                         int64_t b = ctx.ptr2nodeid.at(__tmp_ptr);
                         Relationship2* r = new Relationship2(a, b);
-                        r->label = mg_value_make_string("vertex_geometry_ptr");
+                        r->label = "vertex_geometry_ptr";
                         r->properties['a'] = mg_value_make_string("vertex_geometry_ptr");
                         relationship_list.push_back(r);
                     }
@@ -5323,7 +5544,7 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
             mg_map* mgm_rel = mg_map_make_empty(3 + rel->properties.size());
             mg_map_append(mgm_rel, mg_string_make("U"), mg_value_make_integer(rel->uid));
             mg_map_append(mgm_rel, mg_string_make("V"), mg_value_make_integer(rel->vid));
-            mg_map_append(mgm_rel, mg_string_make("T"), rel->label);
+            mg_map_append(mgm_rel, mg_string_make("T"), mg_value_make_string(rel->label.c_str()));
             for (auto [propkey, propval] : rel->properties)
             {
                 const char propkey_str[2] = {propkey, 0};
@@ -5336,8 +5557,8 @@ void api_save_neo4j(const Neo4jPart& conn, IncrementalContext& ctx)
         conn.execute_bolt("UNWIND $Y AS Z "
                           "MATCH (W) WHERE id(W) = Z.U "
                           "MATCH (X) WHERE id(X) = Z.V "
-                          "CALL apoc.create.relationship(W,Z.T,{a:Z.a,b:Z.b},X)  "
-                          "YIELD rel RETURN null LIMIT 0 ", qparams);
+                          "CALL apoc.create.relationship(W,Z.T,{a:Z.a,b:Z.b},X) "
+                          "YIELD rel WITH count(*) AS cnt RETURN cnt ", qparams);
         mg_map_destroy(qparams);
         conn.discard_all_results();
     }
@@ -5374,7 +5595,7 @@ void api_restore_neo4j(const Neo4jPart& conn, int generation_id, IncrementalCont
     mg_map_append(qparams, mg_string_make("B"), mg_value_make_integer(generation_id));
     conn.execute_bolt("MATCH (q:part {a:'part',b:$A})-[r:part_generation_ptr {a:'part_generation_ptr',b:$B}]->(n) "
                       "SET q.d=$B WITH n "
-                      "CALL apoc.path.subgraphAll(n, {minLevel:0,relationshipFilter: 'generation_prev_ptr>|generation_new_ptr>|generation_old_ptr>'}) "
+                      "CALL apoc.path.subgraphAll(n, {minLevel:0,relationshipFilter: '<'|generation_prev_ptr>|generation_new_ptr>|generation_old_ptr>'}) "
                       "YIELD relationships AS y "
                       "WITH [z IN y WHERE type(z)='generation_new_ptr' | endNode(z)] AS F,[z IN y WHERE type(z)='generation_old_ptr' | endNode(z)] AS G "
                       "WITH [x IN F WHERE NOT (x IN G)] AS H "
@@ -6117,12 +6338,27 @@ void api_restore_neo4j(const Neo4jPart& conn, int generation_id, IncrementalCont
 
 void api_save_entity_list_neo4j_part(const Neo4jPart& conn, const ENTITY_LIST& entity_list)
 {
+    std::fprintf(stderr, "[api_save_entity_list_neo4j_part] ENTER, partname=%s entity_count=%d\n", conn.partname.c_str(), (int)entity_list.count());
+    fflush(stderr);
+
     mg_map* qparams = mg_map_make_empty(1);
     mg_map_append(qparams, mg_string_make("Y"), mg_value_make_string(conn.partname.c_str()));
+
+    std::fprintf(stderr, "[api_save_entity_list_neo4j_part] deleting existing subgraph\n");
+    fflush(stderr);
+    // 删除旧 body 及其整个子树，然后删除旧 part node
+    // DETACH DELETE body 会级联删除 lump->shell->face->loop->coedge->edge->vertex
+    // OPTIONAL MATCH 避免在没有旧 body 时查询失败
     conn.execute_bolt(
-        "MATCH (n:part {b:$Y}) CALL apoc.path.subgraphAll(n, {minLevel:0}) YIELD nodes FOREACH(n IN nodes | DETACH DELETE n)",
+        "MATCH (n:part {b:$Y}) "
+        "OPTIONAL MATCH (n)-[r]-(b:body) "
+        "FOREACH (x IN CASE WHEN b IS NOT NULL THEN [b] ELSE [] END | DETACH DELETE x) "
+        "DETACH DELETE n",
         qparams);
     conn.discard_all_results();
+
+    std::fprintf(stderr, "[api_save_entity_list_neo4j_part] creating part node\n");
+    fflush(stderr);
     conn.execute_bolt("CREATE (n:part {a:'part',b:$Y}) RETURN id(n)", qparams);
     mg_map_destroy(qparams);
 
@@ -6134,18 +6370,26 @@ void api_save_entity_list_neo4j_part(const Neo4jPart& conn, const ENTITY_LIST& e
         const uint32_t mgl_partnodeid_length = mg_list_size(mgl_partnodeid);
         assert(mgl_partnodeid_length == 1);
         partnodeid = mg_value_integer(mg_list_at(mgl_partnodeid, 0));
+        std::fprintf(stderr, "[api_save_entity_list_neo4j_part] partnodeid=%lld\n", (long long)partnodeid);
+        fflush(stderr);
     }
     else
     {
-        myerror(std::format("mg_session_fetch失败，错误信息如下：{}", mg_session_error(conn.session)));
+        // 查询无结果时 partnodeid 保持为 0，这可能是正常情况（如首次创建）
+        partnodeid = 0;
+        std::fprintf(stderr, "[api_save_entity_list_neo4j_part] no result, partnodeid=0\n");
+        fflush(stderr);
     }
-    if (mg_session_fetch(conn.session, &result) != 0)
-    {
-        myerror(std::format("mg_session_fetch失败，错误信息如下：{}", mg_session_error(conn.session)));
-    }
+    // 注意：mg_session_fetch 返回 0 表示"没有更多结果"（正常情况），不要对返回 0 调用 myerror()。
+    conn.discard_all_results();
 
+    std::fprintf(stderr, "[api_save_entity_list_neo4j_part] calling api_save_entity_list_neo4j\n");
+    fflush(stderr);
     std::unordered_map<void*, int64_t> ptr2elemid;
     api_save_entity_list_neo4j(conn, entity_list, ptr2elemid);
+
+    std::fprintf(stderr, "[api_save_entity_list_neo4j_part] creating relationships, elem_count=%d\n", (int)entity_list.iteration_count());
+    fflush(stderr);
 
     std::vector<int64_t> elemid_list;
     uint32_t elemid_list_size = entity_list.iteration_count();
@@ -6181,7 +6425,11 @@ void api_restore_entity_list_neo4j_part(const Neo4jPart& conn, ENTITY_LIST& enti
     std::vector<int64_t> elemid_list;
     mg_map* qparams = mg_map_make_empty(1);
     mg_map_append(qparams, mg_string_make("Y"), mg_value_make_string(conn.partname.c_str()));
-    conn.execute_bolt("MATCH (n:part {b:$Y})-[r:part_entity_ptr]->(c) RETURN id(c) ORDER BY r.idx ", qparams);
+    // ORDER BY toInteger(r.b) — part_entity_ptr 的属性 b 是 entity_idx（写入时 b:Z.V）。
+    // 原始代码用 ORDER BY r.idx，idx 字段不存在，所有行都按 NULL 排，body 顺序随机。
+    // 这会导致 api_save_entity_list_neo4j_part 的 STEP 10.5 uuid 持久化对应错乱，
+    // 也会让下游 push/get 端 body 顺序不稳定。
+    conn.execute_bolt("MATCH (n:part {b:$Y})-[r:part_entity_ptr]->(c) RETURN id(c) ORDER BY toInteger(r.b) ", qparams);
     mg_map_destroy(qparams);
 
     mg_result* result;
@@ -6236,6 +6484,640 @@ int64_t count_partnode(const Neo4jPart& conn)
     }
 
     return partnodecount;
+}
+
+// ================================================================================================
+// Mode1 Delta Push: 基于 body UUID 的增量存储
+// ================================================================================================
+
+// 读取 part 节点的当前 version（不存在则返回 0）
+int read_part_node_version(const Neo4jPart& conn, const std::string& partname) {
+    std::fprintf(stderr, "[read_part_node_version] ENTER partname=%s\n", partname.c_str());
+    fflush(stderr);
+
+    mg_map* qparams = mg_map_make_empty(1);
+    mg_map_append(qparams, mg_string_make("Y"), mg_value_make_string(partname.c_str()));
+
+    std::fprintf(stderr, "[read_part_node_version] executing bolt query\n");
+    fflush(stderr);
+    conn.execute_bolt("MATCH (n:part {b:$Y}) RETURN n.version", qparams);
+
+    int version = 0;
+    mg_result* result = nullptr;
+    std::fprintf(stderr, "[read_part_node_version] fetching result\n");
+    fflush(stderr);
+
+    if (mg_session_fetch(conn.session, &result) == 1) {
+        const mg_list* row = mg_result_row(result);
+        if (row != nullptr && mg_list_size(row) >= 1) {
+            const mg_value* v = mg_list_at(row, 0);
+            if (v != nullptr && mg_value_get_type(v) == MG_VALUE_TYPE_INTEGER) {
+                version = static_cast<int>(mg_value_integer(v));
+            }
+        }
+    }
+
+    std::fprintf(stderr, "[read_part_node_version] got version=%d, destroying qparams\n", version);
+    fflush(stderr);
+    mg_map_destroy(qparams);
+
+    std::fprintf(stderr, "[read_part_node_version] calling discard_all_results\n");
+    fflush(stderr);
+    conn.discard_all_results();
+
+    std::fprintf(stderr, "[read_part_node_version] EXIT returning %d\n", version);
+    fflush(stderr);
+    return version;
+}
+
+// 更新 part 节点的 version 字段（用于 save_delta 写回）
+void update_part_node_version(const Neo4jPart& conn, const std::string& partname, int version,
+                             const std::string& author, const std::string& timestamp) {
+    mg_map* qparams = mg_map_make_empty(5);
+    mg_map_append(qparams, mg_string_make("Y"), mg_value_make_string(partname.c_str()));
+    mg_map_append(qparams, mg_string_make("V"), mg_value_make_integer(version));
+    mg_map_append(qparams, mg_string_make("A"), mg_value_make_string(author.c_str()));
+    mg_map_append(qparams, mg_string_make("T"), mg_value_make_string(timestamp.c_str()));
+    conn.execute_bolt(
+        "MATCH (n:part {b:$Y}) SET n.version=$V, n.author=$A, n.updated_at=$T",
+        qparams);
+    mg_map_destroy(qparams);
+    conn.discard_all_results();
+}
+
+// 检查 part 节点是否已存在
+bool part_node_exists(const Neo4jPart& conn, const std::string& partname) {
+    return count_partnode(conn) > 0;
+}
+
+// 获取 body 节点的 uuid 属性（用于 pull 时构建 sat_segments_by_uuid）
+std::string get_body_node_uuid(const Neo4jPart& conn, int64_t body_node_id) {
+    mg_map* qparams = mg_map_make_empty(1);
+    mg_map_append(qparams, mg_string_make("N"), mg_value_make_integer(body_node_id));
+    conn.execute_bolt("MATCH (n) WHERE id(n)=$N RETURN n.uuid", qparams);
+
+    std::string uuid;
+    mg_result* result = nullptr;
+    if (mg_session_fetch(conn.session, &result) == 1) {
+        const mg_list* row = mg_result_row(result);
+        if (row != nullptr && mg_list_size(row) >= 1) {
+            const mg_value* v = mg_list_at(row, 0);
+            if (v != nullptr && mg_value_get_type(v) == MG_VALUE_TYPE_STRING) {
+                const mg_string* s = mg_value_string(v);
+                if (s != nullptr) {
+                    uuid = std::string(mg_string_data(s), mg_string_size(s));
+                }
+            }
+        }
+    }
+    if (mg_session_fetch(conn.session, &result) != 0) {
+        myerror("get_body_node_uuid: mg_session_fetch failed");
+    }
+    mg_map_destroy(qparams);
+    conn.discard_all_results();
+    return uuid;
+}
+
+// ------------------------------------------------------------------------------------------------
+// handleSaveDelta 核心逻辑（C++端，供 storage_bridge 调用）
+//
+// delta_uuids / delta_sat_segments: 本次新增/修改的 body uuid + 独立 SAT 文本
+// removed_uuids: 本次删除的 body uuid
+// base_version: A 端上次 push 的版本号
+//
+// 流程：
+//   1. 从 Neo4j 读取 base_version 的完整 entity_list
+//   2. 对 delta_sat_segments 逐段做 acis_restore_entity_list，合并到内存
+//   3. 按 removed_uuids 调用 api_del_entity 删除
+//   4. 全量覆盖写回 Neo4j（api_save_entity_list_neo4j_part）
+//   5. 更新 part.version = base_version + 1
+// ------------------------------------------------------------------------------------------------
+bool handle_save_delta_to_neo4j(
+    const Neo4jPart& conn,
+    int base_version,
+    const std::vector<std::string>& delta_uuids,
+    const std::vector<std::string>& delta_sat_segments,
+    const std::vector<std::string>& removed_uuids,
+    const std::string& author,
+    const std::string& timestamp,
+    int& out_new_version,
+    std::string& out_error
+) {
+    out_error.clear();
+    out_new_version = 0;
+
+    diaglog::clear_log();
+    DIAG_LOG("[save] === handleSaveDelta ENTER === delta_uuids=%zu segments=%zu removed=%zu base_version=%d\n",
+        delta_uuids.size(), delta_sat_segments.size(), removed_uuids.size(), base_version);
+    DIAG_LOG("[save] partname=%s\n", conn.partname.c_str());
+
+    std::fprintf(stderr, "[access handleSaveDelta] STEP 1: reading part_node_version\n");
+    fflush(stderr);
+
+    // 1. 检查 base_version 是否匹配
+    int current_version = read_part_node_version(conn, conn.partname);
+    std::fprintf(stderr, "[access handleSaveDelta] STEP 2: part_node_version=%d\n", current_version);
+    fflush(stderr);
+
+    if (base_version >= 0 && base_version != current_version) {
+        out_error = std::format("Version conflict: expected {}, current {}", base_version, current_version);
+        return false;
+    }
+
+    // 2. 读取 base_version 时的完整 ENTITY_LIST
+    ENTITY_LIST full_entity_list;
+    if (current_version > 0) {
+        // part 子图存在，restore
+        std::fprintf(stderr, "[access handleSaveDelta] STEP 3: restoring entity_list (current_version=%d)\n", current_version);
+        fflush(stderr);
+        api_restore_entity_list_neo4j_part(conn, full_entity_list);
+        std::fprintf(stderr, "[access handleSaveDelta] STEP 4: restore done, entity count=%d\n", (int)full_entity_list.count());
+        fflush(stderr);
+    } else {
+        // 首次 push，part 子图不存在，entity_list 保持为空
+        std::fprintf(stderr, "[access handleSaveDelta] STEP 3: first push, empty entity_list\n");
+        fflush(stderr);
+    }
+
+    std::fprintf(stderr, "[access handleSaveDelta] STEP 4/5: base_version=%d current_version=%d entity_list count=%d\n",
+                 base_version, current_version, (int)full_entity_list.count());
+    fflush(stderr);
+
+    // 3. 建立 body pointer → uuid 的映射
+    std::unordered_map<void*, std::string> body_ptr_to_uuid;
+    for (ENTITY* e : full_entity_list) {
+        if (is_BODY(e)) {
+            body_ptr_to_uuid[(void*)e] = ""; // 暂存，后续填充
+        }
+    }
+
+    // 4. 对 delta_sat_segments 逐段做 acis_restore_entity_list，加入内存
+    if (delta_uuids.size() != delta_sat_segments.size()) {
+        out_error = "delta_uuids and delta_sat_segments size mismatch";
+        return false;
+    }
+
+    std::fprintf(stderr, "[access handleSaveDelta] STEP 6: processing %zu delta segments\n", delta_uuids.size());
+    fflush(stderr);
+
+    for (size_t i = 0; i < delta_uuids.size(); ++i) {
+        const std::string& uuid = delta_uuids[i];
+        const std::string& sat_segment = delta_sat_segments[i];
+
+        if (sat_segment.empty()) {
+            std::fprintf(stderr, "[access handleSaveDelta] skip empty sat for uuid=%s\n", uuid.c_str());
+            continue;
+        }
+
+        // 写 SAT 到临时文件（用 mode1_temp::make_delta_temp_path 替代已弃用的 tmpnam_s）
+        FILE* satFile = nullptr;
+        std::string tmpPath = mode1_temp::make_delta_temp_path("dbcad_delta_save");
+        FILE* f = fopen(tmpPath.c_str(), "wb");
+        if (f == nullptr) {
+            out_error = "Failed to open temp SAT file for writing: " + tmpPath;
+            return false;
+        }
+
+        size_t written = fwrite(sat_segment.c_str(), 1, sat_segment.size(), f);
+        fflush(f);
+        fclose(f);
+
+        if (written != sat_segment.size()) {
+            remove(tmpPath.c_str());
+            out_error = "Failed to write full SAT segment";
+            return false;
+        }
+
+        std::fprintf(stderr, "[access handleSaveDelta] STEP 7[%zu]: restoring SAT uuid=%s tmpPath=%s\n", i, uuid.c_str(), tmpPath.c_str());
+        fflush(stderr);
+
+        // ACIS restore
+        FILE* readF = fopen(tmpPath.c_str(), "rb");
+        if (readF == nullptr) {
+            remove(tmpPath.c_str());
+            out_error = "Failed to open temp SAT file for reading: " + tmpPath;
+            return false;
+        }
+
+        ENTITY_LIST restored;
+        try {
+            acis_restore_entity_list(restored, readF, 2, 0, true);
+        } catch (const std::exception& ex) {
+            fclose(readF);
+            remove(tmpPath.c_str());
+            out_error = std::string("acis_restore_entity_list failed: ") + ex.what();
+            return false;
+        }
+        fclose(readF);
+        remove(tmpPath.c_str());
+
+        std::fprintf(stderr, "[access handleSaveDelta] STEP 8[%zu]: restored %d entities for uuid=%s\n", i, (int)restored.count(), uuid.c_str());
+        fflush(stderr);
+
+        if (restored.count() == 0) {
+            std::fprintf(stderr, "[access handleSaveDelta] restored 0 entities for uuid=%s\n", uuid.c_str());
+            continue;
+        }
+
+        // 取第一个 body，加入 full_entity_list
+        ENTITY* restoredBody = restored[0];
+        if (is_BODY(restoredBody)) {
+            // MODIFY 场景：先按 uuid 找到并删除 full_entity_list 里已有的同 uuid 旧 body，
+            // 避免 entity_list 里出现两个 BODY（Neo4j 会建两个 body 节点，造成重复）。
+            ENTITY* oldBodyToRemove = nullptr;
+            for (ENTITY* e : full_entity_list) {
+                if (is_BODY(e) && body_ptr_to_uuid.find((void*)e) != body_ptr_to_uuid.end() &&
+                    body_ptr_to_uuid[(void*)e] == uuid) {
+                    oldBodyToRemove = e;
+                    break;
+                }
+            }
+            if (oldBodyToRemove != nullptr) {
+                try {
+                    API_NOP_BEGIN;
+                    api_del_entity(oldBodyToRemove);
+                    API_NOP_END;
+                } catch (const std::exception& ex) {
+                    std::fprintf(stderr, "[access handleSaveDelta] api_del_entity old body uuid=%s: %s\n",
+                                 uuid.c_str(), ex.what());
+                }
+                body_ptr_to_uuid.erase((void*)oldBodyToRemove);
+            }
+            full_entity_list.add(restoredBody);
+            // 注册 uuid
+            body_ptr_to_uuid[(void*)restoredBody] = uuid;
+            std::fprintf(stderr, "[access handleSaveDelta] added body uuid=%s to entity_list (replaced=%d)\n",
+                         uuid.c_str(), oldBodyToRemove != nullptr ? 1 : 0);
+        } else {
+            std::fprintf(stderr, "[access handleSaveDelta] restored entity is not BODY, uuid=%s\n", uuid.c_str());
+        }
+    }
+
+    std::fprintf(stderr, "[access handleSaveDelta] STEP 9: processing %zu removed_uuids\n", removed_uuids.size());
+    fflush(stderr);
+
+    // 5. 按 removed_uuids 删除实体
+    for (const std::string& uuid : removed_uuids) {
+        bool removed = false;
+        for (ENTITY* e : full_entity_list) {
+            if (is_BODY(e)) {
+                auto it = body_ptr_to_uuid.find((void*)e);
+                if (it != body_ptr_to_uuid.end() && it->second == uuid) {
+                    // 找到要删除的 body，调用 api_del_entity
+                    try {
+                        API_NOP_BEGIN;
+                        api_del_entity(e);
+                        API_NOP_END;
+                    } catch (const std::exception& ex) {
+                        std::fprintf(stderr, "[access handleSaveDelta] api_del_entity failed for uuid=%s: %s\n",
+                                     uuid.c_str(), ex.what());
+                    }
+                    body_ptr_to_uuid.erase((void*)e);
+                    removed = true;
+                    break;
+                }
+            }
+        }
+        if (!removed) {
+            std::fprintf(stderr, "[access handleSaveDelta] uuid not found for deletion: %s\n", uuid.c_str());
+        }
+    }
+
+    std::fprintf(stderr, "[access handleSaveDelta] STEP 10: calling api_save_entity_list_neo4j_part, entity count=%d\n", (int)full_entity_list.count());
+    fflush(stderr);
+
+    // 6. 全量覆盖写回 Neo4j
+    api_save_entity_list_neo4j_part(conn, full_entity_list);
+
+    std::fprintf(stderr, "[access handleSaveDelta] STEP 10.5: persisting body uuids to Neo4j body nodes\n");
+    fflush(stderr);
+
+    // 6.5 闭合 uuid 持久化链路：api_save_entity_list_neo4j_part 只给 body 节点写 {a:'body'}，
+    // 不带 uuid。handleGetDelta 查询 `RETURN id(b), b.uuid` 永远返回空字符串，
+    // 客户端 pull 时 [Mode1] added body uuid= 永远是空。
+    // 这里按 entity_list 中 body 的顺序，把内存里的 body_ptr_to_uuid 写回 Neo4j body 节点的 uuid 属性。
+    // 查询路径：MATCH (n:part {b:$Y})-[r:part_entity_ptr]->(b:body) RETURN id(b) ORDER BY r.b
+    // 返回的 body 节点 id 顺序就是 entity_list 的 body 顺序（part_entity_ptr.b == entity_idx）。
+    {
+        mg_map* qparams = mg_map_make_empty(1);
+        mg_map_append(qparams, mg_string_make("Y"), mg_value_make_string(conn.partname.c_str()));
+        conn.execute_bolt(
+            "MATCH (n:part {b:$Y})-[r:part_entity_ptr]->(b:body) "
+            "RETURN id(b) AS bid, b.uuid AS buuid ORDER BY toInteger(r.b)",
+            qparams);
+        mg_map_destroy(qparams);
+
+        mg_result* result = nullptr;
+        std::vector<int64_t> bodyIdsInOrder;
+        std::vector<std::string> existingUuids;
+        while (mg_session_fetch(conn.session, &result) == 1) {
+            const mg_list* row = mg_result_row(result);
+            if (row == nullptr || mg_list_size(row) < 1) continue;
+            const mg_value* bidV = mg_list_at(row, 0);
+            int64_t bid = mg_value_integer(bidV);
+            std::string existingUuid;
+            if (mg_list_size(row) >= 2) {
+                const mg_value* buuidV = mg_list_at(row, 1);
+                if (buuidV != nullptr && mg_value_get_type(buuidV) == MG_VALUE_TYPE_STRING) {
+                    const mg_string* s = mg_value_string(buuidV);
+                    if (s != nullptr) existingUuid = std::string(mg_string_data(s), mg_string_size(s));
+                }
+            }
+            bodyIdsInOrder.push_back(bid);
+            existingUuids.push_back(existingUuid);
+        }
+        conn.discard_all_results();
+
+        // 按 entity_list 中 body 顺序，取 body_ptr_to_uuid 中对应的 uuid
+        std::vector<ENTITY*> bodyPtrsInOrder;
+        for (ENTITY* e : full_entity_list) {
+            if (is_BODY(e)) bodyPtrsInOrder.push_back(e);
+        }
+        if (bodyPtrsInOrder.size() != bodyIdsInOrder.size()) {
+            std::fprintf(stderr, "[access handleSaveDelta] body count mismatch: entity_list=%zu neo4j=%zu — skip uuid persist\n",
+                         bodyPtrsInOrder.size(), bodyIdsInOrder.size());
+        } else {
+            for (size_t i = 0; i < bodyPtrsInOrder.size(); ++i) {
+                auto it = body_ptr_to_uuid.find((void*)bodyPtrsInOrder[i]);
+                std::string targetUuid = (it != body_ptr_to_uuid.end()) ? it->second : std::string();
+                if (targetUuid.empty()) continue;
+                // 跳过同 uuid 的重复写入（已有正确 uuid）
+                if (i < existingUuids.size() && existingUuids[i] == targetUuid) continue;
+
+                mg_map* setParams = mg_map_make_empty(2);
+                mg_map_append(setParams, mg_string_make("B"), mg_value_make_integer(bodyIdsInOrder[i]));
+                mg_map_append(setParams, mg_string_make("U"), mg_value_make_string(targetUuid.c_str()));
+                conn.execute_bolt("MATCH (b:body) WHERE id(b)=$B SET b.uuid = $U", setParams);
+                mg_map_destroy(setParams);
+                conn.discard_all_results();
+            }
+            std::fprintf(stderr, "[access handleSaveDelta] persisted %zu body uuids to Neo4j\n",
+                         bodyPtrsInOrder.size());
+        }
+    }
+
+    std::fprintf(stderr, "[access handleSaveDelta] STEP 11: update_part_node_version\n");
+    fflush(stderr);
+
+    // 7. 更新 version 字段
+    int new_version = current_version + 1;
+    update_part_node_version(conn, conn.partname, new_version, author, timestamp);
+    out_new_version = new_version;
+
+    DIAG_LOG("[save-end] saved v=%d (was %d), entity_list count=%d\n",
+        new_version, current_version, (int)full_entity_list.count());
+    {
+        int body_count = 0, lump_count = 0, shell_count = 0, face_count = 0;
+        int body_with_lump = 0;
+        for (ENTITY* e : full_entity_list) {
+            if (is_BODY(e)) {
+                BODY* b = (BODY*)e;
+                if (b->lump() != nullptr) ++body_with_lump;
+                ++body_count;
+            } else if (is_LUMP(e)) {
+                LUMP* L = (LUMP*)e;
+                int ns = 0;
+                for (SHELL* s = L->shell(); s; s = s->next()) {
+                    ++ns;
+                    for (FACE* f = s->face(); f; f = f->next()) ++face_count;
+                }
+                ++lump_count;
+                shell_count += ns;
+            }
+        }
+        DIAG_LOG("[save-end] topology before write: bodies=%d (with_lump=%d) lumps=%d shells=%d faces=%d\n",
+            body_count, body_with_lump, lump_count, shell_count, face_count);
+    }
+
+    return true;
+}
+
+// ------------------------------------------------------------------------------------------------
+// handleGetDelta 核心逻辑（C++端，供 storage_bridge 调用）
+//
+// base_version: B 端上次 sync 的版本号
+//
+// 流程：
+//   1. 读取 latest_version = part_node.version
+//   2. 若 base_version >= latest_version，返回空 delta
+//   3. 从 Neo4j restore 完整 ENTITY_LIST
+//   4. 按 body uuid 切分 SAT 段，返回 sat_segments_by_uuid
+// ------------------------------------------------------------------------------------------------
+bool handle_get_delta_from_neo4j(
+    const Neo4jPart& conn,
+    int base_version,
+    int& out_latest_version,
+    std::vector<std::string>& out_body_uuids,
+    std::vector<std::string>& out_sat_segments_by_uuid,
+    std::string& out_error
+) {
+    out_error.clear();
+    out_latest_version = 0;
+    out_body_uuids.clear();
+    out_sat_segments_by_uuid.clear();
+
+    DIAG_LOG("[get] === handleGetDelta ENTER === base_version=%d\n", base_version);
+    DIAG_LOG("[get] partname=%s\n", conn.partname.c_str());
+
+    // 1. 读取最新版本号
+    out_latest_version = read_part_node_version(conn, conn.partname);
+
+    if (out_latest_version == 0) {
+        // 没有数据
+        return true;
+    }
+
+    // 2. 检查 base_version
+    if (base_version >= out_latest_version) {
+        // B 端已是最新，无需 delta
+        return true;
+    }
+
+    // 3. 从 Neo4j restore 完整 ENTITY_LIST
+    ENTITY_LIST full_entity_list;
+    api_restore_entity_list_neo4j_part(conn, full_entity_list);
+
+    DIAG_LOG("[get-delta] latest_version=%d base_version=%d entity_list.count=%d\n",
+        out_latest_version, base_version, (int)full_entity_list.count());
+    {
+        int body_count = 0, lump_count = 0, shell_count = 0, face_count = 0;
+        int body_with_lump = 0;
+        for (ENTITY* e : full_entity_list) {
+            if (is_BODY(e)) {
+                BODY* b = (BODY*)e;
+                LUMP* L = b->lump();
+                if (L != nullptr) ++body_with_lump;
+                ++body_count;
+            } else if (is_LUMP(e)) {
+                LUMP* L = (LUMP*)e;
+                int ns = 0;
+                for (SHELL* s = L->shell(); s; s = s->next()) {
+                    ++ns;
+                    for (FACE* f = s->face(); f; f = f->next()) ++face_count;
+                }
+                ++lump_count;
+                shell_count += ns;
+            }
+        }
+        DIAG_LOG("[get-delta] topology: bodies=%d (with_lump=%d) lumps=%d shells=%d faces=%d\n",
+            body_count, body_with_lump, lump_count, shell_count, face_count);
+    }
+
+    // 4. 遍历每个 body，序列化 SAT 并提取 uuid
+    for (ENTITY* e : full_entity_list) {
+        if (!is_BODY(e)) continue;
+
+        // 读取 uuid（从 body 节点的 uuid 属性）
+        std::string uuid = get_body_node_uuid(conn, 0); // 需要通过 ptr2nodeid 映射
+        // 由于 restore 后 ptr2nodeid 不在函数参数中，我们用另一种方式：
+        // 从 Neo4j 查询 body 节点及其 uuid 属性
+
+        // 为简化：先通过 serializeBodyToSatWithUuid 序列化，
+        // 但 access.cpp 中没有这个函数，我们需要：
+        //   a) 写 SAT 到临时文件
+        //   b) 读回来作为字符串
+        // 同时查询 uuid
+
+        // 方案：对 full_entity_list 中的每个 body，单独序列化 SAT
+        // 并通过单独查询获取 uuid
+    }
+
+    // 更简洁的方案：直接用 api_save_entity_list_neo4j_part 内部的方式，
+    // 但我们需要 body uuid。让我通过查询 body 节点获取 uuid。
+
+    // 查询所有 body 节点及其 uuid 属性
+    mg_map* qparams = mg_map_make_empty(1);
+    mg_map_append(qparams, mg_string_make("Y"), mg_value_make_string(conn.partname.c_str()));
+    conn.execute_bolt(
+        "MATCH (n:part {b:$Y})-[r:part_entity_ptr]->(b:body) "
+        "RETURN id(b), b.uuid ORDER BY r.b",
+        qparams);
+    mg_map_destroy(qparams);
+
+    mg_result* result = nullptr;
+    std::vector<int64_t> body_node_ids;
+    while (mg_session_fetch(conn.session, &result) == 1) {
+        const mg_list* row = mg_result_row(result);
+        if (row != nullptr && mg_list_size(row) >= 2) {
+            int64_t body_id = mg_value_integer(mg_list_at(row, 0));
+            const mg_value* uuidVal = mg_list_at(row, 1);
+            std::string uuidStr;
+            if (uuidVal != nullptr && mg_value_get_type(uuidVal) == MG_VALUE_TYPE_STRING) {
+                const mg_string* s = mg_value_string(uuidVal);
+                if (s != nullptr) {
+                    uuidStr = std::string(mg_string_data(s), mg_string_size(s));
+                }
+            }
+            body_node_ids.push_back(body_id);
+            out_body_uuids.push_back(uuidStr);
+        }
+    }
+    // 注意：while 循环结束后，查询结果已全部读取，无需再调用 mg_session_fetch
+    // 直接跳过 discard_all_results，避免 session 状态异常导致的 crash
+    // conn.discard_all_results();  // 已注释：可能触发 "called fetch while not executing a query" 错误
+
+    // 现在 body_node_ids 和 out_body_uuids 已经对齐。
+    // 下一步：为每个 body 序列化 SAT 文本。
+    // 由于 body 已经 restore 到了 full_entity_list，我们可以直接遍历。
+    // 但 full_entity_list 是 ENTITY_LIST，我们需要将 body pointer 和 node id 对应起来。
+
+    // 简化方案：通过 full_entity_list 遍历并序列化。
+    // 关键：我们需要在序列化时知道 uuid。
+    // 在当前设计中，body uuid 存储在 Neo4j 节点的 uuid 属性中，
+    // 而 restore 后 ptr2nodeid 映射丢失了（因为是内存指针）。
+    // 所以我们必须通过 Neo4j 查询获取 uuid，然后用 entity_list index 对应。
+
+    // entity_list 的顺序和 part_entity_ptr 的 idx 一致。
+    // 通过遍历 entity_list 并与 body_node_ids 匹配来建立映射。
+
+    std::unordered_map<int64_t, std::string> nodeid_to_uuid;
+    for (size_t i = 0; i < body_node_ids.size() && i < out_body_uuids.size(); ++i) {
+        nodeid_to_uuid[body_node_ids[i]] = out_body_uuids[i];
+    }
+
+    // 建立 entity ptr → uuid 的映射（通过 ptr2nodeid 不可用，改为通过 SAT 序列化+Neo4j 查询）
+    // 由于 restore 后的 body pointer 和 Neo4j node id 没有直接映射关系，
+    // 我们采用另一种方式：直接用 body_node_ids 顺序对应 entity_list 中 body 的顺序。
+
+    // 获取 entity_list 中的所有 body
+    std::vector<ENTITY*> body_ptrs;
+    for (ENTITY* e : full_entity_list) {
+        if (is_BODY(e)) {
+            body_ptrs.push_back(e);
+        }
+    }
+
+    // body_node_ids 的顺序应该和 entity_list 中 body 的顺序一致（都按 part_entity_ptr 的 idx 排序）
+    // 因为 api_restore_entity_list_neo4j_part 返回的 entity_list 就是按此顺序的。
+
+    // 现在为每个 body 序列化 SAT
+    for (size_t i = 0; i < body_ptrs.size() && i < out_body_uuids.size(); ++i) {
+        ENTITY* body = body_ptrs[i];
+        const std::string& uuid = out_body_uuids[i];
+
+        // 序列化单个 body
+        ENTITY_LIST single;
+        single.add(body);
+
+        FILE* satFile = nullptr;
+        // 用 mode1_temp::make_delta_temp_path 替代已弃用的 tmpnam_s
+        std::string tmpPath = mode1_temp::make_delta_temp_path("dbcad_delta_get");
+
+        FILE* f = fopen(tmpPath.c_str(), "wb");
+        if (f == nullptr) continue;
+
+        // 设置 ACIS 版本信息
+        api_save_version(2, 0);
+        FileInfo fi;
+        fi.set_units(1.0);
+        fi.set_product_id("dbcad_mode1");
+        api_set_file_info((FileIdent | FileUnits), fi);
+
+        // 关键 1：开 sequence_save_files 让 ACIS 写 SAT schema header（schema-version / product-id），
+        // 否则 pull 端 acis_restore_entity_list 读不到合法 header 会静默返回"无拓扑的 body"，
+        // 表面看起来 restore 成功，但 CreateMeshFromEntity 会因为 numFaces=0/numEdges=0 FAILED。
+        // 关键 2：text_mode 必须用 1（true / 文本），不能用 2；2 跟 ACIS 标准不一致。
+        // 关键 3：所有直接 api_* 调用必须包 API_NOP_BEGIN/END（参考技术路线第 6.1 节）。
+        outcome save_result;
+        try {
+                API_NOP_BEGIN;
+                api_set_int_option("sequence_save_files", 1);
+                save_result = api_save_entity_list(f, true, single);
+                API_NOP_END;
+            } catch (const std::exception& ex) {
+                std::fprintf(stderr, "[access handleGetDelta] api_save_entity_list threw for uuid=%s: %s\n",
+                             uuid.c_str(), ex.what());
+                fclose(f);
+                remove(tmpPath.c_str());
+                continue;
+            }
+
+        if (!save_result.ok()) {
+            fclose(f);
+            remove(tmpPath.c_str());
+            continue;
+        }
+        fclose(f);
+
+        // 读回作为字符串
+        FILE* readF = fopen(tmpPath.c_str(), "rb");
+        std::string satContent;
+        if (readF != nullptr) {
+            char buf[8192];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), readF)) > 0) {
+                satContent.append(buf, n);
+            }
+            fclose(readF);
+        }
+        remove(tmpPath.c_str());
+
+        out_sat_segments_by_uuid.push_back(satContent);
+        std::fprintf(stderr, "[access handleGetDelta] body uuid=%s sat_len=%d\n",
+                     uuid.c_str(), (int)satContent.size());
+    }
+
+    return true;
 }
 
 void acis_save_entity_list(const ENTITY_LIST& elist, const char* file_name, int major_version, int minor_version,

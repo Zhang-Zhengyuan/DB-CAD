@@ -61,6 +61,44 @@ public:
         int version
     );
 
+    // ========== Mode1 Delta Push / Pull ==========
+    struct DeltaSavePayload {
+        int version = 0;
+        QString projectId;
+        QString author;
+        QString createdAt;
+    };
+
+    struct DeltaBodyItem {
+        QString uuid;
+        QString sat;
+    };
+
+    struct DeltaPullPayload {
+        int version = 0;
+        QList<DeltaBodyItem> deltaBodies;
+        QStringList deletedUuids;
+    };
+
+    // POST /projects/{projectId}/delta — Mode1 Delta Push
+    // 【Phase B】sourceClientId：可选，提交方 client_id；服务端会基于它在
+    // broadcast 时排除自身，避免回声。
+    std::optional<DeltaSavePayload> saveDelta(
+        const QString& projectId,
+        const QString& author,
+        std::optional<int> baseVersion,
+        const QStringList& deltaUuids,
+        const QStringList& deltaSatSegments,
+        const QStringList& removedUuids,
+        const QString& sourceClientId = QString()
+    );
+
+    // GET /projects/{projectId}/delta?base_version=X — Mode1 Delta Pull
+    std::optional<DeltaPullPayload> getDelta(
+        const QString& projectId,
+        int baseVersion
+    );
+
 private:
     struct HttpResult {
         int statusCode = -1;

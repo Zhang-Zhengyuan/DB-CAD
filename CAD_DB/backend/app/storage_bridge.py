@@ -258,3 +258,76 @@ class StorageBridgeClient:
                 detail="Storage bridge returned invalid versions list",
             )
         return [self._parse_version(item) for item in rows]
+
+    # ================================================================================================
+    # Mode1 Delta Push / Pull
+    # ================================================================================================
+
+    def save_delta(
+        self,
+        project_id: str,
+        author: str,
+        base_version: int | None,
+        delta_uuids: list[str],
+        delta_sat_segments: list[str],
+        removed_uuids: list[str],
+        source_client_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Mode1 Delta Push: POST /projects/{projectId}/delta
+        Delegates to the C++ storage_bridge handleSaveDelta.
+        Returns {"version": int, "project_id": str, "author": str, "created_at": str}
+        """
+        encoded = quote(project_id, safe="")
+        print(f"[storage_bridge save_delta] POST /projects/{encoded}/delta "
+              f"base_version={base_version} delta_uuids={len(delta_uuids)} "
+              f"delta_sat_segments={len(delta_sat_segments)} removed_uuids={len(removed_uuids)}", flush=True)
+        # 【Phase B】通过 HTTP header 把提交方 client_id 透传到 bridge。
+        # bridge 内部写入 BridgeVersionDelta.source_client_id 节点属性，
+        # FastAPI 在 broadcast 时再用 exclude_client_id 排除提交者。
+        headers = {}
+        if source_client_id:
+            headers["X-Source-Client-Id"] = source_client_id
+        response = self._request(
+            "POST",
+            f"/projects/{encoded}/delta",
+            json={
+                "author": author,
+                "base_version": base_version,
+                "delta_uuids": delta_uuids,
+                "delta_sat_segments": delta_sat_segments,
+                "removed_uuids": removed_uuids,
+            },
+            headers=headers or None,
+        )
+        print(f"[storage_bridge save_delta] POST /projects/{encoded}/delta status={response.status_code}", flush=True)
+        try:
+            data = response.json()
+        except Exception as ex:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Storage bridge returned non-JSON delta response: {ex}",
+            ) from ex
+        return dict(data)
+
+    def get_delta(self, project_id: str, base_version: int) -> dict[str, Any]:
+        """
+        Mode1 Delta Pull: GET /projects/{projectId}/delta?base_version=X
+        Returns {"version": int, "delta_bodies": [{"uuid": str, "sat": str}, ...], "deleted_uuids": []}
+        """
+        encoded = quote(project_id, safe="")
+        print(f"[storage_bridge get_delta] GET /projects/{encoded}/delta base_version={base_version}", flush=True)
+        response = self._request(
+            "GET",
+            f"/projects/{encoded}/delta",
+            params={"base_version": base_version},
+        )
+        print(f"[storage_bridge get_delta] GET /projects/{encoded}/delta status={response.status_code}", flush=True)
+        try:
+            data = response.json()
+        except Exception as ex:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Storage bridge returned non-JSON delta response: {ex}",
+            ) from ex
+        return dict(data)

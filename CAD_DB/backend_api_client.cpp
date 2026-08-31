@@ -506,3 +506,150 @@ std::optional<BackendApiClient::EntityGraphPayload> BackendApiClient::getEntityV
     }
     return result;
 }
+
+// ---------------------------------------------------------------------------
+// Mode1 Delta Push / Pull
+// ---------------------------------------------------------------------------
+
+std::optional<BackendApiClient::DeltaSavePayload> BackendApiClient::saveDelta(
+    const QString& projectId,
+    const QString& author,
+    std::optional<int> baseVersion,
+    const QStringList& deltaUuids,
+    const QStringList& deltaSatSegments,
+    const QStringList& removedUuids,
+    const QString& sourceClientId
+) {
+    errorMessage.clear();
+
+    QJsonArray deltaUuidsJson;
+    for (const QString& uuid : deltaUuids) {
+        deltaUuidsJson.append(uuid);
+    }
+    QJsonArray deltaSatSegmentsJson;
+    for (const QString& sat : deltaSatSegments) {
+        deltaSatSegmentsJson.append(sat);
+    }
+    QJsonArray removedUuidsJson;
+    for (const QString& uuid : removedUuids) {
+        removedUuidsJson.append(uuid);
+    }
+
+    QJsonObject payload;
+    payload.insert("author", author);
+    if (baseVersion.has_value()) {
+        payload.insert("base_version", *baseVersion);
+    } else {
+        payload.insert("base_version", QJsonValue::Null);
+    }
+    payload.insert("delta_uuids", deltaUuidsJson);
+    payload.insert("delta_sat_segments", deltaSatSegmentsJson);
+    payload.insert("removed_uuids", removedUuidsJson);
+    // 【Phase B】把本端 client_id 带给 server，server 在 broadcast 时用
+    // exclude_client_id 排除本端，避免 mode1_delta_saved 事件回声触发二次 pull。
+    if (!sourceClientId.isEmpty()) {
+        payload.insert("source_client_id", sourceClientId);
+    }
+
+    fprintf(stderr, "[backend_api_client saveDelta] POST /projects/%s/delta delta_uuids=%d delta_sat_segments=%d removed_uuids=%d source_client_id=%s\n",
+            projectId.toUtf8().constData(), deltaUuids.size(), deltaSatSegments.size(), removedUuids.size(),
+            sourceClientId.isEmpty() ? "(empty)" : sourceClientId.toUtf8().constData());
+
+    HttpResult response = sendJsonRequest(
+        "POST",
+        QString("/projects/%1/delta").arg(projectId),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact)
+    );
+
+    if (!response.error.isEmpty() && response.statusCode <= 0) {
+        errorMessage = response.error;
+        return std::nullopt;
+    }
+
+    if (response.statusCode == 409) {
+        errorMessage = QString::fromUtf8("Delta 版本冲突（base_version 与服务端最新版本不匹配）");
+        return std::nullopt;
+    }
+
+    if (response.statusCode != 201) {
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("保存 delta 失败"), response.statusCode, response.body);
+        return std::nullopt;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        errorMessage = QString::fromUtf8("保存 delta 返回数据格式错误");
+        return std::nullopt;
+    }
+
+    const QJsonObject root = doc.object();
+    DeltaSavePayload result;
+    result.version = root.value("version").toInt(0);
+    result.projectId = root.value("project_id").toString();
+    result.author = root.value("author").toString();
+    result.createdAt = root.value("created_at").toString();
+
+    if (result.version <= 0) {
+        errorMessage = QString::fromUtf8("保存 delta 返回版本号无效");
+        return std::nullopt;
+    }
+
+    fprintf(stderr, "[backend_api_client saveDelta] SUCCESS v=%d projectId=%s\n",
+            result.version, result.projectId.toUtf8().constData());
+    return result;
+}
+
+std::optional<BackendApiClient::DeltaPullPayload> BackendApiClient::getDelta(
+    const QString& projectId,
+    int baseVersion
+) {
+    errorMessage.clear();
+
+    fprintf(stderr, "[backend_api_client getDelta] GET /projects/%s/delta base_version=%d\n",
+            projectId.toUtf8().constData(), baseVersion);
+
+    HttpResult response = sendJsonRequest(
+        "GET",
+        QString("/projects/%1/delta?base_version=%2").arg(projectId).arg(baseVersion)
+    );
+
+    if (!response.error.isEmpty() && response.statusCode <= 0) {
+        errorMessage = response.error;
+        return std::nullopt;
+    }
+
+    if (response.statusCode != 200) {
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("获取 delta 失败"), response.statusCode, response.body);
+        return std::nullopt;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        errorMessage = QString::fromUtf8("获取 delta 返回数据格式错误");
+        return std::nullopt;
+    }
+
+    const QJsonObject root = doc.object();
+    DeltaPullPayload result;
+    result.version = root.value("version").toInt(0);
+
+    const QJsonArray deltaBodiesArr = root.value("delta_bodies").toArray();
+    for (const QJsonValue& v : deltaBodiesArr) {
+        const QJsonObject item = v.toObject();
+        DeltaBodyItem body;
+        body.uuid = item.value("uuid").toString();
+        body.sat = item.value("sat").toString();
+        result.deltaBodies.append(body);
+    }
+
+    const QJsonArray deletedArr = root.value("deleted_uuids").toArray();
+    for (const QJsonValue& v : deletedArr) {
+        result.deletedUuids.append(v.toString());
+    }
+
+    fprintf(stderr, "[backend_api_client getDelta] SUCCESS v=%d delta_bodies=%d deleted_uuids=%d\n",
+            result.version, result.deltaBodies.size(), result.deletedUuids.size());
+    return result;
+}

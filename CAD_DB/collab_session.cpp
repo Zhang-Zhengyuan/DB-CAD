@@ -14,6 +14,7 @@ CollabSession& CollabSession::instance() {
 }
 
 void CollabSession::bindLegacyFields(
+    QString& fastapi_project_id,
     int&     fastapi_model_version,
     int&     fastapi_pending_remote_version,
     QString& fastapiLastPublishReason,
@@ -32,16 +33,18 @@ void CollabSession::bindLegacyFields(
     fastapiLocalDirtyDuringSubmit_ref_      = &fastapiLocalDirtyDuringSubmit;
     fastapiApplyingRemoteSnapshot_ref_      = &fastapiApplyingRemoteSnapshot;
     fastapiPublishingSnapshot_ref_          = &fastapiPublishingSnapshot;
-    fastapiLocalDirty_ref_                  = &fastapiLocalDirty;
+    fastapiLocalDirty_ref_                 = &fastapiLocalDirty;
+    fastapi_project_id_ref_                = &fastapi_project_id;
 
-    snapshot_.modelVersion           = fastapi_model_version;
-    snapshot_.pendingRemoteVersion   = fastapi_pending_remote_version;
-    snapshot_.lastPublishReason     = fastapiLastPublishReason;
-    snapshot_.submitRequestId       = fastapiPendingSubmitRequestId;
-    snapshot_.submitInFlight        = fastapiSubmitInFlight;
+    snapshot_.projectId            = fastapi_project_id;
+    snapshot_.modelVersion         = fastapi_model_version;
+    snapshot_.pendingRemoteVersion  = fastapi_pending_remote_version;
+    snapshot_.lastPublishReason    = fastapiLastPublishReason;
+    snapshot_.submitRequestId      = fastapiPendingSubmitRequestId;
+    snapshot_.submitInFlight       = fastapiSubmitInFlight;
     snapshot_.localDirtyDuringSubmit= fastapiLocalDirtyDuringSubmit;
     snapshot_.applyingRemoteSnapshot= fastapiApplyingRemoteSnapshot;
-    snapshot_.publishingSnapshot    = fastapiPublishingSnapshot;
+    snapshot_.publishingSnapshot   = fastapiPublishingSnapshot;
 
     emitDump(Event::Bound, true);
 }
@@ -120,6 +123,13 @@ void CollabSession::mirrorToLegacy() const {
     *fastapiApplyingRemoteSnapshot_ref_     = snapshot_.applyingRemoteSnapshot;
     *fastapiPublishingSnapshot_ref_         = snapshot_.publishingSnapshot;
     *fastapiLocalDirty_ref_ = (state_ == State::Connected_LocalDirty);
+    // projectId 不在 transition 时清零，只在 loadFile / setProjectId 时才写入。
+    // 否则 disconnectFastAPISync() → onDisconnected() → transition() → mirrorToLegacy()
+    // 会把空的 snapshot_.projectId 覆盖掉 loadFile 里刚设置好的 fastapi_project_id，
+    // 导致 reconnectFastAPISync 的 EARLY-RETURN 检查失败。
+    if (!snapshot_.projectId.isEmpty()) {
+        *fastapi_project_id_ref_ = snapshot_.projectId;
+    }
 }
 
 void CollabSession::transition(State newState, Event event) {

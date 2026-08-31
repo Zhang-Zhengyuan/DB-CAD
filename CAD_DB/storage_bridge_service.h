@@ -26,6 +26,10 @@ private:
         QString method;
         QString path;
         QByteArray body;
+        // 【Phase B】HTTP 头 X-Source-Client-Id，标识本次 save_delta 提交方 client_id，
+        // 用于上层 FastAPI 在 broadcast 时 exclude_client_id 排除提交者。
+        // 其他接口可不填。
+        QString sourceClientId;
     };
 
     bool parseHttpRequest(QByteArray& buffer, HttpRequest& request);
@@ -39,6 +43,11 @@ private:
     QByteArray handleGetProject(const QString& projectId, int& statusCode, QString& error);
     QByteArray handleGetProjectByName(const QString& projectName, int& statusCode, QString& error);
     QByteArray handleCreateModel(const QString& projectId, const QByteArray& body, int& statusCode, QString& error);
+    QByteArray handleSaveDelta(const QString& projectId, const QByteArray& body, int& statusCode, QString& error);
+    QByteArray handleGetDelta(const QString& projectId, int baseVersion, int& statusCode, QString& error);
+    // 【Phase B】上一笔 save_delta 提交方的 client_id（来自 HTTP header 或 body），
+    // 用于上层 FastAPI broadcast 时 exclude_client_id 排除该提交方自己。
+    QString lastDeltaSourceClientId;
     QByteArray handleGetLatestModel(const QString& projectId, int& statusCode, QString& error);
     QByteArray handleGetModelVersion(const QString& projectId, int version, int& statusCode, QString& error);
     QByteArray handleListVersions(const QString& projectId, int limit, int offset, int& statusCode, QString& error);

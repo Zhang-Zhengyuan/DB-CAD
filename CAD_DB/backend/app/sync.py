@@ -30,7 +30,6 @@ class ProjectSyncManager:
         return lock
 
     async def connect(self, project_id: str, websocket: WebSocket, client_id: str, author: str) -> None:
-        await websocket.accept()
         async with self._lock:
             self._connections[project_id][client_id] = ClientConnection(
                 websocket=websocket,

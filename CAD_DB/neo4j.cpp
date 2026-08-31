@@ -67,14 +67,26 @@ void Neo4jPart::discard_all_results() const {
     }
     mg_result* result;
     int status;
+    int count = 0;
     while (1)
     {
         status = mg_session_fetch(session, &result);
+        count++;
         if (status == 0)
         {
+            // 正常退出
             break;
         } else if (status != 1) {
-            throw std::runtime_error(std::format("mg_session_fetch失败，错误信息如下：{}", mg_session_error(session)));
+            // 错误，但 session 可能已损坏
+            std::fprintf(stderr, "[Neo4jPart discard_all_results] mg_session_fetch returned %d after %d iterations, error: %s\n",
+                         status, count, mg_session_error(session) ? mg_session_error(session) : "unknown");
+            // 不再 throw，避免 abort
+            return;
+        }
+        // status == 1: 成功获取一行结果，继续循环
+        if (count > 100000) {
+            std::fprintf(stderr, "[Neo4jPart discard_all_results] WARNING: too many results (>100000), breaking\n");
+            return;
         }
     }
 }

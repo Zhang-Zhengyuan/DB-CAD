@@ -129,6 +129,17 @@ public:
     const QString& submitRequestId() const       { return snapshot_.submitRequestId; }
     const QString& lastPublishReason() const    { return snapshot_.lastPublishReason; }
 
+    // Mode1 delta 版本追踪
+    int pushedVersion() const { return snapshot_.pushedVersion; }
+    void setPushedVersion(int v) { snapshot_.pushedVersion = v; }
+
+    // 项目 ID（由 legacy fastapi_project_id mirror）
+    const QString& projectId() const { return snapshot_.projectId; }
+    void setProjectId(const QString& id) { snapshot_.projectId = id; mirrorToLegacy(); }
+
+    // 连接状态
+    bool isConnected() const { return state_ != State::Disconnected; }
+
     // 状态写入接口
     void setModelVersion(int v);
     void setPendingRemoteVersion(int pv);
@@ -136,6 +147,7 @@ public:
 
     // 旧字段绑定（兼容层）
     void bindLegacyFields(
+        QString& fastapi_project_id,
         int&    fastapi_model_version,
         int&    fastapi_pending_remote_version,
         QString& fastapiLastPublishReason,
@@ -165,6 +177,8 @@ private:
     struct Snapshot {
         int  modelVersion = 0;
         int  pendingRemoteVersion = 0;
+        int  pushedVersion = 0;  // Mode1: 上次成功 push 的版本号
+        QString projectId;       // 当前连接的 project_id
         QString submitRequestId;
         QString lastPublishReason;
         bool submitInFlight = false;
@@ -192,6 +206,7 @@ private:
     bool*    fastapiApplyingRemoteSnapshot_ref_      = nullptr;
     bool*    fastapiPublishingSnapshot_ref_          = nullptr;
     bool*    fastapiLocalDirty_ref_                  = nullptr;
+    QString* fastapi_project_id_ref_                 = nullptr;
 
     mutable qint64 last_dump_ms_[17] = {0};
 

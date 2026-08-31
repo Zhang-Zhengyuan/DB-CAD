@@ -694,10 +694,74 @@ function Stop-StartedProcess([object]$Process, [string]$Name) {
     }
 }
 
+function Stop-PackageProcesses([string]$PackageRoot) {
+    $clientDir = Join-Path $PackageRoot "client"
+    $bridgeDir = Join-Path $PackageRoot "server\bridge-bin"
+
+    $exePaths = @($clientDir, $bridgeDir)
+    $stoppedCount = 0
+
+    foreach ($dir in $exePaths) {
+        $exe = Join-Path $dir "CAD_DB.exe"
+        if (Test-Path -LiteralPath $exe) {
+            $running = Get-Process -Name "CAD_DB" -ErrorAction SilentlyContinue | Where-Object {
+                $_.Path -ieq $exe
+            }
+            foreach ($proc in $running) {
+                try {
+                    Write-Host "[INFO] Stopping running CAD_DB.exe (PID $($proc.Id)) to allow sync..."
+                    Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+                    $stoppedCount++
+                    Start-Sleep -Milliseconds 500
+                } catch {
+                    Write-Warning "Failed to stop CAD_DB.exe PID $($proc.Id): $($_.Exception.Message)"
+                }
+            }
+        }
+    }
+
+    if ($stoppedCount -gt 0) {
+        Start-Sleep -Seconds 1
+    }
+}
+
+function Stop-ProcessByPort([int]$Port, [string]$Protocol = "TCP") {
+    $output = netstat -ano | Select-String -Pattern ":$Port\s+.+LISTENING"
+    $pids = $output | ForEach-Object {
+        if ($_ -match '\s+(\d+)\s*$') {
+            [int]$matches[1]
+        }
+    } | Select-Object -Unique
+
+    $stoppedCount = 0
+    foreach ($processId in $pids) {
+        if ($processId -eq 0) { continue }
+        try {
+            $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
+            if ($null -ne $proc) {
+                Write-Host "[INFO] Stopping process using port $Port (PID $processId, name: $($proc.ProcessName))..."
+                Stop-Process -Id $processId -Force -ErrorAction Stop
+                $stoppedCount++
+                Start-Sleep -Milliseconds 500
+            }
+        } catch {
+            $errMsg = $_.Exception.Message
+            Write-Warning "Failed to stop process PID $processId on port $Port`: $errMsg"
+        }
+    }
+
+    if ($stoppedCount -gt 0) {
+        Start-Sleep -Seconds 1
+    }
+    return $stoppedCount
+}
+
 function Write-TextFile([string]$Path, [string]$Text) {
     $parent = Split-Path -Parent $Path
     Ensure-Directory $parent | Out-Null
-    Set-Content -LiteralPath $Path -Value $Text -Encoding UTF8
+    # [System.IO.File]::WriteAllText 默认写 UTF-8 without BOM，
+    # 避免 BOM 污染 conf 文件导致 C++ 读取时 base_url 带不可见字符。
+    [System.IO.File]::WriteAllText($Path, $Text, [System.Text.Encoding]::UTF8)
 }
 
 function Write-PidFile([string]$Path, [object]$Data) {
@@ -1057,6 +1121,11 @@ $fastApiListenUrl = "http://$FastApiHost`:$FastApiPort"
 $bridgeUrl = "http://$bridgeProbeHost`:$BridgePort"
 $bridgeListenUrl = "http://$BridgeHost`:$BridgePort"
 
+# Stop any running CAD_DB.exe in the package directories before syncing
+if (-not $SkipPackageSync) {
+    Stop-PackageProcesses -PackageRoot $PackageRoot
+}
+
 if (-not $SkipPackageSync) {
     Write-Host "[INFO] Syncing fullstack package: $PackageRoot"
     Write-Host "[INFO] Latest CAD_DB.exe: $($latestExe.FullName) ($($latestExe.LastWriteTime))"
@@ -1147,9 +1216,12 @@ if (Test-ServiceHealth "$bridgeUrl/health") {
     if ($KeepExistingServices) {
         Write-Warning "Bridge is already healthy at $bridgeUrl/health. Reusing it because -KeepExistingServices was set."
     } else {
-        throw "Bridge is already running at $bridgeUrl/health. Stop the old process first or pass -KeepExistingServices to reuse it."
+        Write-Host "[INFO] Bridge is already running at $bridgeUrl/health. Stopping old process to restart..."
+        Stop-ProcessByPort -Port $BridgePort
     }
-} else {
+}
+
+if (-not (Test-ServiceHealth "$bridgeUrl/health")) {
     Write-Host "[INFO] Starting storage bridge: $bridgeListenUrl"
     $bridgeProcess = Start-StorageBridge `
         -ExePath $bridgeExe `
@@ -1173,9 +1245,12 @@ if (Test-ServiceHealth "$fastApiUrl/health") {
     if ($KeepExistingServices) {
         Write-Warning "FastAPI is already healthy at $fastApiUrl/health. Reusing it because -KeepExistingServices was set."
     } else {
-        throw "FastAPI is already running at $fastApiUrl/health. Stop the old process first or pass -KeepExistingServices to reuse it."
+        Write-Host "[INFO] FastAPI is already running at $fastApiUrl/health. Stopping old process to restart..."
+        Stop-ProcessByPort -Port $FastApiPort
     }
-} else {
+}
+
+if (-not (Test-ServiceHealth "$fastApiUrl/health")) {
     Write-Host "[INFO] Starting FastAPI: $fastApiListenUrl"
     $backendProcess = Start-FastApi `
         -ServerDir $paths.ServerDir `
@@ -1198,9 +1273,14 @@ if (Test-ServiceHealth "$fastApiUrl/health") {
 
 if ((-not $SkipClient) -and $ClientCount -gt 0) {
     Write-Host "[INFO] Starting $ClientCount client instance(s): $clientExe"
+    # 调试期：让每个客户端按 PID 把 stdout/stderr 重定向到独立文件，
+    # 避免两个 CAD_DB.exe 互相覆盖同一个 log/log_*.txt。
+    # 关闭方法：把 $env:DBCAD_REDIRECT_LOG 设为 "0" 再启动，或把这段包到 if ($false) 里。
+    $env:DBCAD_REDIRECT_LOG = "1"
     for ($i = 1; $i -le $ClientCount; $i++) {
         $clientProcesses += Start-Process -FilePath $clientExe -WorkingDirectory $paths.ClientDir -PassThru
     }
+    Write-Host "[INFO] Per-PID client logs: <client-dir>\log\CAD_DB_<pid>.log"
 }
 
 $pidData = [ordered]@{

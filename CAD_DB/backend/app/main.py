@@ -243,6 +243,142 @@ async def save_model(
     return schemas.SaveResult(version=version.version, created_at=version.created_at)
 
 
+# ---------------------------------------------------------------------------
+# Mode1 Delta Push / Pull — delegates to C++ storage_bridge
+# ---------------------------------------------------------------------------
+
+@app.post("/projects/{project_id}/delta", status_code=201)
+async def save_delta(
+    project_id: str,
+    payload: schemas.SaveDeltaRequest,
+    _: None = Depends(verify_api_password),
+) -> dict[str, Any]:
+    """
+    Mode1 Delta Push: delegate to C++ storage_bridge handleSaveDelta.
+
+    Request body:
+    {
+        "author": "<name>",
+        "base_version": <int|null>,
+        "delta_uuids": ["uuid1", ...],
+        "delta_sat_segments": ["sat_body_1", ...],
+        "removed_uuids": ["uuid3", ...],
+        "source_client_id": "<optional, 提交方 client_id 用于 broadcast 排除自身>"
+    }
+
+    Response:
+    {
+        "version": <int>,
+        "project_id": "<id>",
+        "author": "<name>",
+        "created_at": "<iso-timestamp>"
+    }
+
+    【Phase B】save_delta 成功后通过 WebSocket 广播 mode1_delta_saved 事件，
+    让其他连接到该项目 room 的客户端自动 pull。源 client 自身通过 exclude_client_id
+    排除，避免回声。
+    """
+    from . import crud
+    bridge = crud.storage_bridge
+    if bridge is None:
+        raise HTTPException(status_code=503, detail="Storage bridge not configured")
+
+    print(f"[fastapi save_delta] project_id={project_id} base_version={payload.base_version} "
+          f"delta_uuids={len(payload.delta_uuids)} "
+          f"delta_sat_segments={len(payload.delta_sat_segments)} "
+          f"removed_uuids={len(payload.removed_uuids)} "
+          f"source_client_id={payload.source_client_id or '(empty)'}",
+          flush=True)
+
+    try:
+        result = bridge.save_delta(
+            project_id=project_id,
+            author=payload.author,
+            base_version=payload.base_version,
+            delta_uuids=payload.delta_uuids,
+            delta_sat_segments=payload.delta_sat_segments,
+            removed_uuids=payload.removed_uuids,
+            source_client_id=payload.source_client_id,
+        )
+        print(f"[fastapi save_delta] SUCCESS version={result.get('version')} project_id={project_id}", flush=True)
+    except HTTPException:
+        raise
+    except Exception as ex:
+        print(f"[fastapi save_delta] FAILED project_id={project_id} ex={ex}", flush=True)
+        raise HTTPException(status_code=500, detail=str(ex))
+
+    # 【Phase B】成功后广播 mode1_delta_saved 给该项目下的其他客户端
+    # 排除提交方自身（payload.source_client_id），避免自己的回声触发二次 pull。
+    new_version = result.get("version", 0)
+    broadcast_event = {
+        "type": "mode1_delta_saved",
+        "project_id": project_id,
+        "version": new_version,
+        "delta_count": len(payload.delta_uuids),
+        "deleted_count": len(payload.removed_uuids),
+        "author": payload.author,
+        "created_at": result.get("created_at"),
+        "trigger": "http_save_delta",
+        "source_client_id": payload.source_client_id,
+    }
+    print(f"[fastapi save_delta] broadcasting mode1_delta_saved v={new_version} to room={project_id} "
+          f"exclude_client_id={payload.source_client_id or '(none)'}",
+          flush=True)
+    try:
+        await sync_manager.broadcast(
+            project_id,
+            broadcast_event,
+            exclude_client_id=payload.source_client_id,
+        )
+        print(f"[fastapi save_delta] broadcast OK", flush=True)
+    except Exception as ex:
+        # 广播失败不影响 push 成功的语义——B 端仍可手动 Pull
+        print(f"[fastapi save_delta] broadcast FAILED (push still succeeds): {ex}", flush=True)
+
+    return result
+
+
+@app.get("/projects/{project_id}/delta")
+async def get_delta(
+    project_id: str,
+    base_version: int = Query(..., ge=0),
+    _: None = Depends(verify_api_password),
+) -> dict[str, Any]:
+    """
+    Mode1 Delta Pull: delegate to C++ storage_bridge handleGetDelta.
+
+    Query params:
+      base_version: B 端上次 sync 的版本号
+
+    Response:
+    {
+        "version": <int>,                    # 最新版本号
+        "delta_bodies": [                   # 本次所有 body 的 uuid + SAT
+            {"uuid": "<uuid>", "sat": "<sat>"},
+            ...
+        ],
+        "deleted_uuids": []                # 当前为空，B 端通过集合差计算
+    }
+    """
+    from . import crud
+    bridge = crud.storage_bridge
+    if bridge is None:
+        raise HTTPException(status_code=503, detail="Storage bridge not configured")
+
+    print(f"[fastapi get_delta] project_id={project_id} base_version={base_version}", flush=True)
+
+    try:
+        result = bridge.get_delta(project_id=project_id, base_version=base_version)
+        print(f"[fastapi get_delta] SUCCESS version={result.get('version')} "
+              f"delta_bodies={len(result.get('delta_bodies', []))} project_id={project_id}", flush=True)
+        return result
+    except HTTPException:
+        raise
+    except Exception as ex:
+        print(f"[fastapi get_delta] FAILED project_id={project_id} ex={ex}", flush=True)
+        raise HTTPException(status_code=500, detail=str(ex))
+
+
 async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, trigger: str) -> None:
     try:
         latest = crud.get_latest_version_or_404(project_id)
@@ -554,9 +690,22 @@ async def _handle_project_ws_message(
 
 @app.websocket("/ws/projects/{project_id}")
 async def ws_project_sync(websocket: WebSocket, project_id: str) -> None:
+    incoming_ts = datetime.now(timezone.utc).isoformat()
+    incoming_query = dict(websocket.query_params)
+    has_pw = bool(incoming_query.get("password"))
+    print(f"[WS] incoming ts={incoming_ts} project_id={project_id} "
+          f"client_id={incoming_query.get('client_id')} "
+          f"author={incoming_query.get('author')} has_password={has_pw}",
+          flush=True)
+
     if settings.api_password and websocket.query_params.get("password") != settings.api_password:
+        print(f"[WS] REJECT password mismatch project_id={project_id}", flush=True)
         await websocket.close(code=1008)
         return
+
+    print(f"[WS] ACCEPT project_id={project_id} (awaiting websocket.accept)", flush=True)
+    await websocket.accept()
+    print(f"[WS] ACCEPTED project_id={project_id}", flush=True)
 
     client_id = websocket.query_params.get("client_id") or uuid4().hex
     author = (websocket.query_params.get("author") or "anonymous").strip() or "anonymous"
@@ -599,6 +748,7 @@ async def ws_project_sync(websocket: WebSocket, project_id: str) -> None:
                     "author": disconnected["author"],
                 },
             )
+    print(f"[WS] CLOSED project_id={project_id} client_id={client_id}", flush=True)
 
 
 # ---------------------------------------------------------------------------

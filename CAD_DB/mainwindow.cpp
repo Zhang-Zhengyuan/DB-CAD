@@ -169,7 +169,16 @@ std::vector<std::string> read_config_lines(const std::string& filePath, int maxL
         std::ifstream fs(p, std::ios_base::in);
         if (!fs.is_open()) return false;
         std::string line;
+        // Strip UTF-8 BOM (\xEF\xBB\xBF) that PowerShell's Set-Content -Encoding UTF8 writes.
+        bool firstLine = true;
         while (static_cast<int>(values.size()) < maxLines && std::getline(fs, line)) {
+            if (firstLine && line.size() >= 3 &&
+                static_cast<unsigned char>(line[0]) == 0xEF &&
+                static_cast<unsigned char>(line[1]) == 0xBB &&
+                static_cast<unsigned char>(line[2]) == 0xBF) {
+                line.erase(0, 3);
+            }
+            firstLine = false;
             values.push_back(trim_copy(line));
         }
         return true;
@@ -360,6 +369,7 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags flags) : QMainWindow(par
     api_ensure_empty_root_state(hs, root_state);
 
     CollabSession::instance().bindLegacyFields(
+        fastapi_project_id,
         fastapi_model_version,
         fastapi_pending_remote_version,
         fastapiLastPublishReason,
@@ -488,6 +498,11 @@ void MainWindow::setFastAPIConnectInfo() {
     }
 
     statusBar()->showMessage(tr("FastAPI连接信息已更新"), 2000);
+
+    // 保存连接信息后，如果有项目ID则重新建立WebSocket连接
+    if (!fastapi_project_id.isEmpty() && !fastapi_base_url.empty()) {
+        reconnectFastAPISync();
+    }
 }
 
 void MainWindow::setBridgeConnectInfo() {
@@ -1109,6 +1124,10 @@ bool MainWindow::applyRemoteSatSnapshot(const QString& satContent, const QString
 }
 
 void MainWindow::disconnectFastAPISync() {
+    std::fprintf(stderr, "[DEBUG] disconnectFastAPISync ENTER pid=%llu has_socket=%d base_url_len=%zu\n",
+                 (unsigned long long)QCoreApplication::applicationPid(),
+                 fastapiSyncSocket != nullptr ? 1 : 0,
+                 fastapi_base_url.size());
     CollabSession::instance().onDisconnected();
     if (fastapiSyncTimer != nullptr) {
         fastapiSyncTimer->stop();
@@ -1125,12 +1144,20 @@ void MainWindow::disconnectFastAPISync() {
     }
 
     if (fastapiSyncSocket != nullptr) {
+        std::fprintf(stderr, "[DEBUG] disconnectFastAPISync before socket.close base_url_len=%zu\n",
+                     fastapi_base_url.size());
         fastapiSyncSocket->close();
+        std::fprintf(stderr, "[DEBUG] disconnectFastAPISync after  socket.close base_url_len=%zu\n",
+                     fastapi_base_url.size());
         fastapiSyncSocket->deleteLater();
         fastapiSyncSocket = nullptr;
     }
-    setCollabConnectionState(tr("未连接"));
+    std::fprintf(stderr, "[DEBUG] disconnectFastAPISync after  setCollabConnectionState base_url_len=%zu\n",
+                 fastapi_base_url.size());
     updateCollabPanelUi();
+    std::fprintf(stderr, "[DEBUG] disconnectFastAPISync after  updateCollabPanelUi base_url_len=%zu\n",
+                 fastapi_base_url.size());
+    std::fprintf(stderr, "[DEBUG] disconnectFastAPISync EXIT\n");
 }
 
 // ========== 增量协作支持实现 ==========
@@ -1754,8 +1781,17 @@ void MainWindow::onCollabPushButtonClicked() {
         statusBar()->showMessage(tr("没有未推送的本地修改"), 2000);
         return;
     }
-    // 直接调 publishFastAPIAutoSnapshot：它会优先用 entity_graph 路径，
-    // 把每个 ADD body 的独立 SAT 文本一并发出。
+
+    // Mode1: 使用 HTTP delta API
+    if (collabMode == CollabMode::Mode1) {
+        if (submitMode1Delta(tr("mode1-push"))) {
+            pendingEntityChanges.clear();
+            statusBar()->showMessage(tr("Mode1 Push 成功"), 3000);
+        }
+        return;
+    }
+
+    // Mode0: 直接调 publishFastAPIAutoSnapshot（全量 SAT WebSocket 路径）
     scheduleFastAPIAutoPublish(tr("manual-push"));
 }
 
@@ -1765,15 +1801,19 @@ void MainWindow::onCollabPullButtonClicked() {
         return;
     }
     auto& session = CollabSession::instance();
-    // 注意：不要在这里用 pendingRemoteVersion 判断"已是最新"。
-    // 用户主动点 Pull = "把 server 上当前最新的 entity_graph 拉下来"，即便本地
-    // pending == model == 0（首次进来没收到任何推送），也允许 Pull 去 server 取一次最新版本。
-    // 收到 entity_graph_saved 后若 remoteVersion <= modelVersion 自然会被忽略。
     if (session.isSubmitInFlight()) {
         statusBar()->showMessage(tr("本地正在提交，无法拉取，请稍后再试"), 3000);
         return;
     }
-    qDebug().noquote() << "[Collab] onCollabPullButtonClicked: requesting sync_now";
+
+    // Mode1: 使用 HTTP delta API（独立 pull，不走 WebSocket）
+    if (collabMode == CollabMode::Mode1) {
+        pullMode1Delta();
+        return;
+    }
+
+    // Mode0: WebSocket sync_now 路径
+    qDebug().noquote() << "[Collab] onCollabPullButtonClicked: requesting sync_now (Mode0)";
     requestFastAPISyncNow();
     statusBar()->showMessage(tr("已请求远端最新版本，请等待 entity_graph_saved 到达"), 3000);
 }
@@ -2804,6 +2844,375 @@ int MainWindow::restoreRemoteDeltaSat(const QString& remoteSat, const QJsonObjec
     return 1;
 }
 
+// ================================================================================================
+// Mode1 Push: HTTP POST /projects/{id}/delta
+// payload = { author, base_version, delta_uuids, delta_sat_segments, removed_uuids }
+// bridge 端调用 handle_save_delta_to_neo4j 全量覆盖写 Neo4j part 子图
+// ================================================================================================
+bool MainWindow::submitMode1Delta(const QString& reason) {
+    auto& session = CollabSession::instance();
+    CollabSession::SubmitDecision decision = session.tryBeginSubmit(reason);
+    if (decision.kind != CollabSession::SubmitDecision::Allow) {
+        qDebug().noquote() << "[Mode1] submit blocked by session state:" << decision.reason;
+        return false;
+    }
+
+    if (curWindow == nullptr || !session.isConnected()) {
+        session.rollbackSubmit();
+        return false;
+    }
+
+    if (session.projectId().isEmpty()) {
+        qWarning().noquote() << "[Mode1] no project_id, cannot push";
+        session.rollbackSubmit();
+        return false;
+    }
+
+    qDebug().noquote() << "[Mode1] >>> submitMode1Delta ENTER";
+
+    // 1. 结束 entity change tracking，获取本次变更
+    endEntityChangeTracking();
+    const auto changes = pendingEntityChanges;
+    pendingEntityChanges.clear();
+
+    // 2. 收集 delta_uuids / delta_sat_segments / removed_uuids
+    QStringList deltaUuids;
+    QStringList deltaSatSegments;
+    QStringList removedUuids;
+
+    const auto& localTree = curWindow->getEntityTree();
+    QHash<void*, QString> bodyPtrToUuid;
+    for (const auto& eti : localTree) {
+        if (!eti.uuid.empty() && eti.ptrEntity != nullptr) {
+            bodyPtrToUuid[eti.ptrEntity] = QString::fromStdString(eti.uuid);
+        }
+    }
+
+    // 遍历 pending changes
+    for (const EntityChange& change : changes) {
+        if (change.changeType == MainWindow::EntityChangeType::ADD) {
+            // 找到刚添加的 body
+            const auto& tree = curWindow->getEntityTree();
+            for (int i = static_cast<int>(tree.size()) - 1; i >= 0; --i) {
+                if (QString::fromStdString(tree[i].uuid) == change.uuid) {
+                    ENTITY* body = tree[i].ptrEntity;
+                    if (body != nullptr && is_BODY(body)) {
+                        QString sat = serializeBodyToSat(body);
+                        if (!sat.isEmpty()) {
+                            deltaUuids.append(change.uuid);
+                            deltaSatSegments.append(sat);
+                        }
+                    }
+                    break;
+                }
+            }
+        } else if (change.changeType == MainWindow::EntityChangeType::MODIFY) {
+            // modified body: 找到当前 body 并序列化
+            for (const auto& eti : localTree) {
+                if (QString::fromStdString(eti.uuid) == change.uuid && eti.ptrEntity != nullptr) {
+                    if (is_BODY(eti.ptrEntity)) {
+                        QString sat = serializeBodyToSat(eti.ptrEntity);
+                        if (!sat.isEmpty()) {
+                            deltaUuids.append(change.uuid);
+                            deltaSatSegments.append(sat);
+                        }
+                    }
+                    break;
+                }
+            }
+        } else if (change.changeType == MainWindow::EntityChangeType::REMOVE) {
+            removedUuids.append(change.uuid);
+        }
+    }
+
+    qDebug().noquote() << "[Mode1] delta_uuids=" << deltaUuids.size()
+                       << " delta_sat_segments=" << deltaSatSegments.size()
+                       << " removed_uuids=" << removedUuids.size();
+
+    // 3. 如果没有变更，尝试通过 full tree 推送
+    if (deltaUuids.isEmpty() && removedUuids.isEmpty()) {
+        // 没有 pending changes，序列化整个 entity_tree 作为 full push
+        qDebug().noquote() << "[Mode1] no pending changes, serializing full entity_tree";
+        for (const auto& eti : localTree) {
+            if (eti.ptrEntity != nullptr && is_BODY(eti.ptrEntity)) {
+                QString sat = serializeBodyToSat(eti.ptrEntity);
+                if (!sat.isEmpty()) {
+                    deltaUuids.append(QString::fromStdString(eti.uuid));
+                    deltaSatSegments.append(sat);
+                }
+            }
+        }
+    }
+
+    // 4. 获取 base_version（上次 push 成功的版本号）
+    int baseVersion = session.pushedVersion();
+
+    // 5. 调用 HTTP POST /delta
+    const QString author = QString::fromStdString(fastapi_author).trimmed();
+    BackendApiClient client(
+        QString::fromStdString(fastapi_base_url),
+        author,
+        QString::fromStdString(fastapi_password));
+
+    std::optional<BackendApiClient::DeltaSavePayload> result =
+        client.saveDelta(
+            session.projectId(),
+            author,
+            baseVersion,
+            deltaUuids,
+            deltaSatSegments,
+            removedUuids
+        );
+
+    if (!result.has_value()) {
+        qWarning().noquote() << "[Mode1] saveDelta failed:" << client.lastError();
+        statusBar()->showMessage(tr("Mode1 Push 失败: %1").arg(client.lastError()), 5000);
+        session.rollbackSubmit();
+        return false;
+    }
+
+    qDebug().noquote() << "[Mode1] <<< submitMode1Delta SUCCESS v=" << result->version;
+    statusBar()->showMessage(tr("Mode1 Push 成功 v=%1").arg(result->version), 3000);
+
+    // 6. 更新 session 的 pushed_version
+    session.setPushedVersion(result->version);
+
+    // 7. 清理 submit in-flight 状态（Mode1 HTTP 成功等同于 submit accepted）
+    session.onSubmitAccepted(result->version);
+
+    // 8. 推进 delta 基准线，防止增量路径下次包含已提交的全量内容
+    api_advance_delta_since(collabCtx);
+
+    return true;
+}
+
+// ================================================================================================
+// Mode1 Pull: HTTP GET /projects/{id}/delta?base_version=X
+// 返回最新版本的所有 body uuid + SAT 段
+// 本地做集合差合并
+// ================================================================================================
+void MainWindow::pullMode1Delta() {
+    auto& session = CollabSession::instance();
+
+    if (!session.isConnected() || curWindow == nullptr) {
+        qWarning().noquote() << "[Mode1] pullMode1Delta: not connected or no window";
+        return;
+    }
+
+    if (session.projectId().isEmpty()) {
+        qWarning().noquote() << "[Mode1] pullMode1Delta: no project_id";
+        return;
+    }
+
+    qDebug().noquote() << "[Mode1] >>> pullMode1Delta ENTER";
+
+    int baseVersion = session.pushedVersion(); // B 端上次 push 的版本号
+    BackendApiClient client(
+        QString::fromStdString(fastapi_base_url),
+        QString::fromStdString(fastapi_author),
+        QString::fromStdString(fastapi_password));
+
+    std::optional<BackendApiClient::DeltaPullPayload> result =
+        client.getDelta(session.projectId(), baseVersion);
+
+    if (!result.has_value()) {
+        qWarning().noquote() << "[Mode1] getDelta failed:" << client.lastError();
+        statusBar()->showMessage(tr("Mode1 Pull 失败: %1").arg(client.lastError()), 5000);
+        return;
+    }
+
+    qDebug().noquote() << "[Mode1] getDelta SUCCESS v=" << result->version
+                       << " delta_bodies=" << result->deltaBodies.size()
+                       << " deleted_uuids=" << result->deletedUuids.size();
+
+    // 如果 baseVersion >= latestVersion，无 delta
+    if (result->version <= baseVersion) {
+        qDebug().noquote() << "[Mode1] already at latest version" << baseVersion;
+        statusBar()->showMessage(tr("已是最新版本 v=%1").arg(result->version), 3000);
+        return;
+    }
+
+    // B 端本地合并：集合差
+    const auto& localTree = curWindow->getEntityTree();
+    QSet<QString> localUuids;
+    for (const auto& eti : localTree) {
+        if (!eti.uuid.empty()) {
+            localUuids.insert(QString::fromStdString(eti.uuid));
+        }
+    }
+
+    QSet<QString> remoteUuids;
+    for (const auto& body : result->deltaBodies) {
+        remoteUuids.insert(body.uuid);
+    }
+
+    // pull_added = remote - local
+    QSet<QString> pullAdded = remoteUuids - localUuids;
+    // pull_removed = local - remote
+    QSet<QString> pullRemoved = localUuids - remoteUuids;
+
+    qDebug().noquote() << "[Mode1] pull_added=" << pullAdded.size()
+                       << " pull_removed=" << pullRemoved.size();
+
+    CollabSession::instance().onApplyStart();
+
+    // 1. 处理 pull_added：restore 每个 body 并 addEntity
+    int appliedAdd = 0;
+    int skippedAdd = 0;
+    for (const auto& body : result->deltaBodies) {
+        if (!pullAdded.contains(body.uuid)) continue;
+
+        if (body.sat.isEmpty()) {
+            qDebug().noquote() << "[Mode1] skip empty sat for uuid=" << body.uuid;
+            skippedAdd++;
+            continue;
+        }
+
+        // 用临时文件 restore
+        QByteArray satBytes = body.sat.toUtf8();
+        QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_pull_XXXXXX.sat");
+        tempFile.setAutoRemove(false);
+        if (!tempFile.open()) {
+            skippedAdd++;
+            continue;
+        }
+        tempFile.write(satBytes);
+        tempFile.close();
+
+        FILE* f = fopen(tempFile.fileName().toStdString().c_str(), "rb");
+        if (f == nullptr) {
+            tempFile.remove();
+            skippedAdd++;
+            continue;
+        }
+
+        ENTITY_LIST el;
+        bool ok = false;
+        try {
+            // 注意：acis_restore_entity_list 内部已有 API_BEGIN/END，不需要外层 API_NOP
+            acis_restore_entity_list(el, f, 2, 0, 1);
+            ok = true;
+        } catch (const std::exception& e) {
+            qWarning().noquote() << "[Mode1] acis_restore_entity_list failed:" << e.what();
+        }
+        fclose(f);
+        tempFile.remove();
+
+        if (!ok) {
+            skippedAdd++;
+            continue;
+        }
+
+        if (el.count() == 0) {
+            qWarning().noquote() << "[Mode1] skipped add for uuid=" << body.uuid << " reason=empty_entity_list";
+            skippedAdd++;
+            continue;
+        }
+
+        // Topology sanity check：服务端发的 SAT 如果缺 schema header，
+        // acis_restore_entity_list 会静默返回 el.count()=1 但 el[0] 是"无拓扑的 BODY"
+        // (lump=nullptr, faces=0, edges=0)。如果直接 addEntity，CreateMeshFromEntity 会失败，
+        // 且 entity_tree 里多一个"空壳 body"留下坏数据。
+        // 提前在这里检测：lump 必须非空、且 faces/edges 至少有一个非零，否则 skip。
+        ENTITY* restoredBody = el[0];
+        bool topologyOk = false;
+        if (is_BODY(restoredBody)) {
+            BODY* b = static_cast<BODY*>(restoredBody);
+            if (b->lump() != nullptr) {
+                ENTITY_LIST faces, edges;
+                api_get_faces(restoredBody, faces);
+                api_get_edges(restoredBody, edges);
+                topologyOk = (faces.iteration_count() + edges.iteration_count()) > 0;
+            }
+        }
+        if (!topologyOk) {
+            qWarning().noquote() << "[Mode1] skipped add for uuid=" << body.uuid
+                                 << " reason=empty_topology (lump/faces/edges all zero — SAT likely missing schema header)";
+            skippedAdd++;
+            continue;
+        }
+
+        // addEntity
+        int nextIdx = static_cast<int>(curWindow->getEntityTree().size());
+        curWindow->addEntity(restoredBody, tr("远端%1").arg(body.uuid).toStdString(), -1);
+
+        // 注册 uuid 到索引
+        if (nextIdx < static_cast<int>(curWindow->getEntityTree().size())) {
+            curWindow->getEntityTree()[nextIdx].uuid = body.uuid.toStdString();
+            entityIndexToUuid[nextIdx] = body.uuid;
+        }
+        appliedAdd++;
+        qDebug().noquote() << "[Mode1] added body uuid=" << body.uuid;
+    }
+
+    // 2. 处理 pull_removed：检查是否有未推送的本地修改
+    int appliedDelete = 0;
+    int skippedDelete = 0;
+    for (const QString& uuid : pullRemoved) {
+        // 检查本地是否有未推送的修改
+        bool hasLocalModification = false;
+        for (const EntityChange& change : pendingEntityChanges) {
+            if (change.uuid == uuid && change.changeType != MainWindow::EntityChangeType::REMOVE) {
+                hasLocalModification = true;
+                break;
+            }
+        }
+
+        if (hasLocalModification) {
+            qDebug().noquote() << "[Mode1] protected local modification for uuid=" << uuid;
+            skippedDelete++;
+            continue;
+        }
+
+        // 删除本地 body
+        auto& etiList = curWindow->getEntityTree();
+        bool removed = false;
+        for (int i = static_cast<int>(etiList.size()) - 1; i >= 0; --i) {
+            if (QString::fromStdString(etiList[i].uuid) == uuid) {
+                ENTITY* body = etiList[i].ptrEntity;
+                if (body != nullptr) {
+                    try {
+                        API_NOP_BEGIN;
+                        api_del_entity(body);
+                        API_NOP_END;
+                    } catch (const std::exception& e) {
+                        qWarning().noquote() << "[Mode1] api_del_entity failed:" << e.what();
+                    }
+                }
+                int removedIdx = etiList[i].index;
+                etiList.erase(etiList.begin() + i);
+                entityIndexToUuid.remove(removedIdx);
+                removed = true;
+                break;
+            }
+        }
+
+        if (removed) {
+            appliedDelete++;
+            qDebug().noquote() << "[Mode1] deleted body uuid=" << uuid;
+        } else {
+            skippedDelete++;
+        }
+    }
+
+    CollabSession::instance().onApplyEnd();
+
+    qDebug().noquote() << "[Mode1] <<< pullMode1Delta EXIT appliedAdd=" << appliedAdd
+                       << " appliedDelete=" << appliedDelete
+                       << " skippedAdd=" << skippedAdd << " skippedDelete=" << skippedDelete;
+
+    if (appliedAdd > 0 || appliedDelete > 0) {
+        curWindow->updateMeshData();
+        curWindow->updateTreeWidget();
+    }
+
+    statusBar()->showMessage(tr("Mode1 Pull 完成 v=%1 (+%2 -%3)")
+                              .arg(result->version).arg(appliedAdd).arg(appliedDelete), 3000);
+
+    // 更新 session 的 pushed_version（拉取后变为同步）
+    session.setPushedVersion(result->version);
+}
+
 bool MainWindow::submitFastAPIModelOverSocket(const QString& satContent, const QString& reason, bool interactiveConflict) {
     auto& session = CollabSession::instance();
     CollabSession::SubmitDecision decision = session.tryBeginSubmit(reason);
@@ -2971,6 +3380,27 @@ void MainWindow::updateCollabPanelUi() {
             collabMembersList->addItem(author + " (" + it.key() + ")");
         }
     }
+
+    // 启用/禁用协作控件（需要连接到项目）
+    bool connected = !fastapi_project_id.isEmpty() && !fastapi_base_url.empty();
+    bool isSubmitting = fastapiSubmitInFlight;
+    auto& session = CollabSession::instance();
+
+    if (collabModeCombo != nullptr) {
+        collabModeCombo->setEnabled(connected);
+    }
+    if (collabPushButton != nullptr) {
+        collabPushButton->setEnabled(connected && !isSubmitting && session.isConnected());
+    }
+    if (collabPullButton != nullptr) {
+        collabPullButton->setEnabled(connected && !isSubmitting && session.isConnected());
+    }
+    if (collabSyncNowButton != nullptr) {
+        collabSyncNowButton->setEnabled(connected && !isSubmitting);
+    }
+    if (collabReconnectButton != nullptr) {
+        collabReconnectButton->setEnabled(connected);
+    }
 }
 
 void MainWindow::applyPendingRemoteVersion() {
@@ -2998,12 +3428,35 @@ bool MainWindow::applyFastAPIRemoteSat(int remoteVersion, const QString& satCont
 }
 
 void MainWindow::reconnectFastAPISync() {
+    const auto enter_ts_ms = QDateTime::currentMSecsSinceEpoch();
+    std::fprintf(stderr,
+                 "[DEBUG] reconnectFastAPISync ENTER pid=%llu ts=%lld project_id=%s base_url=%s\n",
+                 (unsigned long long)QCoreApplication::applicationPid(),
+                 (long long)enter_ts_ms,
+                 fastapi_project_id.toUtf8().constData(),
+                 fastapi_base_url.c_str());
     // 注意：不要在这里调 onReconnect —— 紧接着的 disconnectFastAPISync() 会通过
     // onDisconnected() 把 state 又打回 Disconnected。state 转 Connected_Idle 的真正时机
     // 是下面 connected lambda（socket 真连上时）。
     disconnectFastAPISync();
+    std::fprintf(stderr, "[DEBUG] reconnectFastAPISync after disconnectFastAPISync\n");
+    std::fprintf(stderr, "[DEBUG] reconnectFastAPISync post-disconnect: project_id.isEmpty=%d base_url.empty=%d base_url_len=%zu base_url='%s'\n",
+                 fastapi_project_id.isEmpty() ? 1 : 0,
+                 fastapi_base_url.empty() ? 1 : 0,
+                 fastapi_base_url.size(),
+                 fastapi_base_url.c_str());
 
-    if (fastapi_project_id.isEmpty() || fastapi_base_url.empty()) {
+    if (fastapi_project_id.isEmpty()) {
+        std::fprintf(stderr,
+                     "[DEBUG] reconnectFastAPISync EARLY-RETURN: project_id IS EMPTY (isEmpty()=true)\n");
+        setCollabConnectionState(tr("未连接"));
+        updateCollabPanelUi();
+        return;
+    }
+    if (fastapi_base_url.empty()) {
+        std::fprintf(stderr,
+                     "[DEBUG] reconnectFastAPISync EARLY-RETURN: base_url IS EMPTY (was len=%zu)\n",
+                     fastapi_base_url.size());
         setCollabConnectionState(tr("未连接"));
         updateCollabPanelUi();
         return;
@@ -3011,6 +3464,7 @@ void MainWindow::reconnectFastAPISync() {
 
     setCollabConnectionState(tr("连接中"));
     updateCollabPanelUi();
+    std::fprintf(stderr, "[DEBUG] reconnectFastAPISync label='连接中' set\n");
 
     QString wsBaseUrl = QString::fromStdString(fastapi_base_url).trimmed();
     while (wsBaseUrl.endsWith('/')) {
@@ -3033,11 +3487,15 @@ void MainWindow::reconnectFastAPISync() {
     }
     wsPath += "?" + queryItems.join("&");
     const QUrl wsUrl(wsBaseUrl + wsPath);
+    std::fprintf(stderr, "[DEBUG] reconnectFastAPISync ws_url=%s\n", wsUrl.toString().toUtf8().constData());
+
     fastapiSyncSocket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+    std::fprintf(stderr, "[DEBUG] reconnectFastAPISync new QWebSocket=%p\n", (void*)fastapiSyncSocket);
 
     connect(fastapiSyncSocket, &QWebSocket::textMessageReceived, this, &MainWindow::handleFastAPISyncMessage);
     connect(fastapiSyncSocket, &QWebSocket::connected, this, [this]() {
-        qDebug().noquote() << "[Collab] WS connected lambda FIRED";
+        std::fprintf(stderr, "[Collab] WS connected lambda FIRED pid=%llu\n",
+                     (unsigned long long)QCoreApplication::applicationPid());
         statusBar()->showMessage(tr("FastAPI实时同步已连接"), 2000);
         if (fastapiReconnectTimer != nullptr) {
             fastapiReconnectTimer->stop();
@@ -3056,7 +3514,20 @@ void MainWindow::reconnectFastAPISync() {
         }
         updateCollabPanelUi();
     });
-    connect(fastapiSyncSocket, &QWebSocket::disconnected, this, [this]() {
+    // 捕获"创建时那一把 socket"的指针，避免旧 socket 在 close 时被 deleteLater
+    // 触发的 disconnected lambda 误启动 fastapiReconnectTimer / 把 label 改成"未连接"。
+    // reconnectFastAPISync 入口处的 disconnectFastAPISync() 会显式关闭旧 socket，
+    // 那一帧 disconnected 事件不应当被当作"运行中的连接掉了"处理。
+    QWebSocket* const createdSocket = fastapiSyncSocket;
+    connect(fastapiSyncSocket, &QWebSocket::disconnected, this, [this, createdSocket]() {
+        std::fprintf(stderr, "[Collab] WS disconnected lambda FIRED pid=%llu socket=%p current_socket=%p\n",
+                     (unsigned long long)QCoreApplication::applicationPid(),
+                     (void*)createdSocket,
+                     (void*)fastapiSyncSocket);
+        if (createdSocket != fastapiSyncSocket) {
+            std::fprintf(stderr, "[Collab] WS disconnected lambda IGNORED (stale socket)\n");
+            return;
+        }
         if (fastapiHeartbeatTimer != nullptr) {
             fastapiHeartbeatTimer->stop();
         }
@@ -3072,7 +3543,18 @@ void MainWindow::reconnectFastAPISync() {
         updateCollabPanelUi();
     });
 
+    // 添加错误处理信号
+    connect(fastapiSyncSocket, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::errorOccurred),
+            this, [this](QAbstractSocket::SocketError error) {
+        std::fprintf(stderr, "[Collab] WS error: %d %s\n", (int)error, fastapiSyncSocket ? fastapiSyncSocket->errorString().toUtf8().constData() : "(null socket)");
+        statusBar()->showMessage(tr("WebSocket连接失败: %1").arg(fastapiSyncSocket ? fastapiSyncSocket->errorString() : QString()), 5000);
+    });
+
+    std::fprintf(stderr, "[Collab] opening WebSocket...\n");
+    fflush(stderr);
     fastapiSyncSocket->open(wsUrl);
+    std::fprintf(stderr, "[Collab] after open() called socket_state=%d\n", (int)fastapiSyncSocket->state());
+    fflush(stderr);
 }
 
 void MainWindow::handleFastAPISyncMessage(const QString& message) {
@@ -4376,16 +4858,25 @@ void MainWindow::createActions() {
     collabPullButton = new QPushButton(tr("拉取(Pull)"), collabBody);
     collabReconnectButton = new QPushButton(tr("重连"), collabBody);
 
-    collabPullModeCombo = new QComboBox(collabBody);
-    collabPullModeCombo->addItem(tr("增量合并 (推荐)"), static_cast<int>(CollabPullMode::IncrementalDelta));
-    collabPullModeCombo->addItem(tr("全量替换 (SAT)"), static_cast<int>(CollabPullMode::FullSat));
-    collabPullModeCombo->addItem(tr("JSON 反序列化 (高级)"), static_cast<int>(CollabPullMode::EntityGraph));
-    collabPullModeCombo->setCurrentIndex(static_cast<int>(collabPullMode));
-    collabPullModeCombo->setToolTip(tr(
-        "Pull 模式:\n"
-        "  • 增量合并 — 按 UUID 去重 add 远端新增 body，按 UUID 删远端删除 body，保留本地未推送变更（最安全）\n"
-        "  • 全量替换 — clear + restore 完整 SAT，丢弃本地未推送变更（远端为准）\n"
-        "  • JSON 反序列化 — 用 entity_graph JSON 反序列化重建（高级/调试用）"));
+    collabModeCombo = new QComboBox(collabBody);
+    collabModeCombo->addItem(tr("Mode0 — SAT全量"), static_cast<int>(CollabMode::Mode0));
+    collabModeCombo->addItem(tr("Mode1 — Neo4j增量 (推荐)"), static_cast<int>(CollabMode::Mode1));
+    collabModeCombo->addItem(tr("Mode2 — PostgreSQL增量"), static_cast<int>(CollabMode::Mode2));
+    collabModeCombo->setCurrentIndex(static_cast<int>(collabMode));
+    collabModeCombo->setToolTip(tr(
+        "协作模式:\n"
+        "  • Mode0 — SAT全量：推送/拉取完整SAT文本，简单但效率低\n"
+        "  • Mode1 — Neo4j增量：推送仅传delta，拉取按UUID差量合并，保留本地未推送修改\n"
+        "  • Mode2 — PostgreSQL增量：待实现"));
+    collabModeCombo->setEnabled(false); // 连接后才启用
+
+    connect(collabModeCombo,
+            static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
+            this,
+            [this](int index) {
+                collabMode = static_cast<CollabMode>(collabModeCombo->itemData(index).toInt());
+                qDebug().noquote() << "[Collab] Mode changed to:" << static_cast<int>(collabMode);
+            });
 
     connect(collabAutoFollowCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
         fastapiAutoFollowRemote = checked;
@@ -4395,14 +4886,6 @@ void MainWindow::createActions() {
     connect(collabPushButton, &QPushButton::clicked, this, &MainWindow::onCollabPushButtonClicked);
     connect(collabPullButton, &QPushButton::clicked, this, &MainWindow::onCollabPullButtonClicked);
     connect(collabReconnectButton, &QPushButton::clicked, this, &MainWindow::reconnectFastAPISync);
-    connect(collabPullModeCombo,
-            static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
-            this,
-            [this](int index) {
-                collabPullMode = static_cast<CollabPullMode>(collabPullModeCombo->itemData(index).toInt());
-                qDebug().noquote() << "[Collab] Pull mode changed to:" << static_cast<int>(collabPullMode);
-                updateCollabPanelUi();
-            });
 
     collabLayout->addWidget(new QLabel(tr("连接状态"), collabBody));
     collabLayout->addWidget(collabConnectionLabel);
@@ -4413,14 +4896,11 @@ void MainWindow::createActions() {
     collabLayout->addWidget(collabMembersList);
     collabLayout->addWidget(collabAutoFollowCheckBox);
     collabLayout->addWidget(collabPushButton);
+    collabLayout->addWidget(collabPullButton);
 
-    // Pull 按钮 + 模式选择放在同一行
-    {
-        QHBoxLayout* pullRow = new QHBoxLayout;
-        pullRow->addWidget(collabPullButton, /*stretch=*/2);
-        pullRow->addWidget(collabPullModeCombo, /*stretch=*/3);
-        collabLayout->addLayout(pullRow);
-    }
+    // 协作模式选择
+    collabLayout->addWidget(new QLabel(tr("协作模式"), collabBody));
+    collabLayout->addWidget(collabModeCombo);
 
     collabLayout->addWidget(collabSyncNowButton);
     collabLayout->addWidget(collabReconnectButton);
@@ -4729,14 +5209,21 @@ void MainWindow::loadFile(const QString& fileName) {
             QMessageBox::warning(this, tr("DBCAD"), tr("连接neo4j失败：%1").arg(QString::fromUtf8(ex.what())));
         }
     } else if (checkedAct == setFASTAPIModeAct) {
+        std::fprintf(stderr, "[DEBUG] loadFile: setFASTAPIModeAct, fileName =%s\n", fileName.toUtf8().constData());
         BackendApiClient client(
             QString::fromStdString(fastapi_base_url),
             QString::fromStdString(fastapi_author),
             QString::fromStdString(fastapi_password));
+        std::fprintf(stderr, "[DEBUG] loadFile: client.isConfigured() =%d baseUrl =%s\n",
+                     client.isConfigured() ? 1 : 0,
+                     fastapi_base_url.c_str());
         if (!client.isConfigured()) {
             QMessageBox::warning(this, tr("DBCAD"), tr("FastAPI地址未配置，请先设置fastapi_connect_info.conf"));
         } else {
             auto project = client.getProjectByName(fileName);
+            std::fprintf(stderr, "[DEBUG] loadFile: getProjectByName returned has_value=%d project_id='%s'\n",
+                         project.has_value() ? 1 : 0,
+                         project.has_value() ? project->id.toUtf8().constData() : "null");
             if (!project.has_value()) {
                 if (client.lastStatusCode() == 404) {
                     auto created = client.createProject(fileName);
@@ -4745,6 +5232,7 @@ void MainWindow::loadFile(const QString& fileName) {
                     } else {
                         fastapi_project_id = created->id;
                         fastapi_project_name = fileName;
+                        CollabSession::instance().setProjectId(created->id);
                         reconnectFastAPISync();
                         CollabSession::instance().setModelVersion(0);
                         setCurrentPartName(fileName);
@@ -4763,8 +5251,11 @@ void MainWindow::loadFile(const QString& fileName) {
                 auto model = client.getLatestModel(project->id);
                 if (!model.has_value()) {
                     if (client.lastStatusCode() == 404) {
+                        std::fprintf(stderr, "[DEBUG] loadFile: branch=join-no-model project_id='%s'\n",
+                                     project->id.toUtf8().constData());
                         fastapi_project_id = project->id;
                         fastapi_project_name = fileName;
+                        CollabSession::instance().setProjectId(project->id);
                         reconnectFastAPISync();
                         CollabSession::instance().setModelVersion(0);
                         setCurrentPartName(fileName);
@@ -4774,8 +5265,11 @@ void MainWindow::loadFile(const QString& fileName) {
                         QMessageBox::warning(this, tr("DBCAD"), client.lastError());
                     }
                 } else if (restoreFastAPIModelFromSat(model->sat)) {
+                    std::fprintf(stderr, "[DEBUG] loadFile: branch=restore-model project_id='%s' model_version=%d\n",
+                                 project->id.toUtf8().constData(), model->version);
                     fastapi_project_id = project->id;
                     fastapi_project_name = fileName;
+                    CollabSession::instance().setProjectId(project->id);
                     reconnectFastAPISync();
                     CollabSession::instance().setModelVersion(model->version);
                     isRead = true;
@@ -4875,6 +5369,7 @@ void MainWindow::loadFile(const QString& partName, const int generation) {
                 } else if (restoreFastAPIModelFromSat(model->sat)) {
                     fastapi_project_id = project->id;
                     fastapi_project_name = partName;
+                    CollabSession::instance().setProjectId(project->id);
                     reconnectFastAPISync();
                     CollabSession::instance().setModelVersion(model->version);
                     isRead = true;
@@ -5054,6 +5549,7 @@ bool MainWindow::saveFile(const QString& fileName) {
                                                 curWindow->setViewState(viewState);
                                                 fastapi_project_id = project->id;
                                                 fastapi_project_name = fileName;
+                                                session.setProjectId(project->id);
                                                 reconnectFastAPISync();
                                                 session.setModelVersion(latest->version);
                                                 session.setPendingRemoteVersion(0);
@@ -5071,6 +5567,7 @@ bool MainWindow::saveFile(const QString& fileName) {
                                             } else {
                                                 fastapi_project_id = project->id;
                                                 fastapi_project_name = fileName;
+                                                session.setProjectId(project->id);
                                                 reconnectFastAPISync();
                                                 session.setModelVersion(*retriedVersion);
                                                 session.setPendingRemoteVersion(0);
@@ -5100,6 +5597,7 @@ bool MainWindow::saveFile(const QString& fileName) {
                                                 } else {
                                                     fastapi_project_id = forkProject->id;
                                                     fastapi_project_name = newProjectName.trimmed();
+                                                    session.setProjectId(forkProject->id);
                                                     reconnectFastAPISync();
                                                     session.setModelVersion(*forkVersion);
                                                     session.setPendingRemoteVersion(0);
@@ -5114,6 +5612,7 @@ bool MainWindow::saveFile(const QString& fileName) {
                             } else {
                                 fastapi_project_id = project->id;
                                 fastapi_project_name = fileName;
+                                session.setProjectId(project->id);
                                 reconnectFastAPISync();
                                 session.setModelVersion(*newVersion);
                                 session.setPendingRemoteVersion(0);
