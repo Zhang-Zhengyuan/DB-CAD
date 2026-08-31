@@ -71,9 +71,14 @@ bool handle_save_delta_to_neo4j(
 // handle_get_delta_from_neo4j:
 //   - base_version: B 端上次 sync 的版本号
 //   - out_latest_version: 输出最新版本号
-//   - out_body_uuids: 输出所有 body uuid 列表
+//   - out_body_uuids: 输出本次增量涉及的 body uuid 列表（仅 base_version+1..latest 之间的新增/修改）
 //   - out_sat_segments_by_uuid: 输出与 body uuid 一一对应的 SAT 段列表
+//   - out_deleted_uuids: 输出 base_version+1..latest 之间被删除的 body uuid 列表（last-write-wins）
 //   - 返回 true 成功，false 失败（out_error 包含错误信息）
+//
+// 【Mode1 增量 pull】从 BridgeDeltaVersion 节点回放 base_version+1..latest 的历史，
+// 只把期间真正变化的 body（added/modified/removed）发给客户端，而不是返回整个 part 当前状态。
+// 历史缺失（v=N 的 BridgeDeltaVersion 不存在）时降级为全量回退（旧行为）。
 // ================================================================================================
 bool handle_get_delta_from_neo4j(
     const Neo4jPart& conn,
@@ -81,6 +86,7 @@ bool handle_get_delta_from_neo4j(
     int& out_latest_version,
     std::vector<std::string>& out_body_uuids,
     std::vector<std::string>& out_sat_segments_by_uuid,
+    std::vector<std::string>& out_deleted_uuids,
     std::string& out_error
 );
 

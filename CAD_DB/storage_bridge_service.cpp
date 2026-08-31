@@ -1049,6 +1049,7 @@ QByteArray StorageBridgeService::handleGetDelta(const QString& projectId, int ba
     int latestVersion = 0;
     std::vector<std::string> bodyUuids;
     std::vector<std::string> satSegmentsByUuid;
+    std::vector<std::string> deletedUuids;
     std::string errorStr;
 
     bool ok = handle_get_delta_from_neo4j(
@@ -1057,6 +1058,7 @@ QByteArray StorageBridgeService::handleGetDelta(const QString& projectId, int ba
         latestVersion,
         bodyUuids,
         satSegmentsByUuid,
+        deletedUuids,
         errorStr);
 
     if (!ok) {
@@ -1066,8 +1068,8 @@ QByteArray StorageBridgeService::handleGetDelta(const QString& projectId, int ba
         return {};
     }
 
-    std::fprintf(stderr, "[storage_bridge handleGetDelta] SUCCESS latestVersion=%d body_count=%d\n",
-                 latestVersion, (int)bodyUuids.size());
+    std::fprintf(stderr, "[storage_bridge handleGetDelta] SUCCESS latestVersion=%d added=%zu deleted=%zu\n",
+                 latestVersion, bodyUuids.size(), deletedUuids.size());
 
     // 如果 baseVersion >= latestVersion，返回空 delta
     if (baseVersion >= latestVersion) {
@@ -1088,9 +1090,11 @@ QByteArray StorageBridgeService::handleGetDelta(const QString& projectId, int ba
         deltaBodiesArr.append(item);
     }
 
-    // deleted_uuids 由 handle_get_delta_from_neo4j 在 part 子图中维护，
-    // 当前简化版本暂不返回，固定为空数组（保留字段以便向后兼容）。
+    // deleted_uuids 直接来自 handle_get_delta_from_neo4j 的增量回放结果
     QJsonArray deletedUuidsArr;
+    for (const std::string& u : deletedUuids) {
+        deletedUuidsArr.append(QString::fromStdString(u));
+    }
 
     QJsonObject response;
     response.insert("version", latestVersion);

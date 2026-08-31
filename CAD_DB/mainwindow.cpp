@@ -2870,8 +2870,11 @@ bool MainWindow::submitMode1Delta(const QString& reason) {
 
     qDebug().noquote() << "[Mode1] >>> submitMode1Delta ENTER";
 
-    // 1. 结束 entity change tracking，获取本次变更
-    endEntityChangeTracking();
+    // 1. 抓取并清空当前累计的 pendingEntityChanges（snapshot 模式，不关掉 tracking flag）。
+    // isTrackingEntityChanges 必须保持 true，否则后续的 addEntity/removeEntity/modifyEntity
+    // 会被 recordEntityAdded 等函数早退，导致「第二次 push 一直说没有未推送的本地修改」。
+    // 历史误用：原本这里调用了 endEntityChangeTracking()，但 push 成功后没人在任何路径里
+    // 重新调 beginEntityChangeTracking()，结果后续所有本地修改都被悄悄丢掉。
     const auto changes = pendingEntityChanges;
     pendingEntityChanges.clear();
 
@@ -3058,13 +3061,26 @@ void MainWindow::pullMode1Delta() {
         remoteUuids.insert(body.uuid);
     }
 
-    // pull_added = remote - local
+    // pull_added = 本次增量 - 本地：本次增量里有但本地还没有的 body 才需要新增
+    // 注意：remoteUuids 是「自 base_version 起的增量」，不是 part 的完整状态，
+    // 所以绝对不能用 localUuids - remoteUuids 来推导删除目标。
     QSet<QString> pullAdded = remoteUuids - localUuids;
-    // pull_removed = local - remote
-    QSet<QString> pullRemoved = localUuids - remoteUuids;
+
+    // pull_removed = 本次增量明确声明删除 ∩ 本地：只有当本次增量的 deleted_uuids
+    // 数组里真的列了某个 uuid，并且本地也有这个 uuid，才走本地删除路径。
+    // 这是唯一安全的删除依据：
+    //   - 增量里没列的本地实体：可能是 base_version 之前就存在、本次没变化的实体，不能删；
+    //   - 增量里删除列表列了的：服务端 BridgeDeltaVersion.replay 出来的 net delete，必须删。
+    QSet<QString> serverDeletedUuids;
+    for (const QString& u : result->deletedUuids) {
+        serverDeletedUuids.insert(u);
+    }
+    QSet<QString> pullRemoved = serverDeletedUuids & localUuids;
 
     qDebug().noquote() << "[Mode1] pull_added=" << pullAdded.size()
-                       << " pull_removed=" << pullRemoved.size();
+                       << " pull_removed=" << pullRemoved.size()
+                       << " (server_deleted=" << serverDeletedUuids.size()
+                       << " local_unchanged=" << (localUuids.size() - pullRemoved.size()) << ")";
 
     CollabSession::instance().onApplyStart();
 

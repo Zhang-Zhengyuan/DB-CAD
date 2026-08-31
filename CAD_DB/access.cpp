@@ -2,6 +2,8 @@
 #include <functional>
 #include <iostream>
 #include <fstream>
+#include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -6651,6 +6653,58 @@ bool handle_save_delta_to_neo4j(
         }
     }
 
+    // 【Bug A 修复】restore 后 ptr → uuid 映射丢失（Neo4j body 节点的 uuid 属性
+    // 是单独存的，restore entity_list 时不会带回）。如果不在这里把已有 uuid
+    // 重新读回内存，后续 push 时旧的 body 会被标记为 uuid=""，STEP 6.5 写回时
+    // 又会跳过空 uuid，导致服务端 part 里 cube 的 uuid 永久丢失。
+    // 后果：B 端再 push 时，A 端 pull 会看到 uuid 为空的 body，A 端按 uuid 做
+    // set-difference 合并就会把 cube 当成"远端新增"，本地 cube 被错误删除。
+    if (current_version > 0 && full_entity_list.count() > 0) {
+        mg_map* restoreUuidParams = mg_map_make_empty(1);
+        mg_map_append(restoreUuidParams, mg_string_make("Y"), mg_value_make_string(conn.partname.c_str()));
+        conn.execute_bolt(
+            "MATCH (n:part {b:$Y})-[r:part_entity_ptr]->(b:body) "
+            "RETURN id(b), b.uuid ORDER BY toInteger(r.b)",
+            restoreUuidParams);
+        mg_map_destroy(restoreUuidParams);
+
+        std::vector<std::string> existingUuidsInOrder;
+        mg_result* rresult = nullptr;
+        while (mg_session_fetch(conn.session, &rresult) == 1) {
+            const mg_list* rrow = mg_result_row(rresult);
+            if (rrow == nullptr || mg_list_size(rrow) < 2) continue;
+            const mg_value* uuidV = mg_list_at(rrow, 1);
+            std::string existingUuid;
+            if (uuidV != nullptr && mg_value_get_type(uuidV) == MG_VALUE_TYPE_STRING) {
+                const mg_string* s = mg_value_string(uuidV);
+                if (s != nullptr) existingUuid = std::string(mg_string_data(s), mg_string_size(s));
+            }
+            existingUuidsInOrder.push_back(existingUuid);
+        }
+        conn.discard_all_results();
+
+        // 按 entity_list 中 body 顺序，与 Neo4j 返回的 uuid 一一对应
+        std::vector<ENTITY*> bodyPtrsInOrder;
+        for (ENTITY* e : full_entity_list) {
+            if (is_BODY(e)) bodyPtrsInOrder.push_back(e);
+        }
+        if (bodyPtrsInOrder.size() == existingUuidsInOrder.size()) {
+            size_t restored = 0;
+            for (size_t i = 0; i < bodyPtrsInOrder.size(); ++i) {
+                if (!existingUuidsInOrder[i].empty()) {
+                    body_ptr_to_uuid[(void*)bodyPtrsInOrder[i]] = existingUuidsInOrder[i];
+                    ++restored;
+                }
+            }
+            std::fprintf(stderr, "[access handleSaveDelta] restored %zu/%zu body uuids from Neo4j (avoiding uuid loss)\n",
+                         restored, bodyPtrsInOrder.size());
+        } else {
+            std::fprintf(stderr, "[access handleSaveDelta] WARN: body count mismatch on uuid restore "
+                         "(entity_list=%zu, neo4j=%zu), uuid may be lost\n",
+                         bodyPtrsInOrder.size(), existingUuidsInOrder.size());
+        }
+    }
+
     // 4. 对 delta_sat_segments 逐段做 acis_restore_entity_list，加入内存
     if (delta_uuids.size() != delta_sat_segments.size()) {
         out_error = "delta_uuids and delta_sat_segments size mismatch";
@@ -6864,6 +6918,116 @@ bool handle_save_delta_to_neo4j(
     update_part_node_version(conn, conn.partname, new_version, author, timestamp);
     out_new_version = new_version;
 
+    std::fprintf(stderr, "[access handleSaveDelta] STEP 12: create BridgeDeltaVersion for incremental pull replay\n");
+    fflush(stderr);
+
+    // 【Bug B 修复】把本次 delta 元数据存入 BridgeDeltaVersion 节点，供 handle_get_delta_from_neo4j
+    // 在 pull 时按 base_version 回放历史、计算净 delta（只传 base_version+1..latest 之间的变更，
+    // 而不是把整个 part 当前状态全量返回）。
+    //
+    // 字段含义：
+    //   - delta_uuids / delta_sat_segments: 本次新增或修改的 body uuid + SAT 段（一一对应）
+    //   - removed_uuids: 本次删除的 body uuid
+    // 接收端 replay 时按 version 顺序累加，last-write-wins（同 uuid 被多次 add/remove 则最终态为准）。
+    //
+    // 用独立的 BridgeDeltaVersion 标签（不混用 mode0 的 BridgeVersion），
+    // 避免 mode0 全量 push 写入的 BridgeVersion 节点污染 mode1 增量回放路径。
+    //
+    // 【简化方案】把 delta 三个数组序列化成一个 JSON 字符串存到 content_text 属性，
+    // 而不是用三个独立的 Neo4j list 属性。原因：
+    //   1. 避免 mg_value_make_list + 7 个键 vs mg_map_make_empty(6) 大小不匹配，
+    //      某些 mgclient 版本会对 hint size 做强校验而 abort；
+    //   2. 避免 mg_list 在跨 mgclient / Bolt 序列化层的兼容性陷阱
+    //      （Bolt 要求 list 元素类型严格一致，但 mg_value 在跨函数传递时类型可能丢失）；
+    //   3. 跟 handleCreateModel 存储 content_text 的模式保持一致，简化心智负担。
+    {
+        // 从 partname ("delta__{projectId}") 提取 projectId
+        const std::string prefix = "delta__";
+        std::string projectIdStr;
+        if (conn.partname.size() > prefix.size() &&
+            conn.partname.compare(0, prefix.size(), prefix) == 0) {
+            projectIdStr = conn.partname.substr(prefix.size());
+        } else {
+            projectIdStr = conn.partname; // 兜底：用整个 partname 作为 projectId
+        }
+
+        // 把 delta_uuids / delta_sat_segments / removed_uuids 打包成一个 JSON 字符串
+        // 格式：{ "delta_uuids":[...], "delta_sat_segments":[...], "removed_uuids":[...] }
+        // 手动拼字符串，避免引入 JSON 库依赖。
+        std::string contentJsonStr = "{";
+        contentJsonStr += "\"delta_uuids\":[";
+        for (size_t i = 0; i < delta_uuids.size(); ++i) {
+            if (i > 0) contentJsonStr += ",";
+            contentJsonStr += "\"";
+            // 转义 JSON 字符串中的特殊字符
+            for (char c : delta_uuids[i]) {
+                if (c == '"' || c == '\\') contentJsonStr += '\\';
+                else if (c == '\n') { contentJsonStr += "\\n"; continue; }
+                else if (c == '\r') { contentJsonStr += "\\r"; continue; }
+                contentJsonStr += c;
+            }
+            contentJsonStr += "\"";
+        }
+        contentJsonStr += "],\"delta_sat_segments\":[";
+        for (size_t i = 0; i < delta_sat_segments.size(); ++i) {
+            if (i > 0) contentJsonStr += ",";
+            contentJsonStr += "\"";
+            for (char c : delta_sat_segments[i]) {
+                if (c == '"' || c == '\\') contentJsonStr += '\\';
+                else if (c == '\n') { contentJsonStr += "\\n"; continue; }
+                else if (c == '\r') { contentJsonStr += "\\r"; continue; }
+                contentJsonStr += c;
+            }
+            contentJsonStr += "\"";
+        }
+        contentJsonStr += "],\"removed_uuids\":[";
+        for (size_t i = 0; i < removed_uuids.size(); ++i) {
+            if (i > 0) contentJsonStr += ",";
+            contentJsonStr += "\"";
+            for (char c : removed_uuids[i]) {
+                if (c == '"' || c == '\\') contentJsonStr += '\\';
+                else if (c == '\n') { contentJsonStr += "\\n"; continue; }
+                else if (c == '\r') { contentJsonStr += "\\r"; continue; }
+                contentJsonStr += c;
+            }
+            contentJsonStr += "\"";
+        }
+        contentJsonStr += "]}";
+
+        mg_map* dvParams = mg_map_make_empty(5);
+        mg_map_append(dvParams, mg_string_make("project_id"), mg_value_make_string(projectIdStr.c_str()));
+        mg_map_append(dvParams, mg_string_make("version"), mg_value_make_integer(new_version));
+        mg_map_append(dvParams, mg_string_make("author"), mg_value_make_string(author.c_str()));
+        mg_map_append(dvParams, mg_string_make("created_at"), mg_value_make_string(timestamp.c_str()));
+        mg_map_append(dvParams, mg_string_make("content_text"), mg_value_make_string(contentJsonStr.c_str()));
+
+        // 直接 MERGE 节点而不是 OPTIONAL MATCH + CREATE，避免两次 OPTIONAL MATCH + CREATE
+        // 链式调用在某些 Neo4j 版本下的 cartesian product 性能问题。
+        // BridgeProject 不要求存在（mode1 可能跳过 mode0 的 handleCreateProject）。
+        // 但 handleCreateModel 那边会要求 BridgeProject 存在，所以我们也保持一致。
+        std::string cypher =
+            "MERGE (v:BridgeDeltaVersion {project_id:$project_id, version:$version}) "
+            "ON CREATE SET v.author=$author, v.created_at=$created_at, v.content_text=$content_text "
+            "ON MATCH SET v.author=$author, v.created_at=$created_at, v.content_text=$content_text "
+            "RETURN id(v)";
+        conn.execute_bolt(cypher.c_str(), dvParams);
+
+        mg_result* dvResult = nullptr;
+        bool created = false;
+        if (mg_session_fetch(conn.session, &dvResult) == 1) {
+            created = true;
+        }
+        conn.discard_all_results();
+        mg_map_destroy(dvParams);
+
+        std::fprintf(stderr, "[access handleSaveDelta] BridgeDeltaVersion v=%d project=%s %s "
+                     "contentLen=%zu delta_uuids=%zu delta_sat=%zu removed=%zu\n",
+                     new_version, projectIdStr.c_str(),
+                     created ? "UPSERTED" : "FAILED",
+                     contentJsonStr.size(),
+                     delta_uuids.size(), delta_sat_segments.size(), removed_uuids.size());
+    }
+
     DIAG_LOG("[save-end] saved v=%d (was %d), entity_list count=%d\n",
         new_version, current_version, (int)full_entity_list.count());
     {
@@ -6897,24 +7061,96 @@ bool handle_save_delta_to_neo4j(
 //
 // base_version: B 端上次 sync 的版本号
 //
-// 流程：
+// 流程（增量模式，新行为）：
 //   1. 读取 latest_version = part_node.version
 //   2. 若 base_version >= latest_version，返回空 delta
-//   3. 从 Neo4j restore 完整 ENTITY_LIST
-//   4. 按 body uuid 切分 SAT 段，返回 sat_segments_by_uuid
+//   3. 查询 BridgeDeltaVersion 节点，version ∈ [base_version+1, latest_version]
+//   4. 按 version 顺序回放 delta：
+//        - delta_uuids[i] + 对应 SAT 段 → 加入 added map（last-write-wins SAT）
+//        - removed_uuids → 加入 deleted set
+//        - 同 uuid 后续又 add → 从 deleted set 移除，覆盖 added map 中的 SAT
+//        - 同 uuid 后续又 remove → 从 added map 移除
+//   5. 输出 added map 为 delta_bodies，deleted set 为 deleted_uuids
+//   6. 历史缺失（gap）时降级为旧行为：返回当前 part 完整状态（无 deleted）
+//
+// 全量回退（旧行为）：
+//   - 当 BridgeDeltaVersion 历史不完整时（比如历史版本没建过该节点），
+//     返回 part 当前所有 body 的 SAT。客户端 set-diff 合并可以正常工作，
+//     只是会比增量模式多传一些冗余 SAT。
 // ------------------------------------------------------------------------------------------------
+
+// 极简 JSON 解析：从 "{ ... }" 中按字段名读取字符串数组。
+// 用来反序列化 BridgeDeltaVersion.content_text 里的 delta_uuids / delta_sat_segments / removed_uuids。
+// 不依赖任何 JSON 库，避免引入新依赖。
+// 解析失败（字段缺失）时不抛异常，输出数组保持为空。
+static void parseDeltaJsonArray(const std::string& json, const std::string& key,
+                                 std::vector<std::string>& out) {
+    out.clear();
+    std::string keyPattern = "\"" + key + "\":";
+    size_t keyPos = json.find(keyPattern);
+    if (keyPos == std::string::npos) return;
+    size_t arrayStart = json.find('[', keyPos);
+    if (arrayStart == std::string::npos) return;
+    size_t arrayEnd = json.find(']', arrayStart);
+    if (arrayEnd == std::string::npos) return;
+
+    size_t pos = arrayStart + 1;
+    while (pos < arrayEnd) {
+        // 跳过空白
+        while (pos < arrayEnd && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r' || json[pos] == ',')) {
+            ++pos;
+        }
+        if (pos >= arrayEnd) break;
+        if (json[pos] != '"') {
+            // 数组里有非字符串元素（理论上不会），跳过到下一个逗号
+            size_t next = json.find(',', pos);
+            if (next == std::string::npos || next > arrayEnd) break;
+            pos = next + 1;
+            continue;
+        }
+        ++pos; // skip opening "
+        std::string item;
+        while (pos < arrayEnd && json[pos] != '"') {
+            if (json[pos] == '\\' && pos + 1 < arrayEnd) {
+                char esc = json[pos + 1];
+                if (esc == 'n') item += '\n';
+                else if (esc == 'r') item += '\r';
+                else if (esc == 't') item += '\t';
+                else item += esc;  // \\ \" \/ \b \f 等直接保留
+                pos += 2;
+            } else {
+                item += json[pos];
+                ++pos;
+            }
+        }
+        if (pos < arrayEnd) ++pos; // skip closing "
+        out.push_back(std::move(item));
+    }
+}
+
+static void parseDeltaContentJson(const std::string& json,
+                                    std::vector<std::string>& out_delta_uuids,
+                                    std::vector<std::string>& out_delta_sat_segments,
+                                    std::vector<std::string>& out_removed_uuids) {
+    parseDeltaJsonArray(json, "delta_uuids", out_delta_uuids);
+    parseDeltaJsonArray(json, "delta_sat_segments", out_delta_sat_segments);
+    parseDeltaJsonArray(json, "removed_uuids", out_removed_uuids);
+}
+
 bool handle_get_delta_from_neo4j(
     const Neo4jPart& conn,
     int base_version,
     int& out_latest_version,
     std::vector<std::string>& out_body_uuids,
     std::vector<std::string>& out_sat_segments_by_uuid,
+    std::vector<std::string>& out_deleted_uuids,
     std::string& out_error
 ) {
     out_error.clear();
     out_latest_version = 0;
     out_body_uuids.clear();
     out_sat_segments_by_uuid.clear();
+    out_deleted_uuids.clear();
 
     DIAG_LOG("[get] === handleGetDelta ENTER === base_version=%d\n", base_version);
     DIAG_LOG("[get] partname=%s\n", conn.partname.c_str());
@@ -6933,7 +7169,143 @@ bool handle_get_delta_from_neo4j(
         return true;
     }
 
-    // 3. 从 Neo4j restore 完整 ENTITY_LIST
+    // ================================================================================================
+    // 增量模式：基于 BridgeDeltaVersion 回放历史
+    // ================================================================================================
+    // 从 partname ("delta__{projectId}") 提取 projectId
+    std::string projectIdStr;
+    {
+        const std::string prefix = "delta__";
+        if (conn.partname.size() > prefix.size() &&
+            conn.partname.compare(0, prefix.size(), prefix) == 0) {
+            projectIdStr = conn.partname.substr(prefix.size());
+        } else {
+            projectIdStr = conn.partname;
+        }
+    }
+
+    // 查询 BridgeDeltaVersion：version ∈ [base_version+1, latest_version]
+    struct DeltaVersionRecord {
+        int version = 0;
+        std::vector<std::string> delta_uuids;
+        std::vector<std::string> delta_sat_segments;
+        std::vector<std::string> removed_uuids;
+    };
+
+    std::map<int, DeltaVersionRecord> versionRecords; // 按 version 升序
+    {
+        mg_map* qparams = mg_map_make_empty(3);
+        mg_map_append(qparams, mg_string_make("project_id"), mg_value_make_string(projectIdStr.c_str()));
+        mg_map_append(qparams, mg_string_make("min_version"), mg_value_make_integer(base_version + 1));
+        mg_map_append(qparams, mg_string_make("max_version"), mg_value_make_integer(out_latest_version));
+        conn.execute_bolt(
+            "MATCH (v:BridgeDeltaVersion) "
+            "WHERE v.project_id = $project_id AND v.version >= $min_version AND v.version <= $max_version "
+            "RETURN v.version, v.content_text ORDER BY v.version ASC",
+            qparams);
+        mg_map_destroy(qparams);
+
+        mg_result* qresult = nullptr;
+        while (mg_session_fetch(conn.session, &qresult) == 1) {
+            const mg_list* row = mg_result_row(qresult);
+            if (row == nullptr || mg_list_size(row) < 2) continue;
+
+            DeltaVersionRecord rec;
+            const mg_value* verV = mg_list_at(row, 0);
+            if (verV != nullptr && mg_value_get_type(verV) == MG_VALUE_TYPE_INTEGER) {
+                rec.version = static_cast<int>(mg_value_integer(verV));
+            } else {
+                continue;
+            }
+
+            // content_text 是一个 JSON 字符串：{ "delta_uuids":[...], "delta_sat_segments":[...], "removed_uuids":[...] }
+            const mg_value* ctV = mg_list_at(row, 1);
+            if (ctV != nullptr && mg_value_get_type(ctV) == MG_VALUE_TYPE_STRING) {
+                const mg_string* s = mg_value_string(ctV);
+                if (s != nullptr) {
+                    std::string jsonStr(mg_string_data(s), mg_string_size(s));
+                    parseDeltaContentJson(jsonStr, rec.delta_uuids, rec.delta_sat_segments, rec.removed_uuids);
+                }
+            }
+
+            versionRecords[rec.version] = std::move(rec);
+        }
+        conn.discard_all_results();
+    }
+
+    // 检查历史完整性：版本号必须连续 [base_version+1, latest_version]
+    bool historyComplete = (static_cast<int>(versionRecords.size()) == (out_latest_version - base_version));
+    if (historyComplete) {
+        int expected = base_version + 1;
+        for (const auto& kv : versionRecords) {
+            if (kv.first != expected) {
+                historyComplete = false;
+                break;
+            }
+            ++expected;
+        }
+    }
+
+    if (historyComplete) {
+        // ========================================================================================
+        // 增量回放：last-write-wins
+        //   added[uuid]   = 最新的 SAT 段（同一 uuid 在多个版本中被 add/update 时取最后一个）
+        //   deleted_set   = 被删除的 uuid 集合（如果后续又被 add 则移除）
+        // ========================================================================================
+        std::map<std::string, std::string> added;
+        std::set<std::string> deleted;
+
+        for (const auto& kv : versionRecords) {
+            const DeltaVersionRecord& rec = kv.second;
+
+            for (size_t i = 0; i < rec.delta_uuids.size(); ++i) {
+                const std::string& uuid = rec.delta_uuids[i];
+                std::string sat;
+                if (i < rec.delta_sat_segments.size()) {
+                    sat = rec.delta_sat_segments[i];
+                }
+                added[uuid] = sat;            // last-write-wins
+                deleted.erase(uuid);          // 重新被添加，不再算删除
+            }
+
+            for (const std::string& uuid : rec.removed_uuids) {
+                added.erase(uuid);            // 后续又被删除，从 added map 移除
+                deleted.insert(uuid);         // 加入 deleted set
+            }
+        }
+
+        // 输出 added map
+        for (const auto& kv : added) {
+            out_body_uuids.push_back(kv.first);
+            out_sat_segments_by_uuid.push_back(kv.second);
+        }
+
+        // 输出 deleted set
+        for (const std::string& uuid : deleted) {
+            out_deleted_uuids.push_back(uuid);
+        }
+
+        std::fprintf(stderr, "[access handleGetDelta] INCREMENTAL: latest=%d base=%d added=%zu deleted=%zu\n",
+                     out_latest_version, base_version,
+                     out_body_uuids.size(), out_deleted_uuids.size());
+        for (size_t i = 0; i < out_body_uuids.size(); ++i) {
+            std::fprintf(stderr, "  + added uuid=%s sat_len=%zu\n",
+                         out_body_uuids[i].c_str(), out_sat_segments_by_uuid[i].size());
+        }
+        for (const std::string& u : out_deleted_uuids) {
+            std::fprintf(stderr, "  - deleted uuid=%s\n", u.c_str());
+        }
+        return true;
+    }
+
+    // 历史不完整 → 全量回退
+    std::fprintf(stderr, "[access handleGetDelta] WARN: BridgeDeltaVersion history incomplete "
+                 "(found %zu/%d in [%d, %d]) — falling back to full-state return\n",
+                 versionRecords.size(),
+                 out_latest_version - base_version,
+                 base_version + 1, out_latest_version);
+
+    // 3. 从 Neo4j restore 完整 ENTITY_LIST（仅在历史缺失时执行）
     ENTITY_LIST full_entity_list;
     api_restore_entity_list_neo4j_part(conn, full_entity_list);
 
