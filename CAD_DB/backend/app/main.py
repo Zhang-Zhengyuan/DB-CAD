@@ -15,6 +15,13 @@ from .config import settings
 from .sync import sync_manager
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
+
+# ---- DB-CAD Neo4j 管理 WebUI ----
+# 访问 http://localhost:8000/ 或 http://localhost:8000/webui 查看图形化管理界面
+from . import neo4j_webui
+app.include_router(neo4j_webui.router)
+app.add_route("/webui", neo4j_webui.serve_webui, ["GET"])
+app.add_route("/", neo4j_webui.serve_webui, ["GET"])
 logger = logging.getLogger(__name__)
 LOG_FILE_PATH = (Path(__file__).resolve().parent.parent / "logs" / "backend-error.log")
 

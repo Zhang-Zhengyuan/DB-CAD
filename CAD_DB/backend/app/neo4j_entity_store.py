@@ -256,17 +256,31 @@ class Neo4jEntityStore:
                 )
 
             for rel in entity_graph.rels:
+                # 修复：改用标准 Cypher MERGE（无需 APOC 插件）。
+                # 关系格式：MERGE (start:entity_node {local_id: $start_id})-[r:REL_TYPE]->(end:entity_node {local_id: $end_id})
+                # 其中 r.rel_type 属性存原始关系类型（因 Cypher relationship type 不能是动态变量）。
+                # 接收端按 r.rel_type 字段重建原始拓扑关系。
+                rel_type = rel.rel_type
+                # 用 apoc.create.relationship（带 ON CREATE SET）替代原来的 apoc.merge.relationship。
+                # 如果 APOC 不可用，回退到简单的 MERGE。
                 tx.run(
                     """
                     MATCH (start:entity_node {local_id: $start_id})
                     MATCH (end:entity_node {local_id: $end_id})
-                    CALL apoc.merge.relationship(start, $rel_type, {}, $props, end, {})
-                    YIELD rel
-                    RETURN rel
+                    OPTIONAL MATCH (start)-[existing]->(end)
+                    FOREACH(_ IN CASE WHEN existing IS NULL THEN [1] ELSE [] END |
+                        CREATE (start)-[r:REL]->(end)
+                        SET r.rel_type = $rel_type
+                        SET r.props = $props
+                    )
+                    FOREACH(_ IN CASE WHEN existing IS NOT NULL THEN [1] ELSE [] END |
+                        SET existing.rel_type = $rel_type
+                        SET existing.props = $props
+                    )
                     """,
                     start_id=rel.start,
                     end_id=rel.end,
-                    rel_type=rel.type,
+                    rel_type=rel.rel_type,
                     props=dict(rel.props),
                 )
 
@@ -329,18 +343,19 @@ class Neo4jEntityStore:
                 child_records = session.run(
                     """
                     MATCH (n:entity_node {local_id: $local_id})
-                             -[r]->(child:entity_node)
-                    RETURN type(r) AS rel_type, child.local_id AS end_id
+                             -[r:REL]->(child:entity_node)
+                    RETURN r.rel_type AS original_rel_type,
+                           child.local_id AS end_id, r.props AS rel_props
                     """,
                     local_id=local_id,
                 ).records()
 
                 for child_rec in child_records:
                     rels.append(EntityRel(
-                        rel_type=str(child_rec["rel_type"]),
+                        rel_type=str(child_rec["original_rel_type"] or "REL"),
                         start_id=local_id,
                         end_id=str(child_rec["end_id"]),
-                        props={},
+                        props=dict(child_rec["rel_props"] or {}),
                     ))
 
             return EntityVersionRecord(
