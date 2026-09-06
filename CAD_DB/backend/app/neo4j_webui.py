@@ -671,6 +671,142 @@ def get_part_topology(
 
 
 # ---------------------------------------------------------------------------
+# 项目当前在 Neo4j 中的图状态（用于回答"每个版本是不是子图"的问题）
+# ---------------------------------------------------------------------------
+
+@router.get("/projects/{project_name}/neo4j-state")
+def get_neo4j_graph_state(project_name: str) -> dict[str, Any]:
+    """返回某项目当前在 Neo4j 中存储的 part 子图状态。
+
+    数据真相（实测）：
+      - bridge 在每次 save 后都会全量覆写 part 子图（acis_save_entity_list_neo4j_part）
+      - Neo4j 里始终只有一个「当前 part 子图」，反映最新状态
+      - 历史回放通过 BridgeDeltaVersion 增量链（不在子图里）
+      - EntityGraph 模式走的是另一条路径，把整图存到 BridgeEntityGraphVersion.entity_graph_text
+
+    返回：part_name / part_version / total_nodes / 按 label 分类的节点数 / body 列表
+    """
+    project_row = _run_single_cypher(
+        """
+        MATCH (p)
+        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+          AND p.name = $name
+        RETURN p
+        """,
+        {"name": project_name},
+    )
+    if not project_row:
+        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found")
+    p = project_row["p"]
+    pid = str(p.get("id") or p.get("project_id") or "")
+
+    # 优先用最新的 Mode0 版本的 part_name（如果是 Mode1 项目则用 delta 路径）
+    # 三种选择：Mode0 / Mode1 / EG，按"最近一次更新"取
+    storage_label = ""
+    part_name = ""
+    part_version = 0
+
+    # 1. Mode0 最新
+    m0 = _run_single_cypher(
+        """
+        MATCH (p)-[:HAS_VERSION]->(v)
+        WHERE labels(p)[0] IN ['BridgeProject','DBCADProject']
+          AND p.name = $name
+          AND labels(v)[0] IN ['BridgeVersion','DBCADVersion']
+        RETURN v.part_name AS pn, v.version AS v
+        ORDER BY v.version DESC LIMIT 1
+        """,
+        {"name": project_name},
+    )
+    # 2. EG 最新
+    eg = _run_single_cypher(
+        """
+        MATCH (p)-[:HAS_EG_VERSION]->(egv)
+        WHERE labels(p)[0] IN ['BridgeProject','DBCADProject']
+          AND p.name = $name
+          AND labels(egv)[0] IN ['BridgeEntityGraphVersion','entity_graph_version']
+        RETURN egv.part_name AS pn, egv.version AS v, egv.created_at AS ca
+        ORDER BY egv.version DESC LIMIT 1
+        """,
+        {"name": project_name},
+    )
+    # 3. Mode1（按 project_id 属性）
+    m1 = _run_single_cypher(
+        """
+        MATCH (d)
+        WHERE labels(d)[0] IN ['BridgeDeltaVersion','DBCADDelta']
+          AND d.project_id = $pid
+        RETURN d.version AS v, d.created_at AS ca
+        ORDER BY d.version DESC LIMIT 1
+        """,
+        {"pid": pid},
+    )
+
+    # 按 created_at 选最新
+    candidates = []
+    if m0:
+        candidates.append(("Mode0 (SAT 全量)", m0.get("pn") or "", int(m0.get("v") or 0), None))
+    if eg:
+        candidates.append(("Entity Graph", eg.get("pn") or "", int(eg.get("v") or 0), eg.get("ca")))
+    if m1:
+        # Mode1 的 part_name 模式: "delta__{project_id}"，但 part 节点可能没创建
+        m1_part_name = f"delta__{pid}"
+        candidates.append(("Mode1 (Delta 增量)", m1_part_name, int(m1.get("v") or 0), m1.get("ca")))
+
+    if not candidates:
+        return {
+            "project_id": pid,
+            "storage_label": "",
+            "has_part": False,
+            "part_name": "",
+            "part_version": 0,
+            "total_nodes": 0,
+            "buckets": [],
+            "bodies": [],
+            "body_count": 0,
+        }
+
+    # 简单按 version 选最大的（实际可按 created_at 更准）
+    storage_label, part_name, part_version, _ = max(candidates, key=lambda x: x[2])
+
+    # 查询 part 子图节点分布
+    buckets_rows = _run_cypher(
+        f"""
+        MATCH (root)-[:part_entity_ptr*1..8]->(desc)
+        WHERE labels(root)[0] IN ['part','DBCADPart'] AND root.b = $pn
+        WITH labels(desc)[0] AS l, count(*) AS n
+        RETURN l, n ORDER BY n DESC
+        """,
+        {"pn": part_name},
+    )
+    total = sum(int(b["n"] or 0) for b in buckets_rows)
+    buckets = [{"label": b["l"], "count": int(b["n"] or 0)} for b in buckets_rows]
+
+    bodies = _run_cypher(
+        """
+        MATCH (root)-[:part_entity_ptr]->(b:body)
+        WHERE labels(root)[0] IN ['part','DBCADPart'] AND root.b = $pn
+        RETURN b.uuid AS uuid
+        ORDER BY b.uuid
+        LIMIT 100
+        """,
+        {"pn": part_name},
+    )
+
+    return {
+        "project_id": pid,
+        "storage_label": storage_label,
+        "has_part": total > 0,
+        "part_name": part_name,
+        "part_version": part_version,
+        "total_nodes": total,
+        "buckets": buckets,
+        "bodies": [{"uuid": str(b["uuid"] or "")} for b in bodies],
+        "body_count": len(bodies),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 原始 Cypher（只读）
 # ---------------------------------------------------------------------------
 
@@ -769,55 +905,56 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <style>
   /* ============== 设计 token ============== */
   :root {
-    /* 基础色板（科研配色：沉静的深蓝 + 节制的强调色） */
-    --bg: #0a1020;
-    --bg-soft: #0e1730;
+    /* 基础色板（科研配色：极简深蓝底 + 节制强调色，避免过度视觉刺激） */
+    --bg: #08101f;
+    --bg-soft: #0d172b;
     --surface: #131e38;
     --surface-2: #1a2745;
     --surface-3: #213057;
     --border: #2a385c;
-    --border-soft: #1f2b48;
-    --text: #d3dcf0;
-    --text-dim: #8a96b3;
-    --text-bright: #f1f6ff;
+    --border-soft: #1c2742;
+    --text: #d4dcec;
+    --text-dim: #8493b3;
+    --text-bright: #f4f8ff;
 
-    /* 语义色 */
-    --primary: #6cb6ff;
-    --primary-soft: rgba(108, 182, 255, 0.14);
+    /* 语义色（更克制，每个色彩只承担一种语义） */
+    --primary: #7ab8ff;
+    --primary-soft: rgba(122, 184, 255, 0.12);
     --cyan: #6fd9d2;
-    --cyan-soft: rgba(111, 217, 210, 0.14);
+    --cyan-soft: rgba(111, 217, 210, 0.12);
     --amber: #f4a261;
-    --amber-soft: rgba(244, 162, 97, 0.14);
+    --amber-soft: rgba(244, 162, 97, 0.12);
     --violet: #b48ad6;
-    --violet-soft: rgba(180, 138, 214, 0.14);
+    --violet-soft: rgba(180, 138, 214, 0.12);
     --green: #7fcf9a;
     --red: #e76f51;
     --yellow: #f0c674;
 
-    /* 模式色（前端使用） */
-    --mode0: #7286d3;     /* Mode0 SAT 蓝紫 */
-    --mode0-soft: rgba(114, 134, 211, 0.15);
-    --mode1: #6cb6ff;     /* Mode1 Delta 蓝 */
-    --mode1-soft: rgba(108, 182, 255, 0.15);
-    --eg: #f4a261;        /* Entity Graph 琥珀 */
-    --eg-soft: rgba(244, 162, 97, 0.15);
+    /* 模式色（前端使用，鲜明区分） */
+    --mode0: #7286d3;
+    --mode0-soft: rgba(114, 134, 211, 0.12);
+    --mode1: #5fb6ff;
+    --mode1-soft: rgba(95, 182, 255, 0.12);
+    --eg: #f4a261;
+    --eg-soft: rgba(244, 162, 97, 0.12);
 
     /* 字体 */
     --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
 
-    /* 字号（新设计提高基础字号） */
-    --fz-xs: 11px;
-    --fz-sm: 12.5px;
-    --fz-base: 14px;
-    --fz-md: 15px;
-    --fz-lg: 17px;
-    --fz-xl: 20px;
-    --fz-2xl: 26px;
-    --fz-3xl: 34px;
+    /* 字号（科研 dashboard：基础 16px，标题更大，留白更多） */
+    --fz-xs: 12px;
+    --fz-sm: 13.5px;
+    --fz-base: 16px;
+    --fz-md: 17px;
+    --fz-lg: 20px;
+    --fz-xl: 24px;
+    --fz-2xl: 32px;
+    --fz-3xl: 48px;
+    --fz-4xl: 60px;
 
-    --radius: 6px;
-    --radius-lg: 10px;
+    --radius: 8px;
+    --radius-lg: 14px;
   }
 
   /* ============== Reset & Base ============== */
@@ -835,14 +972,15 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   body {
     min-height: 100vh;
     background:
-      radial-gradient(1200px 600px at 8% -10%, rgba(108,182,255,0.06), transparent 70%),
-      radial-gradient(800px 400px at 100% 0%, rgba(180,138,214,0.05), transparent 70%),
+      radial-gradient(1400px 700px at 5% -8%, rgba(122,184,255,0.05), transparent 70%),
+      radial-gradient(900px 500px at 100% 0%, rgba(180,138,214,0.04), transparent 70%),
       var(--bg);
+    line-height: 1.65;
   }
   ::selection { background: var(--primary-soft); color: var(--text-bright); }
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
   ::-webkit-scrollbar-track { background: var(--bg-soft); }
-  ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 6px; border: 2px solid var(--bg-soft); }
   ::-webkit-scrollbar-thumb:hover { background: var(--border); }
 
   button, input, select, textarea {
@@ -850,7 +988,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     font-size: inherit;
     color: inherit;
   }
-  code, pre, .mono { font-family: var(--mono); }
+  code, pre, .mono { font-family: var(--mono); font-size: 0.92em; }
 
   /* ============== Layout ============== */
   .app {
@@ -863,28 +1001,28 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   .topbar {
     display: flex;
     align-items: center;
-    gap: 22px;
-    padding: 14px 28px;
-    background: linear-gradient(180deg, rgba(19,30,56,0.96) 0%, rgba(14,23,48,0.92) 100%);
+    gap: 28px;
+    padding: 18px 36px;
+    background: linear-gradient(180deg, rgba(19,30,56,0.94) 0%, rgba(13,23,43,0.9) 100%);
     border-bottom: 1px solid var(--border-soft);
-    backdrop-filter: blur(8px);
+    backdrop-filter: blur(10px);
     position: sticky; top: 0; z-index: 10;
   }
   .brand {
-    display: flex; align-items: center; gap: 12px;
+    display: flex; align-items: center; gap: 14px;
     font-family: var(--mono);
     font-size: var(--fz-md);
     font-weight: 600;
     letter-spacing: 0.4px;
   }
   .brand-mark {
-    width: 28px; height: 28px;
-    border-radius: 6px;
+    width: 36px; height: 36px;
+    border-radius: 9px;
     background: linear-gradient(135deg, var(--primary) 0%, var(--cyan) 100%);
     color: var(--bg);
     display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 13px;
-    box-shadow: 0 0 18px rgba(108,182,255,0.35);
+    font-weight: 800; font-size: 15px;
+    box-shadow: 0 0 22px rgba(122,184,255,0.32);
   }
   .brand small {
     color: var(--text-dim); font-weight: 400; margin-left: 6px;
@@ -892,18 +1030,19 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
 
   .nav-tabs {
-    display: flex; gap: 4px;
-    margin-left: 12px;
+    display: flex; gap: 6px;
+    margin-left: 14px;
   }
   .nav-tab {
-    padding: 7px 14px;
-    font-size: var(--fz-sm);
+    padding: 9px 18px;
+    font-size: var(--fz-base);
     color: var(--text-dim);
     border-radius: var(--radius);
     cursor: pointer;
     border: 1px solid transparent;
     transition: all .15s;
     user-select: none;
+    font-weight: 500;
   }
   .nav-tab:hover { color: var(--text); background: var(--surface); }
   .nav-tab.active {
@@ -915,34 +1054,34 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   .topbar-spacer { flex: 1; }
 
   .topbar-stats {
-    display: flex; gap: 18px;
+    display: flex; gap: 26px;
     font-family: var(--mono); font-size: var(--fz-sm);
     color: var(--text-dim);
   }
-  .topbar-stat { display: flex; flex-direction: column; align-items: flex-end; }
+  .topbar-stat { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
   .topbar-stat b {
-    color: var(--text-bright); font-size: var(--fz-lg); font-weight: 600; line-height: 1.1;
+    color: var(--text-bright); font-size: var(--fz-xl); font-weight: 600;
   }
 
   .conn-status {
-    display: inline-flex; align-items: center; gap: 7px;
+    display: inline-flex; align-items: center; gap: 8px;
     font-size: var(--fz-sm);
     color: var(--green);
-    padding: 5px 10px;
+    padding: 6px 14px;
     background: rgba(127, 207, 154, 0.08);
     border: 1px solid rgba(127, 207, 154, 0.25);
     border-radius: 999px;
   }
   .conn-status::before {
-    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    content: ''; width: 7px; height: 7px; border-radius: 50%;
     background: var(--green);
-    box-shadow: 0 0 8px var(--green);
+    box-shadow: 0 0 10px var(--green);
   }
 
   /* 主体 */
   main {
-    padding: 26px 28px 60px;
-    max-width: 1480px;
+    padding: 36px 40px 72px;
+    max-width: 1560px;
     margin: 0 auto;
     width: 100%;
   }
@@ -952,16 +1091,17 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   /* Section heading */
   .section-head {
     display: flex; justify-content: space-between; align-items: baseline;
-    margin: 8px 0 18px;
+    margin: 14px 0 28px;
   }
   .section-title {
-    font-size: var(--fz-lg); font-weight: 600;
+    font-size: var(--fz-xl); font-weight: 600;
     color: var(--text-bright);
     margin: 0;
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center; gap: 12px;
+    letter-spacing: -0.3px;
   }
   .section-title .bar {
-    width: 4px; height: 16px; border-radius: 2px;
+    width: 5px; height: 20px; border-radius: 3px;
     background: linear-gradient(180deg, var(--primary), var(--cyan));
   }
   .section-sub { color: var(--text-dim); font-size: var(--fz-sm); }
@@ -971,40 +1111,43 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     background: var(--surface);
     border: 1px solid var(--border-soft);
     border-radius: var(--radius-lg);
-    padding: 18px 20px;
+    padding: 24px 28px;
   }
   .card-head {
     display: flex; justify-content: space-between; align-items: baseline;
-    margin-bottom: 14px;
-    padding-bottom: 12px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
     border-bottom: 1px solid var(--border-soft);
   }
   .card-title {
-    font-size: var(--fz-md); font-weight: 600;
+    font-size: var(--fz-lg); font-weight: 600;
     color: var(--text-bright); margin: 0;
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 10px;
+    letter-spacing: -0.2px;
   }
   .card-title small { color: var(--text-dim); font-weight: 400; font-size: var(--fz-sm); }
 
   /* ============== Stat grid ============== */
   .stat-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-    gap: 14px;
-    margin-bottom: 22px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 18px;
+    margin-bottom: 28px;
   }
   .stat-card {
     position: relative;
     background: var(--surface);
     border: 1px solid var(--border-soft);
     border-radius: var(--radius-lg);
-    padding: 16px 18px;
+    padding: 22px 24px;
     overflow: hidden;
+    transition: border-color .15s, transform .15s;
   }
+  .stat-card:hover { border-color: var(--border); }
   .stat-card::before {
     content: '';
     position: absolute; left: 0; top: 0; bottom: 0;
-    width: 3px;
+    width: 4px;
     background: var(--primary);
   }
   .stat-card.mode0::before { background: var(--mode0); }
@@ -1016,8 +1159,8 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     font-size: var(--fz-sm);
     color: var(--text-dim);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 8px;
+    letter-spacing: 0.6px;
+    margin-bottom: 10px;
     font-weight: 500;
   }
   .stat-card .value {
@@ -1025,11 +1168,11 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     font-weight: 700;
     color: var(--text-bright);
     font-family: var(--mono);
-    letter-spacing: -0.5px;
+    letter-spacing: -1px;
     line-height: 1;
   }
   .stat-card .sub {
-    margin-top: 6px;
+    margin-top: 8px;
     font-size: var(--fz-xs);
     color: var(--text-dim);
   }
@@ -1051,16 +1194,16 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .data-table th {
     text-align: left;
-    padding: 12px 14px;
+    padding: 14px 18px;
     font-weight: 500;
     color: var(--text-dim);
     border-bottom: 1px solid var(--border-soft);
-    font-size: var(--fz-sm);
+    font-size: var(--fz-xs);
     text-transform: uppercase;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.6px;
   }
   .data-table td {
-    padding: 12px 14px;
+    padding: 16px 18px;
     border-bottom: 1px solid var(--border-soft);
     color: var(--text);
     vertical-align: middle;
@@ -1068,46 +1211,48 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   .data-table tr:last-child td { border-bottom: none; }
   .data-table tbody tr { transition: background .12s; }
   .data-table tbody tr:hover {
-    background: rgba(108,182,255,0.04);
+    background: rgba(122,184,255,0.04);
   }
   .data-table tbody tr.expanded {
-    background: rgba(108,182,255,0.06);
+    background: rgba(122,184,255,0.06);
   }
   .data-table tbody tr.expanded:hover {
-    background: rgba(108,182,255,0.08);
+    background: rgba(122,184,255,0.08);
   }
   .cell-name {
     font-weight: 500;
     color: var(--text-bright);
     cursor: pointer;
-    display: inline-flex; align-items: center; gap: 8px;
+    display: inline-flex; align-items: center; gap: 10px;
+    font-size: var(--fz-md);
   }
   .cell-name:hover { color: var(--primary); }
   .expand-caret {
     display: inline-block;
-    width: 16px; height: 16px;
+    width: 18px; height: 18px;
     text-align: center;
     color: var(--text-dim);
-    font-size: 10px;
+    font-size: 11px;
     transition: transform .15s;
+    line-height: 18px;
   }
   tr.expanded .expand-caret { transform: rotate(90deg); color: var(--primary); }
 
   /* 模式徽章 */
   .badge {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 3px 9px;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 11px;
     font-size: var(--fz-xs);
     font-weight: 600;
     font-family: var(--mono);
     border-radius: 999px;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.4px;
   }
   .badge.mode0 { background: var(--mode0-soft); color: var(--mode0); }
   .badge.mode1 { background: var(--mode1-soft); color: var(--mode1); }
   .badge.eg    { background: var(--eg-soft); color: var(--eg); }
   .badge.zero  { background: var(--surface-3); color: var(--text-dim); }
-  .badge dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .badge dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 
   /* 数字列 */
   .num {
@@ -1125,13 +1270,13 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     border-bottom: 1px solid var(--border) !important;
   }
   .detail-panel {
-    padding: 22px 26px;
+    padding: 30px 36px;
     color: var(--text);
   }
   .detail-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 18px;
+    gap: 22px;
   }
   .mode-col {
     background: var(--surface);
@@ -1139,99 +1284,163 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     border-radius: var(--radius-lg);
     overflow: hidden;
   }
-  .mode-col.mode0 { border-top: 3px solid var(--mode0); }
-  .mode-col.mode1 { border-top: 3px solid var(--mode1); }
-  .mode-col.eg    { border-top: 3px solid var(--eg); }
+  .mode-col.mode0 { border-top: 4px solid var(--mode0); }
+  .mode-col.mode1 { border-top: 4px solid var(--mode1); }
+  .mode-col.eg    { border-top: 4px solid var(--eg); }
   .mode-col-head {
-    padding: 12px 16px;
+    padding: 16px 22px;
     display: flex; align-items: center; justify-content: space-between;
     border-bottom: 1px solid var(--border-soft);
   }
   .mode-col-title {
     font-size: var(--fz-md); font-weight: 600;
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 10px;
   }
   .mode-col-title small {
     color: var(--text-dim); font-weight: 400; font-size: var(--fz-sm);
   }
   .mode-col-body {
-    max-height: 360px; overflow-y: auto;
+    max-height: 400px; overflow-y: auto;
   }
   .version-item {
-    padding: 10px 16px;
+    padding: 14px 22px;
     border-bottom: 1px solid var(--border-soft);
-    display: grid; grid-template-columns: auto 1fr auto; gap: 10px;
+    display: grid; grid-template-columns: auto 1fr auto; gap: 14px;
     align-items: center;
     cursor: pointer;
     transition: background .12s;
   }
   .version-item:last-child { border-bottom: none; }
-  .version-item:hover { background: rgba(108,182,255,0.05); }
+  .version-item:hover { background: rgba(122,184,255,0.05); }
   .version-num {
     font-family: var(--mono); font-weight: 600;
-    color: var(--text-bright); min-width: 36px;
+    color: var(--text-bright); min-width: 44px;
+    font-size: var(--fz-md);
   }
-  .version-meta { color: var(--text-dim); font-size: var(--fz-sm); }
+  .version-meta { color: var(--text-dim); font-size: var(--fz-sm); line-height: 1.5; }
   .version-time {
     font-family: var(--mono); font-size: var(--fz-xs);
     color: var(--text-dim);
   }
   .empty-state {
-    padding: 28px 16px;
+    padding: 32px 18px;
     text-align: center;
     color: var(--text-dim);
     font-size: var(--fz-sm);
   }
 
+  /* ============== Neo4j 当前图状态面板 ============== */
+  .neo4j-state-strip {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-left: 4px solid var(--cyan);
+    border-radius: var(--radius-lg);
+    padding: 20px 26px;
+    margin-bottom: 22px;
+  }
+  .neo4j-state-header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 14px;
+  }
+  .neo4j-state-title {
+    font-size: var(--fz-md); font-weight: 600;
+    color: var(--text-bright);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .neo4j-state-title .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--cyan);
+    box-shadow: 0 0 12px var(--cyan);
+  }
+  .neo4j-state-meta {
+    font-family: var(--mono); font-size: var(--fz-sm);
+    color: var(--text-dim);
+  }
+  .neo4j-state-meta b { color: var(--text-bright); font-weight: 500; }
+  .neo4j-state-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 14px;
+  }
+  .neo4j-stat {
+    background: var(--bg-soft);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    text-align: center;
+  }
+  .neo4j-stat .label {
+    font-size: var(--fz-xs); color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.4px;
+    margin-bottom: 6px;
+  }
+  .neo4j-stat .value {
+    font-family: var(--mono);
+    font-size: var(--fz-2xl);
+    font-weight: 700;
+    color: var(--text-bright);
+    line-height: 1;
+  }
+  .neo4j-stat.mode0 .value { color: var(--mode0); }
+  .neo4j-stat.mode1 .value { color: var(--mode1); }
+  .neo4j-stat.eg .value { color: var(--eg); }
+  .neo4j-state-empty {
+    color: var(--text-dim);
+    font-size: var(--fz-sm);
+    padding: 10px 0;
+    font-style: italic;
+  }
+
   /* ============== Modal ============== */
   .modal-mask {
     position: fixed; inset: 0;
-    background: rgba(8, 14, 28, 0.78);
-    backdrop-filter: blur(4px);
+    background: rgba(6, 10, 22, 0.82);
+    backdrop-filter: blur(6px);
     display: none;
     align-items: center; justify-content: center;
     z-index: 100;
-    padding: 40px;
+    padding: 48px;
   }
   .modal-mask.show { display: flex; }
   .modal {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    width: min(960px, 100%);
-    max-height: calc(100vh - 80px);
+    width: min(1040px, 100%);
+    max-height: calc(100vh - 96px);
     display: flex; flex-direction: column;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    box-shadow: 0 24px 70px rgba(0,0,0,0.7);
   }
   .modal-head {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 16px 20px;
+    padding: 20px 26px;
     border-bottom: 1px solid var(--border-soft);
   }
   .modal-title {
     font-size: var(--fz-lg); font-weight: 600;
     color: var(--text-bright);
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center; gap: 12px;
   }
   .modal-close {
-    width: 28px; height: 28px;
-    border-radius: 4px;
+    width: 32px; height: 32px;
+    border-radius: 6px;
     border: 1px solid var(--border);
     background: transparent;
     color: var(--text-dim);
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    font-size: 16px;
+    font-size: 18px;
+    transition: all .15s;
   }
   .modal-close:hover { color: var(--text-bright); background: var(--surface-2); }
   .modal-body {
-    padding: 18px 20px;
+    padding: 22px 26px;
     overflow-y: auto;
+    font-size: var(--fz-base);
   }
   .modal-footer {
-    padding: 14px 20px;
+    padding: 16px 26px;
     border-top: 1px solid var(--border-soft);
-    display: flex; justify-content: flex-end; gap: 8px;
+    display: flex; justify-content: flex-end; gap: 10px;
   }
 
   /* KV 表 */
@@ -1240,14 +1449,14 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     font-size: var(--fz-base);
   }
   .kv-table th, .kv-table td {
-    padding: 9px 12px;
+    padding: 11px 14px;
     border-bottom: 1px solid var(--border-soft);
     text-align: left;
   }
   .kv-table th {
     color: var(--text-dim); font-weight: 500;
     width: 32%; font-size: var(--fz-sm);
-    text-transform: uppercase; letter-spacing: 0.3px;
+    text-transform: uppercase; letter-spacing: 0.4px;
   }
   .kv-table td {
     color: var(--text); font-family: var(--mono); font-size: var(--fz-sm);
@@ -1258,43 +1467,44 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     background: var(--bg);
     border: 1px solid var(--border-soft);
     border-radius: var(--radius);
-    padding: 14px 16px;
+    padding: 18px 20px;
     margin: 0;
     font-family: var(--mono);
     font-size: var(--fz-sm);
     color: var(--text);
     overflow: auto;
-    max-height: 480px;
-    line-height: 1.55;
+    max-height: 520px;
+    line-height: 1.65;
   }
 
   /* 工具栏 */
   .toolbar {
-    display: flex; align-items: center; gap: 10px;
-    margin-bottom: 14px;
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 18px;
   }
   .input {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 8px 12px;
+    padding: 10px 16px;
     color: var(--text);
     font-size: var(--fz-base);
     outline: none;
-    min-width: 220px;
+    min-width: 280px;
     transition: border-color .15s;
   }
-  .input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+  .input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
   .input::placeholder { color: var(--text-dim); }
 
   .btn {
-    padding: 7px 14px;
+    padding: 9px 18px;
     border: 1px solid var(--border);
     background: var(--surface-2);
     color: var(--text);
     border-radius: var(--radius);
     cursor: pointer;
     font-size: var(--fz-sm);
+    font-weight: 500;
     transition: all .15s;
   }
   .btn:hover { background: var(--surface-3); border-color: var(--primary); color: var(--text-bright); }
@@ -1303,22 +1513,23 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   .btn.danger { background: rgba(231, 111, 81, 0.12); border-color: var(--red); color: var(--red); }
   .btn.danger:hover { background: var(--red); color: var(--bg); }
   .btn.ghost { background: transparent; border-color: var(--border); }
-  .btn.tiny { padding: 4px 10px; font-size: var(--fz-xs); }
+  .btn.tiny { padding: 5px 12px; font-size: var(--fz-xs); }
 
   /* Bar chart */
-  .bar-chart { display: flex; flex-direction: column; gap: 8px; }
+  .bar-chart { display: flex; flex-direction: column; gap: 11px; }
   .bar-row {
-    display: grid; grid-template-columns: 200px 1fr 80px;
-    align-items: center; gap: 12px;
-    font-size: var(--fz-sm);
+    display: grid; grid-template-columns: 220px 1fr 90px;
+    align-items: center; gap: 16px;
+    font-size: var(--fz-base);
   }
   .bar-label {
     color: var(--text); font-family: var(--mono);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: var(--fz-sm);
   }
   .bar-track {
     background: var(--bg);
-    height: 12px; border-radius: 6px;
+    height: 14px; border-radius: 7px;
     overflow: hidden;
     border: 1px solid var(--border-soft);
   }
@@ -1326,37 +1537,41 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     height: 100%;
     background: linear-gradient(90deg, var(--primary), var(--cyan));
     transition: width .4s;
+    border-radius: 6px;
   }
-  .bar-val { text-align: right; font-family: var(--mono); color: var(--text-bright); }
+  .bar-val { text-align: right; font-family: var(--mono); color: var(--text-bright); font-size: var(--fz-sm); }
 
   /* 通用：工具型徽章/标签 */
   .chip {
     display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
+    padding: 4px 11px;
+    border-radius: 6px;
     font-family: var(--mono);
     font-size: var(--fz-xs);
     background: var(--surface-3);
     color: var(--text-dim);
     border: 1px solid var(--border-soft);
+    cursor: pointer;
+    transition: all .15s;
   }
+  .chip:hover { color: var(--text-bright); border-color: var(--primary); }
 
   /* Toast */
   .toast {
     position: fixed;
-    top: 24px; right: 24px;
+    top: 28px; right: 28px;
     z-index: 1000;
-    display: flex; flex-direction: column; gap: 10px;
+    display: flex; flex-direction: column; gap: 12px;
   }
   .toast-msg {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-left: 4px solid var(--primary);
+    border-left: 5px solid var(--primary);
     color: var(--text);
-    padding: 10px 16px;
+    padding: 14px 20px;
     border-radius: var(--radius);
-    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-    max-width: 380px;
+    box-shadow: 0 14px 36px rgba(0,0,0,0.5);
+    max-width: 420px;
     font-size: var(--fz-base);
   }
   .toast-msg.error { border-left-color: var(--red); }
@@ -1364,17 +1579,17 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   /* Topology indicator */
   .topo-strip {
-    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;
   }
   .topo-pill {
-    padding: 3px 9px;
+    padding: 4px 11px;
     background: var(--surface-3);
     border: 1px solid var(--border-soft);
-    border-radius: 4px;
+    border-radius: 6px;
     font-family: var(--mono);
     font-size: var(--fz-xs);
     color: var(--text);
-    display: inline-flex; align-items: center; gap: 6px;
+    display: inline-flex; align-items: center; gap: 8px;
   }
   .topo-pill .count {
     color: var(--text-dim);
@@ -1389,7 +1604,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   .pid::before { content: '· '; color: var(--border); }
 
   /* responsive */
-  @media (max-width: 1100px) {
+  @media (max-width: 1180px) {
     .detail-grid { grid-template-columns: 1fr; }
     .topbar-stats { display: none; }
   }
@@ -1397,33 +1612,34 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   /* Browser tab */
   .cypher-editor {
     width: 100%;
-    min-height: 140px;
+    min-height: 160px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 12px 14px;
+    padding: 16px 18px;
     color: var(--text);
     font-family: var(--mono);
-    font-size: var(--fz-sm);
-    line-height: 1.6;
+    font-size: var(--fz-base);
+    line-height: 1.7;
     resize: vertical;
   }
-  .cypher-editor:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+  .cypher-editor:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
   .row-result {
     font-family: var(--mono); font-size: var(--fz-sm);
     background: var(--bg);
-    padding: 10px 14px;
+    padding: 12px 18px;
     border-radius: var(--radius);
     border: 1px solid var(--border-soft);
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     color: var(--text);
     overflow-x: auto;
     white-space: pre-wrap;
     word-break: break-all;
+    line-height: 1.6;
   }
 
   /* small helpers */
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .right { text-align: right; }
   .center { text-align: center; }
   .muted { color: var(--text-dim); }
@@ -1832,27 +2048,27 @@ function renderDetail(d, el) {
   const totalEG = d.entity_graph_versions.length;
 
   el.innerHTML = `
-    <div class="row" style="gap: 14px; margin-bottom: 14px;">
+    <div class="row" style="gap: 16px; margin-bottom: 18px; align-items: flex-start;">
       <div style="flex: 1;">
-        <div style="font-size: var(--fz-lg); font-weight: 600; color: var(--text-bright);">${escapeHTML(d.project.name)}</div>
-        <div class="muted" style="font-size: var(--fz-sm); margin-top: 4px;">
+        <div style="font-size: var(--fz-xl); font-weight: 600; color: var(--text-bright); letter-spacing: -0.3px;">${escapeHTML(d.project.name)}</div>
+        <div class="muted" style="font-size: var(--fz-sm); margin-top: 6px;">
           ID <span class="mono">${escapeHTML(d.project.id)}</span>
           · 创建 ${fmtTime(d.project.created_at)}
           · 更新 ${fmtTime(d.project.updated_at)}
         </div>
-        ${d.current_part ? `
-          <div class="muted" style="font-size: var(--fz-sm); margin-top: 4px;">
-            当前 part 引用：<span class="mono">${escapeHTML(d.current_part.part_name)}</span>
-          </div>
-        ` : ''}
       </div>
+      <button class="btn ghost" data-action="open-graph">查看 Neo4j 当前图状态 →</button>
     </div>
+    <div id="neo4j-state-${cssEscape(d.project.id)}"></div>
     <div class="detail-grid">
       ${renderModeCol('mode0', 'Mode 0', 'SAT 全量版本', d.mode0_versions, totalM0, 'mode0')}
       ${renderModeCol('mode1', 'Mode 1', 'Delta 增量', d.mode1_deltas, totalM1, 'mode1')}
       ${renderModeCol('eg', 'Entity Graph', '图版本', d.entity_graph_versions, totalEG, 'eg')}
     </div>
   `;
+
+  // 加载 Neo4j 当前图状态
+  loadNeo4jState(d.project.id);
 
   // 绑定版本点击
   el.querySelectorAll('.version-item').forEach(v => {
@@ -1863,6 +2079,122 @@ function renderDetail(d, el) {
       openVersionDetail(project, mode, version);
     });
   });
+
+  // 绑定"查看 Neo4j 当前图状态"按钮
+  const openGraphBtn = el.querySelector('[data-action="open-graph"]');
+  if (openGraphBtn) {
+    openGraphBtn.addEventListener('click', () => {
+      openNeo4jStateModal(d.project.name, d.project.id);
+    });
+  }
+}
+
+// ============== Neo4j 当前图状态 ==============
+
+async function loadNeo4jState(projectId) {
+  const target = document.getElementById(`neo4j-state-${cssEscape(projectId)}`);
+  if (!target) return;
+  target.innerHTML = `<div class="neo4j-state-strip"><div class="neo4j-state-empty">加载 Neo4j 图状态…</div></div>`;
+  try {
+    const r = await fetch(`${API}/projects/${encodeURIComponent(ALL_PROJECTS.find(p => p.project_id === projectId)?.name || '')}/neo4j-state`);
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    renderNeo4jStateStrip(target, data);
+  } catch (e) {
+    target.innerHTML = `<div class="neo4j-state-strip"><div class="neo4j-state-empty">Neo4j 当前图状态加载失败：${escapeHTML(e.message)}</div></div>`;
+  }
+}
+
+function renderNeo4jStateStrip(el, data) {
+  if (!data || !data.has_part) {
+    el.innerHTML = `
+      <div class="neo4j-state-strip">
+        <div class="neo4j-state-header">
+          <div class="neo4j-state-title"><span class="dot"></span> Neo4j 当前图状态</div>
+          <div class="neo4j-state-meta">该模式尚未在 Neo4j 写入 part 子图</div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  const buckets = data.buckets || [];
+  const max = buckets.reduce((m, b) => Math.max(m, b.count), 0) || 1;
+  el.innerHTML = `
+    <div class="neo4j-state-strip">
+      <div class="neo4j-state-header">
+        <div class="neo4j-state-title"><span class="dot"></span> Neo4j 当前图状态 <small class="muted" style="font-size: var(--fz-sm); font-weight: 400;">— 单次完整拓扑，覆写式</small></div>
+        <div class="neo4j-state-meta">
+          part: <b>${escapeHTML(data.part_name)}</b>
+          · version: <b>${data.part_version}</b>
+          · 总节点 <b>${data.total_nodes}</b>
+        </div>
+      </div>
+      <div class="neo4j-state-grid">
+        ${buckets.map(b => `
+          <div class="neo4j-stat">
+            <div class="label">${escapeHTML(b.label)}</div>
+            <div class="value">${b.count.toLocaleString()}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+async function openNeo4jStateModal(projectName, projectId) {
+  openModal(`Neo4j 当前图状态 · ${escapeHTML(projectName)}`);
+  const body = $('#modal-body');
+  body.innerHTML = '<div class="muted center" style="padding: 30px;">加载中…</div>';
+  try {
+    const r = await fetch(`${API}/projects/${encodeURIComponent(projectName)}/neo4j-state`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || '加载失败');
+    renderNeo4jStateModal(body, data, projectName);
+  } catch (e) {
+    body.innerHTML = `<div class="empty-state" style="color: var(--red);">失败：${escapeHTML(e.message)}</div>`;
+  }
+}
+
+function renderNeo4jStateModal(body, data, projectName) {
+  if (!data.has_part) {
+    body.innerHTML = `
+      <div class="empty-state">该项目在 Neo4j 中尚未写入 part 子图（可能只用了 Mode0 但还没做 Save，或模式不同）。</div>
+    `;
+    return;
+  }
+  const buckets = data.buckets || [];
+  const max = buckets.reduce((m, b) => Math.max(m, b.count), 0) || 1;
+  body.innerHTML = `
+    <table class="kv-table">
+      <tr><th>项目名</th><td>${escapeHTML(projectName)}</td></tr>
+      <tr><th>项目 ID</th><td>${escapeHTML(data.project_id)}</td></tr>
+      <tr><th>当前 part 名</th><td>${escapeHTML(data.part_name)}</td></tr>
+      <tr><th>当前 part 版本</th><td>${data.part_version}</td></tr>
+      <tr><th>part 总节点数</th><td>${data.total_nodes}</td></tr>
+      <tr><th>存储模式</th><td>${escapeHTML(data.storage_label || '—')}</td></tr>
+    </table>
+    <h4 style="margin-top: 22px; color: var(--text-bright); font-size: var(--fz-md);">ACIS 拓扑节点分布</h4>
+    <div style="margin-top: 10px;">
+      ${buckets.map(b => `
+        <div class="bar-row">
+          <div class="bar-label">${escapeHTML(b.label)}</div>
+          <div class="bar-track"><div class="bar-fill" style="width: ${(b.count / max * 100).toFixed(1)}%"></div></div>
+          <div class="bar-val">${b.count.toLocaleString()}</div>
+        </div>
+      `).join('')}
+    </div>
+    <h4 style="margin-top: 24px; color: var(--text-bright); font-size: var(--fz-md);">Body 列表（前 ${Math.min(data.bodies?.length || 0, 30)} 个，共 ${data.body_count}）</h4>
+    <div class="topo-strip">
+      ${(data.bodies || []).slice(0, 30).map(b => `
+        <div class="topo-pill" title="${escapeHTML(b.uuid)}">body <span class="count">${escapeHTML(b.uuid.slice(0, 8))}…</span></div>
+      `).join('') || '<div class="muted">无 body</div>'}
+    </div>
+    <p class="muted mt-16" style="font-size: var(--fz-sm);">
+      【解读】这是 bridge 在最后一次 save 后写入的「part 子图」快照——
+      ACIS 拓扑节点从 part 出发，沿 part_entity_ptr 链展开（body → lump → shell → face → loop → coedge → edge → vertex + transform/几何）。
+      历史回放见 BridgeDeltaVersion 增量链。
+    </p>
+  `;
 }
 
 function renderModeCol(cls, title, sub, items, total, mode) {
