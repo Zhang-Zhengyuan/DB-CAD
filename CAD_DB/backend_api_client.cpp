@@ -20,7 +20,11 @@ QString extractErrorDetail(const QByteArray& body) {
     QJsonParseError parseError;
     const QJsonDocument doc = QJsonDocument::fromJson(body, &parseError);
     if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
-        const QString detail = doc.object().value("detail").toString().trimmed();
+        const QJsonValue raw = doc.object().value("detail");
+        QString detail;
+        if (raw.isObject()) detail = QString::fromUtf8(QJsonDocument(raw.toObject()).toJson(QJsonDocument::Compact));
+        else if (raw.isArray()) detail = QString::fromUtf8(QJsonDocument(raw.toArray()).toJson(QJsonDocument::Compact));
+        else detail = raw.toString().trimmed();
         if (!detail.isEmpty()) {
             return detail;
         }
@@ -651,5 +655,89 @@ std::optional<BackendApiClient::DeltaPullPayload> BackendApiClient::getDelta(
 
     fprintf(stderr, "[backend_api_client getDelta] SUCCESS v=%d delta_bodies=%d deleted_uuids=%d\n",
             result.version, result.deltaBodies.size(), result.deletedUuids.size());
+    return result;
+}
+
+std::optional<int> BackendApiClient::saveJsonDelta(
+    const QString& projectId,
+    const QString& author,
+    const QString& entityGraphJson,
+    const QString& changesJson,
+    const QStringList& removedIds,
+    std::optional<int> baseVersion,
+    const QString& sourceClientId
+) {
+    errorMessage.clear();
+    QJsonParseError parseError;
+    const QJsonDocument graphDoc = QJsonDocument::fromJson(entityGraphJson.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !graphDoc.isObject()) {
+        errorMessage = QString::fromUtf8("Entity Graph JSON 格式错误");
+        return std::nullopt;
+    }
+    const QJsonDocument changesDoc = QJsonDocument::fromJson(changesJson.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || (!changesDoc.isArray() && !changesDoc.isObject())) {
+        errorMessage = QString::fromUtf8("changes JSON 格式错误");
+        return std::nullopt;
+    }
+    QJsonArray changes;
+    if (changesDoc.isArray()) changes = changesDoc.array();
+    else changes = changesDoc.object().value("changes").toArray();
+
+    QJsonArray removed;
+    for (const QString& id : removedIds) removed.append(id);
+    QJsonObject payload;
+    payload.insert("author", author);
+    payload.insert("entity_graph", graphDoc.object());
+    payload.insert("changes", changes);
+    payload.insert("removed_ids", removed);
+    payload.insert("base_version", baseVersion.has_value() ? QJsonValue(*baseVersion) : QJsonValue(QJsonValue::Null));
+    if (!sourceClientId.isEmpty()) payload.insert("source_client_id", sourceClientId);
+
+    const HttpResult response = sendJsonRequest(
+        "POST", QString("/projects/%1/json-delta").arg(projectId),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    if (!response.error.isEmpty() && response.statusCode <= 0) { errorMessage = response.error; return std::nullopt; }
+    if (response.statusCode != 201) {
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("保存 JSON delta 失败"), response.statusCode, response.body);
+        return std::nullopt;
+    }
+    const QJsonDocument resultDoc = QJsonDocument::fromJson(response.body, &parseError);
+    const int version = resultDoc.object().value("version").toInt(0);
+    if (parseError.error != QJsonParseError::NoError || version <= 0) {
+        errorMessage = QString::fromUtf8("保存 JSON delta 返回版本无效");
+        return std::nullopt;
+    }
+    return version;
+}
+
+std::optional<BackendApiClient::JsonGraphPayload> BackendApiClient::getJsonDelta(
+    const QString& projectId, int baseVersion) {
+    errorMessage.clear();
+    const HttpResult response = sendJsonRequest(
+        "GET", QString("/projects/%1/json-delta?base_version=%2").arg(projectId).arg(baseVersion));
+    if (!response.error.isEmpty() && response.statusCode <= 0) { errorMessage = response.error; return std::nullopt; }
+    if (response.statusCode != 200) {
+        errorMessage = formatHttpErrorMessage(QString::fromUtf8("获取 JSON delta 失败"), response.statusCode, response.body);
+        return std::nullopt;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        errorMessage = QString::fromUtf8("获取 JSON delta 返回格式错误");
+        return std::nullopt;
+    }
+    const QJsonObject root = doc.object();
+    JsonGraphPayload result;
+    result.version = root.value("version").toInt(0);
+    result.graphJson = QString::fromUtf8(QJsonDocument(root.value("entity_graph").toObject()).toJson(QJsonDocument::Compact));
+    result.changesJson = QString::fromUtf8(QJsonDocument(root.value("changes").toObject()).toJson(QJsonDocument::Compact));
+    if (root.value("changes").isArray()) result.changesJson = QString::fromUtf8(QJsonDocument(root.value("changes").toArray()).toJson(QJsonDocument::Compact));
+    for (const QJsonValue& value : root.value("removed_ids").toArray()) {
+        const QString id = value.toString().trimmed();
+        if (!id.isEmpty()) result.removedIds.append(id);
+    }
+    result.delta = root.value("delta").toBool(false);
+    result.graphHash = root.value("graph_hash").toString();
+    if (result.version < 0 || result.graphJson.isEmpty()) { errorMessage = QString::fromUtf8("获取 JSON delta 版本无效"); return std::nullopt; }
     return result;
 }

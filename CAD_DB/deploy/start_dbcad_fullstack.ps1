@@ -25,6 +25,7 @@ param(
     [switch]$SkipPackageSync = $false,
     [switch]$PrepareOnly = $false,
     [switch]$SkipDependencySync = $false,
+    [switch]$LegacyBridgeMode = $false,
     [switch]$SkipBridgeHealthCheck = $false,
     [switch]$SkipNeo4jPortCheck = $false,
     [switch]$SkipNeo4jDocker = $false,
@@ -821,6 +822,7 @@ function Start-FastApi(
     [string]$BridgeUrl,
     [double]$BridgeTimeoutSeconds,
     [string]$ApiPassword,
+    [bool]$DirectJsonMode,
     [bool]$SkipDependencySync,
     [bool]$SkipBridgeHealthCheck,
     [string]$LogDir
@@ -847,9 +849,11 @@ function Start-FastApi(
         Write-Host "[INFO] Skip dependency sync (-SkipDependencySync)."
     }
 
-    [Environment]::SetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL", $BridgeUrl, "Process")
+    $effectiveBridgeUrl = if ($DirectJsonMode) { "" } else { $BridgeUrl }
+    [Environment]::SetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL", $effectiveBridgeUrl, "Process")
     [Environment]::SetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_TIMEOUT_SECONDS", [string]$BridgeTimeoutSeconds, "Process")
     [Environment]::SetEnvironmentVariable("CAD_DB_API_PASSWORD", $ApiPassword, "Process")
+    [Environment]::SetEnvironmentVariable("CAD_DB_DIRECT_JSON_MODE", $(if ($DirectJsonMode) { "true" } else { "false" }), "Process")
 
     $args = @(
         "run",
@@ -941,7 +945,8 @@ function Sync-FullstackPackage(
     [string]$Neo4jUser,
     [string]$Neo4jPassword,
     [string]$Neo4jUri,
-    [double]$StorageBridgeTimeoutSeconds
+    [double]$StorageBridgeTimeoutSeconds,
+    [bool]$DirectJsonMode
 ) {
     $clientDir = Ensure-Directory (Join-Path $PackageRoot "client")
     $serverDir = Ensure-Directory (Join-Path $PackageRoot "server")
@@ -998,13 +1003,14 @@ function Sync-FullstackPackage(
     $envFile = Join-Path $serverDir ".env"
     $envText = @"
 CAD_DB_STORAGE_BACKEND=neo4j
-CAD_DB_STORAGE_BRIDGE_URL=http://127.0.0.1:$BridgePort
+CAD_DB_STORAGE_BRIDGE_URL=$(if ($DirectJsonMode) { "" } else { "http://127.0.0.1:$BridgePort" })
 CAD_DB_STORAGE_BRIDGE_TIMEOUT_SECONDS=$StorageBridgeTimeoutSeconds
 CAD_DB_NEO4J_URI=$Neo4jUri
 CAD_DB_NEO4J_USER=$Neo4jUser
 CAD_DB_NEO4J_PASSWORD=$Neo4jPassword
 CAD_DB_NEO4J_DATABASE=neo4j
 CAD_DB_API_PASSWORD=$ApiPassword
+CAD_DB_DIRECT_JSON_MODE=$(if ($DirectJsonMode) { "true" } else { "false" })
 "@
     Write-TextFile -Path $envFile -Text $envText
 
@@ -1100,6 +1106,14 @@ if ((-not $KeepExistingServices) -and (Test-Path -LiteralPath $stopScriptBeforeS
 }
 
 $latestExe = Resolve-LatestCadDbExe -ProjectRoot $projectRoot -RepoRoot $repoRoot -PackageRoot $PackageRoot -ExplicitPath $ClientExePath
+$serializerSource = Join-Path $projectRoot "entity_graph_serializer.cpp"
+$serializerProject = Join-Path $projectRoot "CAD_DB.vcxproj"
+if (-not (Test-Path -LiteralPath $serializerProject)) {
+    throw "The active CAD_DB.vcxproj was not found next to the serializer source: $serializerProject"
+}
+if ((Test-Path -LiteralPath $serializerSource) -and $latestExe.LastWriteTime -lt (Get-Item -LiteralPath $serializerSource).LastWriteTime) {
+    throw "CAD_DB.exe is older than entity_graph_serializer.cpp. Rebuild the Visual Studio project before launching: $($latestExe.FullName)"
+}
 if ([string]::IsNullOrWhiteSpace($Neo4jUri)) {
     $Neo4jUri = "bolt://$Neo4jHost`:$Neo4jPort"
 } else {
@@ -1121,6 +1135,7 @@ $fastApiUrl = "http://$fastApiProbeHost`:$FastApiPort"
 $fastApiListenUrl = "http://$FastApiHost`:$FastApiPort"
 $bridgeUrl = "http://$bridgeProbeHost`:$BridgePort"
 $bridgeListenUrl = "http://$BridgeHost`:$BridgePort"
+$directJsonMode = -not [bool]$LegacyBridgeMode
 
 # Stop any running CAD_DB.exe in the package directories before syncing
 if (-not $SkipPackageSync) {
@@ -1129,7 +1144,8 @@ if (-not $SkipPackageSync) {
 
 if (-not $SkipPackageSync) {
     Write-Host "[INFO] Syncing fullstack package: $PackageRoot"
-    Write-Host "[INFO] Latest CAD_DB.exe: $($latestExe.FullName) ($($latestExe.LastWriteTime))"
+Write-Host "[INFO] Latest CAD_DB.exe: $($latestExe.FullName) ($($latestExe.LastWriteTime))"
+Write-Host "[INFO] Serializer source: $serializerSource ($((Get-Item -LiteralPath $serializerSource).LastWriteTime))"
     $paths = Sync-FullstackPackage `
         -ProjectRoot $projectRoot `
         -RepoRoot $repoRoot `
@@ -1148,7 +1164,8 @@ if (-not $SkipPackageSync) {
         -Neo4jUser $Neo4jUser `
         -Neo4jPassword $Neo4jPassword `
         -Neo4jUri $Neo4jUri `
-        -StorageBridgeTimeoutSeconds $StorageBridgeTimeoutSeconds
+        -StorageBridgeTimeoutSeconds $StorageBridgeTimeoutSeconds `
+        -DirectJsonMode (-not [bool]$LegacyBridgeMode)
 } else {
     $paths = @{
         ClientDir = Ensure-Directory (Join-Path $PackageRoot "client")
@@ -1165,7 +1182,7 @@ $bridgeExe = Join-Path $paths.BridgeDir "CAD_DB.exe"
 if (!(Test-Path -LiteralPath $clientExe)) {
     throw "Client executable not found in package: $clientExe"
 }
-if (!(Test-Path -LiteralPath $bridgeExe)) {
+if ($LegacyBridgeMode -and !(Test-Path -LiteralPath $bridgeExe)) {
     throw "Bridge executable not found in package: $bridgeExe"
 }
 
@@ -1213,7 +1230,7 @@ if (-not $SkipNeo4jDocker) {
         -DelaySeconds $RetryDelaySeconds
 }
 
-if (Test-ServiceHealth "$bridgeUrl/health") {
+if ($LegacyBridgeMode -and (Test-ServiceHealth "$bridgeUrl/health")) {
     if ($KeepExistingServices) {
         Write-Warning "Bridge is already healthy at $bridgeUrl/health. Reusing it because -KeepExistingServices was set."
     } else {
@@ -1222,7 +1239,7 @@ if (Test-ServiceHealth "$bridgeUrl/health") {
     }
 }
 
-if (-not (Test-ServiceHealth "$bridgeUrl/health")) {
+if ($LegacyBridgeMode -and -not (Test-ServiceHealth "$bridgeUrl/health")) {
     Write-Host "[INFO] Starting storage bridge: $bridgeListenUrl"
     $bridgeProcess = Start-StorageBridge `
         -ExePath $bridgeExe `
@@ -1260,8 +1277,9 @@ if (-not (Test-ServiceHealth "$fastApiUrl/health")) {
         -BridgeUrl $bridgeUrl `
         -BridgeTimeoutSeconds $StorageBridgeTimeoutSeconds `
         -ApiPassword $ApiPassword `
+        -DirectJsonMode $directJsonMode `
         -SkipDependencySync ([bool]$SkipDependencySync) `
-        -SkipBridgeHealthCheck ([bool]$SkipBridgeHealthCheck) `
+        -SkipBridgeHealthCheck ([bool]$SkipBridgeHealthCheck -or $directJsonMode) `
         -LogDir $logDir
 
     if (-not (Wait-ServiceHealth -Url "$fastApiUrl/health" -Process $backendProcess -ServiceName "FastAPI" -Attempts $RetryCount -DelaySeconds $RetryDelaySeconds)) {
@@ -1295,6 +1313,7 @@ $pidData = [ordered]@{
     client_pids = @($clientProcesses | ForEach-Object { $_.Id })
     client_count = $clientProcesses.Count
     bridge_url = $bridgeUrl
+    collaboration_mode = if ($directJsonMode) { "direct_json" } else { "legacy_bridge" }
     fastapi_url = $fastApiUrl
     started_at = (Get-Date).ToString("o")
 }
@@ -1303,7 +1322,12 @@ Write-PidFile -Path $pidFile -Data $pidData
 Write-Host "[OK] DBCAD fullstack is ready."
 Write-Host "[INFO] Package: $PackageRoot"
 Write-Host "[INFO] Source executable: $($latestExe.FullName)"
-Write-Host "[INFO] Bridge health: $bridgeUrl/health"
+if ($directJsonMode) {
+    Write-Host "[INFO] Collaboration mode: direct_json (C++ bridge is not required)"
+} else {
+    Write-Host "[INFO] Collaboration mode: legacy_bridge"
+    Write-Host "[INFO] Bridge health: $bridgeUrl/health"
+}
 Write-Host "[INFO] FastAPI health: $fastApiUrl/health"
 Write-Host "[INFO] FastAPI docs: $fastApiUrl/docs"
 if (-not $SkipClient) {

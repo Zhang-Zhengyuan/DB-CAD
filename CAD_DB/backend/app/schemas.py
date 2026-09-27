@@ -95,3 +95,13 @@ class GetDeltaResponse(BaseModel):
     version: int
     delta_bodies: list[DeltaBodyItem] = Field(default_factory=list)
     deleted_uuids: list[str] = Field(default_factory=list)
+
+
+class JsonDeltaRequest(BaseModel):
+    """Client serialized graph delta for the bridge-free Mode1 path."""
+    author: str = Field(min_length=1, max_length=120)
+    entity_graph: EntityGraphSchema | dict[str, Any]
+    changes: list[dict[str, Any] | str] = Field(default_factory=list)
+    removed_ids: list[str] = Field(default_factory=list)
+    base_version: int | None = Field(default=None, ge=0)
+    source_client_id: str | None = Field(default=None, max_length=200)

@@ -135,11 +135,15 @@ public:
     // Mode1 Pull: HTTP GET /delta → UUID 差量合并
     void pullMode1Delta();
 
+    // Bridge-free Mode1: ACIS serialization stays on the client; server merges JSON.
+    bool submitMode1JsonDelta(const QString& reason);
+    void pullMode1JsonDelta();
+
     // 拉取：用 entity_graph JSON（拓扑/UUID）+ content.sat（restore 用）做合并
     // 用户在协作面板选择 "JSON 反序列化" 模式时调用此路径。
     // 优先尝试纯 JSON 反序列化（deserializeACISEntityGraph），失败则 fallback 到 SAT restore。
     // 不调用 Window::clear()，避免破坏 restore 出来的 body。
-    bool pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, const QString& satContent);
+    bool pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, const QString& satContent, bool deltaGraph = false, const QStringList& removedIds = {});
     // SAT restore + UUID 对齐辅助函数（EntityGraph fallback 路径）
     bool restoreSatWithUuidAlignment(
         const QString& satContent,

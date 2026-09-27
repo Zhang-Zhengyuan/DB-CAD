@@ -13,6 +13,8 @@ from pydantic import ValidationError
 from . import crud, schemas
 from .config import settings
 from .sync import sync_manager
+from .json_collab import GraphValidationError, graph_component, graph_hash, graph_diff, merge_graph, validate_graph
+from .json_graph_store import get_json_graph_store, shutdown_json_graph_store
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 
@@ -65,6 +67,7 @@ def on_startup() -> None:
 @app.on_event("shutdown")
 def on_shutdown() -> None:
     crud.shutdown_backend()
+    shutdown_json_graph_store()
     from . import neo4j_entity_store
     neo4j_entity_store.shutdown_entity_store()
 
@@ -95,11 +98,16 @@ async def request_logging_middleware(request: Request, call_next):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, str | bool]:
+    # Expose the selected collaboration path so the launcher and a human
+    # operator can verify that the packaged service is using the bridge-free
+    # JSON route. This is read-only diagnostic information.
     return {
         "status": "ok",
         "build": datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"),
         "log_file": str(LOG_FILE_PATH),
+        "collaboration_mode": "direct_json" if settings.direct_json_mode else "legacy_bridge",
+        "bridge_required": not settings.direct_json_mode,
     }
 
 
@@ -250,6 +258,91 @@ async def save_model(
     return schemas.SaveResult(version=version.version, created_at=version.created_at)
 
 
+@app.post("/projects/{project_id}/json-delta", status_code=201)
+async def save_json_delta(
+    project_id: str,
+    payload: schemas.JsonDeltaRequest,
+    _: None = Depends(verify_api_password),
+) -> dict[str, Any]:
+    """Mode1 pure JSON path.
+
+    The client serializes ACIS locally.  FastAPI validates the graph, loads the
+    base snapshot, applies an entity/component delta, and persists one complete
+    canonical snapshot.  No C++ bridge or SAT is involved.
+    """
+    if not settings.direct_json_mode:
+        raise HTTPException(status_code=503, detail="Direct JSON collaboration is disabled")
+    try:
+        incoming = validate_graph(payload.entity_graph)
+    except GraphValidationError as ex:
+        raise HTTPException(status_code=422, detail=str(ex)) from ex
+
+    async with sync_manager.write_lock(project_id):
+        store = get_json_graph_store()
+        # JSON graph versions have their own namespace.  A SAT/legacy version
+        # must not silently become the base of a pure JSON graph stream.
+        latest = store.latest(project_id)
+        latest_version = latest.version if latest else None
+        base_version = payload.base_version
+        # The JSON stream is intentionally a new version namespace.  If a
+        # project only has legacy SAT versions, the first JSON push seeds
+        # version 1 from the client's complete graph; legacy numbers are not
+        # valid JSON compare-and-swap tokens.
+        if latest_version is None:
+            base_version = None
+        elif base_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"reason": "base_version_required", "latest_version": latest_version},
+            )
+        if base_version != latest_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "reason": "stale_base",
+                    "latest_version": latest_version or 0,
+                    "base_version": base_version,
+                },
+            )
+        base_graph = latest.content.get("entity_graph", {"nodes": [], "rels": []}) if latest else {"nodes": [], "rels": []}
+        try:
+            merged = merge_graph(base_graph, incoming, payload.changes, payload.removed_ids)
+        except GraphValidationError as ex:
+            raise HTTPException(status_code=422, detail=str(ex)) from ex
+        content = {
+            "entity_graph": merged,
+            "changes": payload.changes,
+            "removed_ids": payload.removed_ids,
+            "schema": "dbcad.entity_graph.v1",
+            "graph_hash": graph_hash(merged),
+        }
+        version = store.create(project_id, payload.author, content, base_version)
+        await sync_manager.broadcast(
+            project_id,
+            {
+                "type": "json_delta_saved",
+                "project_id": project_id,
+                "version": version.version,
+                "author": version.author,
+                "changed_ids": [
+                    str(item.get("uuid", item.get("id"))).strip()
+                    for item in payload.changes
+                    if isinstance(item, dict) and str(item.get("uuid", item.get("id", ""))).strip()
+                ],
+                "removed_ids": payload.removed_ids,
+                "graph_hash": content["graph_hash"],
+                "trigger": "json_delta",
+            },
+            exclude_client_id=payload.source_client_id,
+        )
+        return {
+            "project_id": project_id,
+            "version": version.version,
+            "created_at": version.created_at.isoformat(),
+            "graph_hash": content["graph_hash"],
+        }
+
+
 # ---------------------------------------------------------------------------
 # Mode1 Delta Push / Pull — delegates to C++ storage_bridge
 # ---------------------------------------------------------------------------
@@ -387,6 +480,26 @@ async def get_delta(
 
 
 async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, trigger: str) -> None:
+    if settings.direct_json_mode:
+        json_latest = get_json_graph_store().latest(project_id)
+        if json_latest is not None:
+            await websocket.send_json(
+                {
+                    "type": "json_delta_saved",
+                    "project_id": project_id,
+                    "version": json_latest.version,
+                    "author": json_latest.author,
+                    "changed_ids": [
+                        str(item.get("uuid", item.get("id"))).strip()
+                        for item in json_latest.content.get("changes", [])
+                        if isinstance(item, dict) and str(item.get("uuid", item.get("id", ""))).strip()
+                    ],
+                    "removed_ids": json_latest.content.get("removed_ids", []),
+                    "graph_hash": json_latest.content.get("graph_hash"),
+                    "trigger": trigger,
+                }
+            )
+        return
     try:
         latest = crud.get_latest_version_or_404(project_id)
     except HTTPException as ex:
@@ -417,6 +530,60 @@ async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, 
         return
 
     await websocket.send_json(_model_saved_event(project_id, latest, trigger=trigger, include_content=True))
+
+
+@app.get("/projects/{project_id}/json-delta")
+def get_json_delta(
+    project_id: str,
+    base_version: int = Query(..., ge=0),
+    _: None = Depends(verify_api_password),
+) -> dict[str, Any]:
+    """Return a canonical snapshot plus a deterministic change summary."""
+    if not settings.direct_json_mode:
+        raise HTTPException(status_code=503, detail="Direct JSON collaboration is disabled")
+    store = get_json_graph_store()
+    latest = store.latest(project_id)
+    if latest is None:
+        return {"version": 0, "entity_graph": {"nodes": [], "rels": []}, "changes": None}
+    if base_version > latest.version:
+        raise HTTPException(status_code=409, detail="base_version is ahead of latest version")
+    base = store.get(project_id, base_version) if base_version > 0 else None
+    if base_version > 0 and base is None:
+        raise HTTPException(status_code=404, detail="Base JSON graph version not found")
+    empty = {"nodes": [], "rels": []}
+    base_graph = base.content.get("entity_graph", empty) if base else empty
+    graph = latest.content["entity_graph"]
+    commits = store.list_after(project_id, base_version)
+    latest_changes = [
+        item
+        for commit in commits
+        for item in commit.content.get("changes", [])
+        if isinstance(item, (dict, str))
+    ]
+    changed_roots = {
+        str(item.get("uuid", item.get("id"))).strip()
+        for item in latest_changes
+        if isinstance(item, dict) and str(item.get("uuid", item.get("id", ""))).strip()
+    }
+    removed_ids = [
+        str(value).strip()
+        for commit in commits
+        for value in commit.content.get("removed_ids", [])
+        if str(value).strip()
+    ]
+    # A Pull carries only complete topology components for bodies changed by
+    # this commit. The client can merge these components into a dirty canvas.
+    # It must never interpret the absence of an unchanged body as a deletion.
+    delta_graph = graph_component(graph, changed_roots) if changed_roots else {"nodes": [], "rels": []}
+    return {
+        "version": latest.version,
+        "entity_graph": delta_graph,
+        "changes": latest_changes,
+        "diff": graph_diff(base_graph, graph),
+        "removed_ids": removed_ids,
+        "delta": True,
+        "graph_hash": latest.content.get("graph_hash"),
+    }
 
 
 @app.get("/projects/{project_id}/models/latest", response_model=schemas.ModelVersionRead)

@@ -40,6 +40,7 @@
 #include <QQueue>
 #include <QDebug>
 #include <unordered_set>
+#include <cmath>
 
 // ============================================================================
 // JSON 序列化命名空间
@@ -91,22 +92,32 @@ inline QJsonArray parBoxToJson(const SPApar_box& box) {
     SPAinterval uRange = box.u_range();
     SPAinterval vRange = box.v_range();
     // 格式与 parseParBox 一致：[u_start, u_end, v_start, v_end]
-    // u_range/v_range 可能是 empty（退化），用 0..1 占位
-    double u0 = 0.0, u1 = 1.0, v0 = 0.0, v1 = 1.0;
-    if (!uRange.empty()) { u0 = uRange.start_pt(); u1 = uRange.end_pt(); }
-    if (!vRange.empty()) { v0 = vRange.start_pt(); v1 = vRange.end_pt(); }
-    arr.append(u0); arr.append(u1);
-    arr.append(v0); arr.append(v1);
+    // ACIS may expose an empty or non-finite subset range for an analytic
+    // surface. Serializing that as [0,0,...] creates a degenerate finite
+    // range on the receiving client and makes api_facet_entity produce
+    // edges but no face mesh. Preserve only a real, ordered finite range.
+    const bool validU = !uRange.empty() && std::isfinite(uRange.start_pt()) &&
+                        std::isfinite(uRange.end_pt()) && uRange.end_pt() > uRange.start_pt();
+    const bool validV = !vRange.empty() && std::isfinite(vRange.start_pt()) &&
+                        std::isfinite(vRange.end_pt()) && vRange.end_pt() > vRange.start_pt();
+    if (validU && validV) {
+        arr.append(uRange.start_pt()); arr.append(uRange.end_pt());
+        arr.append(vRange.start_pt()); arr.append(vRange.end_pt());
+    }
     return arr;
 }
 
 // 辅助：从 JSON 数组 [u0, u1, v0, v1] 解析 SPApar_box
 static SPApar_box parseParBox(const QJsonArray& arr) {
     if (arr.size() >= 4) {
-        return SPApar_box(
-            SPAinterval(arr[0].toDouble(), arr[1].toDouble()),
-            SPAinterval(arr[2].toDouble(), arr[3].toDouble())
-        );
+        const double u0 = arr[0].toDouble();
+        const double u1 = arr[1].toDouble();
+        const double v0 = arr[2].toDouble();
+        const double v1 = arr[3].toDouble();
+        if (std::isfinite(u0) && std::isfinite(u1) && std::isfinite(v0) && std::isfinite(v1) &&
+            u1 > u0 && v1 > v0) {
+            return SPApar_box(SPAinterval(u0, u1), SPAinterval(v0, v1));
+        }
     }
     return SPApar_box();
 }
@@ -176,6 +187,7 @@ QJsonObject serializeACISEntityGraph(
     const QHash<int, QString>& entityIndexToUuid,
     const ENTITY_LIST& topLevelEntities
 ) {
+    std::fprintf(stderr, "[Collab] entity_graph_serializer build=uvsafe-topology-v5-bounded\n");
     QJsonArray nodesJson;
     QJsonArray relsJson;
 
@@ -242,6 +254,7 @@ QJsonObject serializeACISEntityGraph(
             ptrToId[ePtr] = node.id;
             enqueueChild((ENTITY*)body->lump());
             enqueueChild((ENTITY*)body->wire());
+            enqueueChild((ENTITY*)body->transform());
             break;
         }
         case LUMP_ID: {
@@ -255,6 +268,7 @@ QJsonObject serializeACISEntityGraph(
             ptrToId[ePtr] = node.id;
             enqueueChild((ENTITY*)lump->shell());
             enqueueChild((ENTITY*)lump->next());
+            enqueueChild((ENTITY*)lump->body());
             break;
         }
         case SHELL_ID: {
@@ -268,6 +282,20 @@ QJsonObject serializeACISEntityGraph(
             enqueueChild((ENTITY*)shell->face());
             enqueueChild((ENTITY*)shell->wire());
             enqueueChild((ENTITY*)shell->lump());
+            break;
+        }
+        case WIRE_ID: {
+            WIRE* wire = (WIRE*)e;
+            node.label = "wire";
+            node.id = genNodeId(e, WIRE_ID);
+            node.props["entity_type"] = "wire";
+            node.props["cont"] = wire->cont();
+            orderedNodes.push_back({ePtr, node});
+            ptrToId[ePtr] = node.id;
+            enqueueChild((ENTITY*)wire->next());
+            enqueueChild((ENTITY*)wire->coedge());
+            enqueueChild((ENTITY*)wire->subshell());
+            enqueueChild((ENTITY*)wire->owner());
             break;
         }
         case FACE_ID: {
@@ -351,7 +379,10 @@ QJsonObject serializeACISEntityGraph(
             orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
             enqueueChild((ENTITY*)co->next());
+            enqueueChild((ENTITY*)co->previous());
+            enqueueChild((ENTITY*)co->partner());
             enqueueChild((ENTITY*)co->edge());
+            enqueueChild((ENTITY*)co->owner());
             break;
         }
         case EDGE_ID: {
@@ -414,6 +445,7 @@ QJsonObject serializeACISEntityGraph(
             ptrToId[ePtr] = node.id;
             enqueueChild((ENTITY*)edge->start());
             enqueueChild((ENTITY*)edge->end());
+            enqueueChild((ENTITY*)edge->coedge());
             break;
         }
         case VERTEX_ID: {
@@ -429,6 +461,7 @@ QJsonObject serializeACISEntityGraph(
             }
             orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
+            enqueueChild((ENTITY*)vtx->edge());
             break;
         }
         case TRANSFORM_ID: {
@@ -478,12 +511,14 @@ QJsonObject serializeACISEntityGraph(
             BODY* body = (BODY*)e;
             if (body->lump()) { emitRel("body_lump", ePtr, body->lump()); push2((ENTITY*)body->lump()); }
             if (body->wire()) { emitRel("body_wire", ePtr, body->wire()); push2((ENTITY*)body->wire()); }
+            if (body->transform()) { emitRel("body_transform", ePtr, body->transform()); push2((ENTITY*)body->transform()); }
             break;
         }
         case LUMP_ID: {
             LUMP* lump = (LUMP*)e;
             if (lump->shell()) { emitRel("lump_shell", ePtr, lump->shell()); push2((ENTITY*)lump->shell()); }
             if (lump->next()) { emitRel("lump_next", ePtr, lump->next()); push2((ENTITY*)lump->next()); }
+            if (lump->body()) { emitRel("lump_body", ePtr, lump->body()); push2((ENTITY*)lump->body()); }
             break;
         }
         case SHELL_ID: {
@@ -499,24 +534,42 @@ QJsonObject serializeACISEntityGraph(
             // 几何内嵌在 face.props.geometry 中，不再发布 face_geometry 关系
             if (face->loop()) { emitRel("face_loop", ePtr, face->loop()); push2((ENTITY*)face->loop()); }
             if (face->next()) { emitRel("face_next", ePtr, face->next()); push2((ENTITY*)face->next()); }
+            if (face->shell()) { emitRel("face_shell", ePtr, face->shell()); push2((ENTITY*)face->shell()); }
             break;
         }
         case LOOP_ID: {
             LOOP* loop = (LOOP*)e;
             if (loop->start()) { emitRel("loop_start", ePtr, loop->start()); push2((ENTITY*)loop->start()); }
             if (loop->next()) { emitRel("loop_next", ePtr, loop->next()); push2((ENTITY*)loop->next()); }
+            if (loop->face()) { emitRel("loop_face", ePtr, loop->face()); push2((ENTITY*)loop->face()); }
+            break;
+        }
+        case WIRE_ID: {
+            WIRE* wire = (WIRE*)e;
+            if (wire->next()) { emitRel("wire_next", ePtr, wire->next()); push2((ENTITY*)wire->next()); }
+            if (wire->coedge()) { emitRel("wire_coedge", ePtr, wire->coedge()); push2((ENTITY*)wire->coedge()); }
+            if (wire->owner()) { emitRel("wire_owner", ePtr, wire->owner()); push2((ENTITY*)wire->owner()); }
             break;
         }
         case COEDGE_ID: {
             COEDGE* co = (COEDGE*)e;
             if (co->next()) { emitRel("coedge_next", ePtr, co->next()); push2((ENTITY*)co->next()); }
+            if (co->previous()) { emitRel("coedge_previous", ePtr, co->previous()); push2((ENTITY*)co->previous()); }
+            if (co->partner()) { emitRel("coedge_partner", ePtr, co->partner()); push2((ENTITY*)co->partner()); }
             if (co->edge()) { emitRel("coedge_edge", ePtr, co->edge()); push2((ENTITY*)co->edge()); }
+            if (co->owner()) { emitRel("coedge_owner", ePtr, co->owner()); push2((ENTITY*)co->owner()); }
             break;
         }
         case EDGE_ID: {
             EDGE* edge = (EDGE*)e;
             if (edge->start()) { emitRel("edge_start", ePtr, edge->start()); push2((ENTITY*)edge->start()); }
             if (edge->end()) { emitRel("edge_end", ePtr, edge->end()); push2((ENTITY*)edge->end()); }
+            if (edge->coedge()) { emitRel("edge_coedge", ePtr, edge->coedge()); push2((ENTITY*)edge->coedge()); }
+            break;
+        }
+        case VERTEX_ID: {
+            VERTEX* vertex = (VERTEX*)e;
+            if (vertex->edge()) { emitRel("vertex_edge", ePtr, vertex->edge()); push2((ENTITY*)vertex->edge()); }
             break;
         }
         default:
@@ -550,6 +603,7 @@ QJsonObject serializeACISEntityGraph(
     QJsonObject root;
     root["nodes"] = nodesJson;
     root["rels"] = relsJson;
+    root["serializer_build"] = QStringLiteral("uvsafe-topology-v5-bounded");
     return root;
 }
 
@@ -721,6 +775,8 @@ bool deserializeACISEntityGraph(
     QString* errorMessage
 ) {
     using namespace JsonDeserialize;
+
+    fprintf(stderr, "[Collab] entity_graph_serializer deserialize build=uvsafe-topology-v5-bounded\n");
 
     fprintf(stderr, "[Collab] deserializeACISEntityGraph: ENTER, nodes=%lld\n", (long long)graphJson.value("nodes").toArray().size());
 
@@ -965,6 +1021,8 @@ bool deserializeACISEntityGraph(
             if (crv == nullptr && !geom.isEmpty()) {
                 qWarning().noquote() << "[Collab] deserialize edge geometry:" << err;
             }
+        } else if (label == "wire") {
+            ((WIRE*)ent)->set_cont(props.value("cont").toInt(0));
         } else if (label == "vertex") {
             VERTEX* vtx = (VERTEX*)ent;
             const QJsonArray posArr = props.value("position").toArray();
@@ -1036,6 +1094,9 @@ bool deserializeACISEntityGraph(
         } else if (type == "face_next") {
             ((FACE*)startEnt)->set_next((FACE*)endEnt);
             linkSuccess++;
+        } else if (type == "face_shell") {
+            ((FACE*)startEnt)->set_shell((SHELL*)endEnt);
+            linkSuccess++;
         } else if (type == "loop_start") {
             ((LOOP*)startEnt)->set_start((COEDGE*)endEnt);
             linkSuccess++;
@@ -1048,8 +1109,17 @@ bool deserializeACISEntityGraph(
         } else if (type == "coedge_next") {
             ((COEDGE*)startEnt)->set_next((COEDGE*)endEnt);
             linkSuccess++;
+        } else if (type == "coedge_previous") {
+            ((COEDGE*)startEnt)->set_previous((COEDGE*)endEnt);
+            linkSuccess++;
+        } else if (type == "coedge_partner") {
+            ((COEDGE*)startEnt)->set_partner((COEDGE*)endEnt);
+            linkSuccess++;
         } else if (type == "coedge_edge") {
             ((COEDGE*)startEnt)->set_edge((EDGE*)endEnt);
+            linkSuccess++;
+        } else if (type == "coedge_owner") {
+            ((COEDGE*)startEnt)->set_owner((ENTITY*)endEnt);
             linkSuccess++;
         } else if (type == "edge_start") {
             ((EDGE*)startEnt)->set_start((VERTEX*)endEnt);
@@ -1060,33 +1130,63 @@ bool deserializeACISEntityGraph(
         } else if (type == "edge_coedge") {
             ((EDGE*)startEnt)->set_coedge((COEDGE*)endEnt);
             linkSuccess++;
+        } else if (type == "vertex_edge") {
+            ((VERTEX*)startEnt)->set_edge((EDGE*)endEnt);
+            linkSuccess++;
         } else if (type == "lump_next") {
             ((LUMP*)startEnt)->set_next((LUMP*)endEnt);
             linkSuccess++;
+        } else if (type == "lump_body") {
+            ((LUMP*)startEnt)->set_body((BODY*)endEnt);
+            linkSuccess++;
+        } else if (type == "wire_owner") {
+            ((WIRE*)startEnt)->set_owner((ENTITY*)endEnt);
+            linkSuccess++;
         }
+    }
+
+    // Neo4j/JSON graphs can arrive with only the forward pointers emitted by
+    // older clients. Rebuild the ACIS owner/back pointers after all forward
+    // links are present; faceting relies on these links even though
+    // api_get_faces may still enumerate the forward topology without them.
+    {
+        API_BEGIN;
+        for (ENTITY* root = outResult->entities->first(); root; root = outResult->entities->next()) {
+            if (!is_BODY(root)) continue;
+            BODY* body = (BODY*)root;
+            int lumpGuard = 0;
+            for (LUMP* lump = body->lump(); lump && lumpGuard++ < 1000; lump = lump->next()) {
+                int shellGuard = 0;
+                for (SHELL* shell = lump->shell(); shell && shellGuard++ < 1000; shell = shell->next()) {
+                    int faceGuard = 0;
+                    for (FACE* face = shell->face(); face && faceGuard++ < 10000; face = face->next()) {
+                        face->set_shell(shell);
+                        if (face->loop()) face->loop()->set_face(face);
+                        int loopGuard = 0;
+                        for (LOOP* loop = face->loop(); loop && loopGuard++ < 1000; loop = loop->next()) {
+                            int coedgeGuard = 0;
+                            for (COEDGE* co = loop->start(); co && coedgeGuard++ < 10000; co = co->next()) {
+                                co->set_owner(loop);
+                                if (co->edge()) co->edge()->set_coedge(co);
+                                if (co->next()) co->next()->set_previous(co);
+                                if (co->partner()) co->partner()->set_partner(co);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        API_END;
     }
 
     qDebug().noquote() << "[Collab] deserialize: pass3 done. linkSuccess=" << linkSuccess << "linkFail=" << linkFail << "rels.size=" << rels.size();
     fprintf(stderr, "[Collab] deserializeACISEntityGraph: EXIT, returning %s\n", outResult->entities->count() > 0 ? "true" : "false");
 
-    // 关键：deserialize 完成后立即对所有 body 调用 api_facet_entity，
-    // 让 face 上注册 mesh attribute (af_serializable_mesh)，否则后续
-    // get_triangles_from_faceted_face 中 GetSerializableMesh(face) 返回 nullptr，
-    // 导致 B 端 CreateMeshFromEntity 拿到 0 个 face coord。
-    // 注意：必须包在 API_BEGIN/API_END 内。
-    {
-        API_BEGIN;
-        for (ENTITY* ent = outResult->entities->first(); ent; ent = outResult->entities->next()) {
-            if (is_BODY(ent)) {
-                outcome fc = api_facet_entity(ent);
-                fprintf(stderr, "[Collab] deserialize: post-facet body=%p ok=%d err=%d\n",
-                        (void*)ent, fc.ok() ? 1 : 0, (int)fc.error_number());
-                // 深度诊断已移除
-                ENTITY_LIST faces;
-                api_get_faces(ent, faces);
-            }
-        }
-        API_END;
-    }
+    // Do not facet here.  Pull runs on the Qt GUI thread, and ACIS faceting
+    // may perform an unbounded secondary-geometry computation on a graph
+    // restored without PCURVEs.  The display layer performs one bounded facet
+    // attempt when it builds the mesh and has a planar fallback for faces that
+    // remain unfaceted.
+    fprintf(stderr, "[Collab] deserialize: structure-only complete; faceting deferred to display\n");
     return outResult->entities->count() > 0;
 }

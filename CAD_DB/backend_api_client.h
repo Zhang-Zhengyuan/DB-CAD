@@ -99,6 +99,31 @@ public:
         int baseVersion
     );
 
+    // ========== Bridge-free JSON Mode1 ==========
+    struct JsonGraphPayload {
+        int version = 0;
+        QString graphJson;
+        QString changesJson;
+        QStringList removedIds;
+        bool delta = false;
+        QString graphHash;
+    };
+
+    std::optional<int> saveJsonDelta(
+        const QString& projectId,
+        const QString& author,
+        const QString& entityGraphJson,
+        const QString& changesJson,
+        const QStringList& removedIds,
+        std::optional<int> baseVersion,
+        const QString& sourceClientId = QString()
+    );
+
+    std::optional<JsonGraphPayload> getJsonDelta(
+        const QString& projectId,
+        int baseVersion
+    );
+
 private:
     struct HttpResult {
         int statusCode = -1;

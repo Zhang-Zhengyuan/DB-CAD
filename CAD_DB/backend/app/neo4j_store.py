@@ -266,3 +266,14 @@ class Neo4jStore:
             rows = list(result)
 
         return [self._version_from_node(row["version"]) for row in rows]
+
+
+# Compatibility entry points used by direct JSON mode's project/version API.
+_store: Neo4jStore | None = None
+
+
+def initialize_store() -> Neo4jStore:
+    global _store
+    _store = Neo4jStore()
+    _store.initialize()
+    return _store

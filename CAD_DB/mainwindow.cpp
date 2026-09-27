@@ -1784,7 +1784,7 @@ void MainWindow::onCollabPushButtonClicked() {
 
     // Mode1: 使用 HTTP delta API
     if (collabMode == CollabMode::Mode1) {
-        if (submitMode1Delta(tr("mode1-push"))) {
+        if (submitMode1JsonDelta(tr("mode1-json-push"))) {
             pendingEntityChanges.clear();
             statusBar()->showMessage(tr("Mode1 Push 成功"), 3000);
         }
@@ -1808,7 +1808,7 @@ void MainWindow::onCollabPullButtonClicked() {
 
     // Mode1: 使用 HTTP delta API（独立 pull，不走 WebSocket）
     if (collabMode == CollabMode::Mode1) {
-        pullMode1Delta();
+        pullMode1JsonDelta();
         return;
     }
 
@@ -1912,7 +1912,7 @@ bool MainWindow::submitACISEntityGraph(const QString& reason) {
     return true;
 }
 
-bool MainWindow::pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, const QString& satContent) {
+bool MainWindow::pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, const QString& satContent, bool deltaGraph, const QStringList& removedIds) {
     if (curWindow == nullptr || fastapi_project_id.isEmpty()) {
         qWarning() << "[Collab] pullACISEntityGraph: curWindow or fastapi_project_id is null";
         return false;
@@ -1921,7 +1921,8 @@ bool MainWindow::pullACISEntityGraph(int version, const QJsonObject& entityGraph
     const QJsonArray nodes = entityGraphJson.value("nodes").toArray();
     qDebug().noquote() << "[Collab] pullACISEntityGraph: version=" << version
                        << "nodes=" << nodes.size()
-                       << "sat.size=" << satContent.size();
+                       << "sat.size=" << satContent.size()
+                       << "serializer_build=" << entityGraphJson.value("serializer_build").toString();
 
     // =========================================================================
     // 策略：优先尝试纯 JSON 反序列化（deserializeACISEntityGraph），
@@ -1954,12 +1955,21 @@ bool MainWindow::pullACISEntityGraph(int version, const QJsonObject& entityGraph
     deserialized.entities = nullptr;
     deserialized.uuidToEntity.clear();
     QString jsonError;
-    bool fromJson = deserializeACISEntityGraph(entityGraphJson, &deserialized, &jsonError);
+    // A delete-only commit has no incoming nodes. It is still a valid JSON
+    // delta: skip ACIS reconstruction and let the explicit removed UUID list
+    // drive the local deletion phase below.
+    const bool emptyDelta = deltaGraph && nodes.isEmpty() && removedIds.isEmpty();
+    const bool deleteOnlyDelta = deltaGraph && nodes.isEmpty() && !removedIds.isEmpty();
+    bool fromJson = emptyDelta || deleteOnlyDelta || deserializeACISEntityGraph(entityGraphJson, &deserialized, &jsonError);
 
     ENTITY_LIST remoteBodies;
     QHash<QString, void*> remoteUuidToBody; // UUID → BODY*
 
-    if (fromJson && deserialized.entities && deserialized.entities->count() > 0) {
+    if (emptyDelta) {
+        qDebug() << "[Collab] pullACISEntityGraph [JSON]: empty delta";
+    } else if (deleteOnlyDelta) {
+        qDebug() << "[Collab] pullACISEntityGraph [JSON]: delete-only delta" << removedIds;
+    } else if (fromJson && deserialized.entities && deserialized.entities->count() > 0) {
         // deserializeACISEntityGraph 成功：body 节点 id = UUID（serialize 时直接设 node.id = uuid）
         fprintf(stderr, "[Collab] pullACISEntityGraph: STAGE A about to copy remoteBodies/remoteUuidToBody\n");
         remoteBodies = *deserialized.entities;
@@ -2009,9 +2019,14 @@ bool MainWindow::pullACISEntityGraph(int version, const QJsonObject& entityGraph
     }
     int addedCount = 0, updatedCount = 0, deletedCount = 0;
     QStringList bodiesToDeleteLocal;
-    for (auto it = localUuids.constBegin(); it != localUuids.constEnd(); ++it) {
-        if (!remoteUuids.contains(*it))
-            bodiesToDeleteLocal.append(*it);
+    // A delta graph intentionally omits unchanged bodies and local dirty
+    // bodies. Only explicit REMOVE UUIDs are eligible for deletion.
+    if (deltaGraph) {
+        bodiesToDeleteLocal = removedIds;
+    } else {
+        for (auto it = localUuids.constBegin(); it != localUuids.constEnd(); ++it) {
+            if (!remoteUuids.contains(*it)) bodiesToDeleteLocal.append(*it);
+        }
     }
     fprintf(stderr, "[Collab] pullACISEntityGraph: remoteUuids=%d localUuids=%d willAdd=%d willUpdate=%d willDelete=%d\n",
             (int)remoteUuids.size(), (int)localUuids.size(), willAdd, willUpdate, (int)bodiesToDeleteLocal.size());
@@ -3251,6 +3266,186 @@ void MainWindow::pullMode1Delta() {
     updateCollabPanelUi();
 }
 
+// ================================================================================================
+// Bridge-free Mode1: client ACIS -> JSON, FastAPI JSON merge -> Neo4j snapshot
+// ================================================================================================
+bool MainWindow::submitMode1JsonDelta(const QString& reason) {
+    auto& session = CollabSession::instance();
+    if (curWindow == nullptr || session.projectId().isEmpty() || !session.isConnected()) {
+        statusBar()->showMessage(tr("协作通道未连接"), 4000);
+        return false;
+    }
+    if (pendingEntityChanges.isEmpty()) {
+        statusBar()->showMessage(tr("没有未推送的本地修改"), 2000);
+        return true;
+    }
+    const auto decision = session.tryBeginSubmit(reason);
+    if (decision.kind != CollabSession::SubmitDecision::Allow) {
+        statusBar()->showMessage(decision.reason, 4000);
+        return false;
+    }
+
+    const ENTITY_LIST& entities = curWindow->getEntityList();
+    const QJsonObject graphObject = serializeACISEntityGraph(entityIndexToUuid, entities);
+    // Only transmit complete topology components rooted at changed stable
+    // body UUIDs. The server expands these components into its canonical
+    // snapshot; unchanged bodies never cross the network on this request.
+    QSet<QString> changedRoots;
+    for (const auto& change : pendingEntityChanges) {
+        const QString id = change.uuid.trimmed();
+        if (!id.isEmpty() && change.changeType != EntityChangeType::REMOVE) changedRoots.insert(id);
+    }
+    const QSet<QString> topologyTypes = {
+        QStringLiteral("body_lump"), QStringLiteral("body_wire"), QStringLiteral("body_transform"),
+        QStringLiteral("lump_shell"), QStringLiteral("lump_next"), QStringLiteral("shell_next"),
+        QStringLiteral("shell_face"), QStringLiteral("shell_wire"), QStringLiteral("shell_lump"),
+        QStringLiteral("wire_coedge"), QStringLiteral("wire_next"), QStringLiteral("face_loop"),
+        QStringLiteral("face_next"), QStringLiteral("loop_face"), QStringLiteral("loop_start"),
+        QStringLiteral("loop_next"), QStringLiteral("coedge_next"), QStringLiteral("coedge_edge"),
+        QStringLiteral("edge_start"), QStringLiteral("edge_end"), QStringLiteral("edge_coedge")
+    };
+    QHash<QString, QSet<QString>> adjacency;
+    const QJsonArray graphRels = graphObject.value("rels").toArray();
+    for (const QJsonValue& value : graphRels) {
+        const QJsonObject rel = value.toObject();
+        if (!topologyTypes.contains(rel.value("type").toString().toLower())) continue;
+        const QString start = rel.value("start").toString();
+        const QString end = rel.value("end").toString();
+        if (!start.isEmpty() && !end.isEmpty()) {
+            adjacency[start].insert(end);
+            adjacency[end].insert(start);
+        }
+    }
+    QSet<QString> componentIds;
+    QList<QString> pendingRoots = changedRoots.values();
+    while (!pendingRoots.isEmpty()) {
+        const QString current = pendingRoots.takeLast();
+        if (componentIds.contains(current)) continue;
+        componentIds.insert(current);
+        for (const QString& neighbour : adjacency.value(current)) pendingRoots.append(neighbour);
+    }
+    QJsonObject deltaGraph;
+    QJsonArray deltaNodes;
+    for (const QJsonValue& value : graphObject.value("nodes").toArray()) {
+        const QJsonObject node = value.toObject();
+        if (componentIds.contains(node.value("id").toString())) deltaNodes.append(node);
+    }
+    QJsonArray deltaRels;
+    for (const QJsonValue& value : graphRels) {
+        const QJsonObject rel = value.toObject();
+        if (componentIds.contains(rel.value("start").toString()) && componentIds.contains(rel.value("end").toString())) {
+            deltaRels.append(rel);
+        }
+    }
+    deltaGraph.insert("nodes", deltaNodes);
+    deltaGraph.insert("rels", deltaRels);
+    const QString graphJson = QString::fromUtf8(QJsonDocument(deltaGraph).toJson(QJsonDocument::Compact));
+    const QString changesJson = exportEntityChangesToJson(pendingEntityChanges);
+    QJsonParseError changesError;
+    const QJsonDocument changesDoc = QJsonDocument::fromJson(changesJson.toUtf8(), &changesError);
+    const QJsonArray changes = changesDoc.object().value("changes").toArray();
+    // Pure JSON Mode1 never sends SAT. The client serializes ACIS into the
+    // entity graph; SAT is legacy fallback data and must not leak into the
+    // JSON delta metadata or Neo4j snapshots.
+    QJsonArray jsonOnlyChanges;
+    for (const QJsonValue& value : changes) {
+        QJsonObject item = value.toObject();
+        item.remove("sat");
+        jsonOnlyChanges.append(item);
+    }
+    const QString jsonOnlyChangesText = QString::fromUtf8(QJsonDocument(jsonOnlyChanges).toJson(QJsonDocument::Compact));
+    QStringList removedIds;
+    for (const QJsonValue& value : changes) {
+        const QJsonObject change = value.toObject();
+        if (change.value("changeType").toString() == QStringLiteral("REMOVE")) {
+            const QString uuid = change.value("uuid").toString().trimmed();
+            if (!uuid.isEmpty()) removedIds.append(uuid);
+        }
+    }
+
+    BackendApiClient client(
+        QString::fromStdString(fastapi_base_url),
+        QString::fromStdString(fastapi_author),
+        QString::fromStdString(fastapi_password));
+    const int base = session.modelVersion();
+    const auto result = client.saveJsonDelta(
+        session.projectId(), QString::fromStdString(fastapi_author), graphJson,
+        jsonOnlyChangesText, removedIds, base > 0 ? std::optional<int>(base) : std::nullopt,
+        fastapi_client_id);
+    if (!result.has_value()) {
+        session.rollbackSubmit();
+        statusBar()->showMessage(tr("Mode1 JSON Push 失败：%1").arg(client.lastError()), 6000);
+        return false;
+    }
+
+    const int version = *result;
+    session.onSubmitAccepted(version);
+    session.setPushedVersion(version);
+    api_advance_delta_since(collabCtx);
+    pendingEntityChanges.clear();
+    if (curWindow != nullptr) curWindow->setIsModified(false);
+    fastapi_model_version = session.modelVersion();
+    fastapi_pending_remote_version = session.pendingRemoteVersion();
+    updateCollabPanelUi();
+    statusBar()->showMessage(tr("Mode1 JSON Push 成功 v%1").arg(version), 4000);
+    return true;
+}
+
+void MainWindow::pullMode1JsonDelta() {
+    auto& session = CollabSession::instance();
+    if (curWindow == nullptr || session.projectId().isEmpty() || !session.isConnected()) {
+        statusBar()->showMessage(tr("协作通道未连接"), 4000);
+        return;
+    }
+    const int base = session.modelVersion();
+    BackendApiClient client(
+        QString::fromStdString(fastapi_base_url),
+        QString::fromStdString(fastapi_author),
+        QString::fromStdString(fastapi_password));
+    const auto result = client.getJsonDelta(session.projectId(), base);
+    if (!result.has_value()) {
+        statusBar()->showMessage(tr("Mode1 JSON Pull 失败：%1").arg(client.lastError()), 6000);
+        return;
+    }
+    if (result->version <= base) {
+        statusBar()->showMessage(tr("Mode1 JSON 已是最新版本 v%1").arg(result->version), 3000);
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument graphDoc = QJsonDocument::fromJson(result->graphJson.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !graphDoc.isObject()) {
+        statusBar()->showMessage(tr("Mode1 JSON Pull 的图格式无效"), 6000);
+        return;
+    }
+    QSet<QString> remoteChangedIds;
+    for (const QJsonValue& value : graphDoc.object().value("nodes").toArray()) {
+        const QJsonObject node = value.toObject();
+        if (node.value("labels").toArray().contains(QJsonValue(QStringLiteral("body")))) {
+            const QString id = node.value("id").toString().trimmed();
+            if (!id.isEmpty()) remoteChangedIds.insert(id);
+        }
+    }
+    for (const QString& id : result->removedIds) remoteChangedIds.insert(id);
+    for (const auto& localChange : pendingEntityChanges) {
+        if (remoteChangedIds.contains(localChange.uuid)) {
+            statusBar()->showMessage(tr("Pull 与本地未提交修改冲突：实体 %1，请先处理冲突").arg(localChange.uuid), 6000);
+            return;
+        }
+    }
+    QString graphError;
+    if (!pullACISEntityGraph(result->version, graphDoc.object(), QString(), result->delta, result->removedIds)) {
+        statusBar()->showMessage(tr("Mode1 JSON Pull 重建 ACIS 失败"), 6000);
+        return;
+    }
+    session.onRemoteApplied(result->version);
+    session.setPushedVersion(result->version);
+    fastapi_model_version = session.modelVersion();
+    fastapi_pending_remote_version = session.pendingRemoteVersion();
+    updateCollabPanelUi();
+    statusBar()->showMessage(tr("Mode1 JSON Pull 完成 v%1").arg(result->version), 4000);
+}
+
 bool MainWindow::submitFastAPIModelOverSocket(const QString& satContent, const QString& reason, bool interactiveConflict) {
     auto& session = CollabSession::instance();
     CollabSession::SubmitDecision decision = session.tryBeginSubmit(reason);
@@ -3869,6 +4064,23 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString& message) {
                 5000);
         }
         updateCollabPanelUi();
+        return;
+    }
+
+    // Bridge-free Mode1 JSON graph broadcast.  Keep the git-like behavior:
+    // announce a remote commit, but never overwrite a dirty local canvas.
+    if (messageType == "json_delta_saved") {
+        const int remoteVersion = root.value("version").toInt(0);
+        auto& session = CollabSession::instance();
+        // Never apply a WebSocket notification. Pull fetches only the
+        // changed topology components through the HTTP delta endpoint.
+        if (remoteVersion > session.modelVersion()) {
+            session.onRemotePending(remoteVersion);
+            fastapi_pending_remote_version = session.pendingRemoteVersion();
+            statusBar()->showMessage(
+                tr("远端有 JSON 协作版本 v%1，请点击 Pull 合并").arg(remoteVersion), 5000);
+            updateCollabPanelUi();
+        }
         return;
     }
 
