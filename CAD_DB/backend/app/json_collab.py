@@ -132,7 +132,8 @@ def _component_ids(graph: dict[str, Any], roots: set[str]) -> set[str]:
             continue
         adjacency.setdefault(rel["start"], set()).add(rel["end"])
         adjacency.setdefault(rel["end"], set()).add(rel["start"])
-    seen = {root for root in roots if any(node["id"] == root for node in graph["nodes"])}
+    node_ids = {node["id"] for node in graph["nodes"]}
+    seen = roots & node_ids
     pending = list(seen)
     while pending:
         current = pending.pop()
@@ -155,6 +156,7 @@ def graph_component(graph: Any, roots: Iterable[str]) -> dict[str, Any]:
                 rel for rel in canonical["rels"]
                 if rel["start"] in scope and rel["end"] in scope
             ],
+            **{key: deepcopy(value) for key, value in canonical.items() if key not in {"nodes", "rels"}},
         }
     )
 

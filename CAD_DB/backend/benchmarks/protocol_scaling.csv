@@ -1,0 +1,4 @@
+bodies,full_nodes,full_rels,delta_nodes,delta_rels,full_json_bytes,delta_json_bytes,delta_fraction,merge_median_ms,merge_peak_kib
+1,60,59,60,59,8735,8735,1.0,9.478,174.0
+10,600,590,60,59,86738,8735,0.10071,52.48,966.9
+100,6000,5900,60,59,888188,8735,0.00983,513.377,9167.3

@@ -1,4 +1,5 @@
 from app.json_collab import conflicting_ids, graph_component, graph_diff, graph_hash, merge_graph, validate_graph
+from app.json_graph_store import split_graph_components
 
 
 def graph(body="b", child="f", value=1):
@@ -66,3 +67,29 @@ def test_component_contains_complete_topology_chain():
     result = graph_component(source, ["b"])
     assert {node["id"] for node in result["nodes"]} == {"b", "l", "s", "f"}
     assert len(result["rels"]) == 3
+
+
+def test_component_keeps_serializer_metadata():
+    source = graph()
+    source["serializer_build"] = "uvsafe-topology-v5-bounded"
+    result = graph_component(source, ["b"])
+    assert result["serializer_build"] == "uvsafe-topology-v5-bounded"
+
+
+def test_storage_components_are_content_addressed_per_body():
+    source = {
+        "nodes": [
+            {"id": "b1", "labels": ["body"], "props": {"v": 1}},
+            {"id": "f1", "labels": ["face"], "props": {}},
+            {"id": "b2", "labels": ["body"], "props": {"v": 2}},
+            {"id": "f2", "labels": ["face"], "props": {}},
+        ],
+        "rels": [
+            {"type": "body_face", "start": "b1", "end": "f1", "props": {}},
+            {"type": "body_face", "start": "b2", "end": "f2", "props": {}},
+        ],
+    }
+    components, relations = split_graph_components(source)
+    assert {component["root_uuid"] for component in components} == {"b1", "b2"}
+    assert len({component["component_hash"] for component in components}) == 2
+    assert relations == []

@@ -416,21 +416,32 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
         // display mesh is collected.
         if (is_BODY(e)) {
             bool missingFaceMesh = false;
+            bool unsafeCurvedFace = false;
             ENTITY_LIST facetFaces;
             api_get_faces(e, facetFaces);
             for (ENTITY* fe = facetFaces.first(); fe; fe = facetFaces.next()) {
                 if (is_FACE(fe) && GetSerializableMesh((FACE*)fe) == nullptr) {
                     missingFaceMesh = true;
-                    break;
+                    if (!((FACE*)fe)->geometry() || ((FACE*)fe)->geometry()->identity(2) != PLANE_ID) {
+                        unsafeCurvedFace = true;
+                    }
                 }
             }
-            if (missingFaceMesh) {
+            if (missingFaceMesh && unsafeCurvedFace) {
                 // Do not invoke sg_add_pcurves_to_entity synchronously here.
                 // On a malformed restored coedge ring ACIS may spend an
                 // unbounded amount of time trying to compute derived curves,
                 // freezing the Qt UI. The planar fallback below is bounded
                 // and keeps Pull responsive while the topology is diagnosed.
                 std::fprintf(stderr, "[CreateMeshFromEntity] missing face meshes; using bounded planar fallback\n");
+                // A curved analytic face without a faceter mesh is not safe to
+                // traverse through ACIS facet edge APIs on the GUI thread.
+                // Keep the restored BODY in the entity tree (topology remains
+                // available for the next JSON push), but skip display mesh
+                // generation for this pass. This makes Pull bounded instead
+                // of hanging while ACIS tries to derive missing PCURVEs.
+                success = true;
+                goto exit;
             }
         }
 

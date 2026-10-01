@@ -13,6 +13,7 @@ class ClientConnection:
     websocket: WebSocket
     client_id: str
     author: str
+    stream: str
     connected_at: datetime
 
 
@@ -29,12 +30,14 @@ class ProjectSyncManager:
             self._write_locks[project_id] = lock
         return lock
 
-    async def connect(self, project_id: str, websocket: WebSocket, client_id: str, author: str) -> None:
+    async def connect(self, project_id: str, websocket: WebSocket, client_id: str, author: str, stream: str = "mode0") -> None:
+        await websocket.accept()
         async with self._lock:
             self._connections[project_id][client_id] = ClientConnection(
                 websocket=websocket,
                 client_id=client_id,
                 author=author,
+                stream=stream,
                 connected_at=datetime.now(timezone.utc),
             )
 
@@ -77,7 +80,7 @@ class ProjectSyncManager:
             for client in clients
         ]
 
-    async def broadcast(self, project_id: str, event: dict[str, Any], exclude_client_id: str | None = None) -> None:
+    async def broadcast(self, project_id: str, event: dict[str, Any], exclude_client_id: str | None = None, stream: str | None = None) -> None:
         message = json.dumps(event, ensure_ascii=False)
         async with self._lock:
             clients = list(self._connections.get(project_id, {}).values())
@@ -87,6 +90,8 @@ class ProjectSyncManager:
 
         disconnected: list[WebSocket] = []
         for client in clients:
+            if stream is not None and client.stream != stream:
+                continue
             if exclude_client_id and client.client_id == exclude_client_id:
                 continue
             try:

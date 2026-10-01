@@ -291,10 +291,10 @@ def test_websocket_submit_model_accepts_and_rejects_stale_base(client: TestClien
             )
             accepted1 = ws1.receive_json()
             broadcast1 = ws2.receive_json()
-            assert accepted1["type"] == "model_saved"
+            assert accepted1["type"] == "submit_accepted"
             assert broadcast1["type"] == "model_saved"
             assert accepted1["request_id"] == "r1"
-            assert accepted1["source_client_id"] == "a"
+            assert broadcast1["source_client_id"] == "a"
             assert accepted1["version"] == 1
             assert broadcast1["version"] == 1
 
@@ -326,7 +326,7 @@ def test_websocket_submit_model_accepts_and_rejects_stale_base(client: TestClien
             accepted2_on_ws1 = ws1.receive_json()
             accepted2_on_ws2 = ws2.receive_json()
             assert accepted2_on_ws1["type"] == "model_saved"
-            assert accepted2_on_ws2["type"] == "model_saved"
+            assert accepted2_on_ws2["type"] == "submit_accepted"
             assert accepted2_on_ws2["request_id"] == "r3"
             assert accepted2_on_ws2["version"] == 2
             assert accepted2_on_ws1["content"] == {"sat": "v2"}

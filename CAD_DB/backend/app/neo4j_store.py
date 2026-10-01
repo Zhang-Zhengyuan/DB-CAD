@@ -163,8 +163,10 @@ class Neo4jStore:
 
         def write(tx: Any) -> VersionRecord:
             exists_record = tx.run(
-                "MATCH (p:Project {id: $project_id}) RETURN p.id AS id",
+                "MATCH (p:Project {id: $project_id}) "
+                "SET p.model_write_token = $token RETURN p.id AS id",
                 project_id=project_id,
+                token=str(uuid4()),
             ).single()
             if exists_record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
@@ -179,7 +181,10 @@ class Neo4jStore:
 
             latest_version = latest_record["latest"] if latest_record else None
             if base_version is None and latest_version is not None:
-                base_version = latest_version
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"base_version is required: latest version is {latest_version}",
+                )
             if base_version is not None and base_version != latest_version:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,

@@ -109,31 +109,10 @@ public:
     void clearEntityChanges();
     // 协作友好的本地删除：UI 右键删除按钮调用，ACIS 真删 + 记账 + 调度 Push
     void deleteEntityByIndexForCollaboration(int index);
-    QString exportEntityGraphToJson();
     QString exportEntityChangesToJson(const QList<EntityChange>& changes);
-    bool submitEntityGraphIncremental(const QString& entityGraphJson, const QString& changesJson, const QString& reason);
-    bool applyRemoteEntityGraphIncremental(const QString& remoteEntityGraphJson, const QString& remoteChangesJson, const QString& reason);
 
-    // ========== Neo4j Entity Graph 协作方法 ==========
-    // 推送：序列化完整 ACIS entity graph → POST 到 Python neo4j_entity_store
-    // 成功后通过 WebSocket "submit_entity_graph" 广播 SAT fallback
-    bool submitACISEntityGraph(const QString& reason);
-
-    // ========== 增量 delta Push / Pull（接入 access 模块） ==========
-    // 增量 Push：基于 ACIS delta_state 计算 body 变更，只上传真正变化的部分
-    bool submitIncrementalDelta(const QString& reason);
-    // 增量 Pull：基于 UUID 去重，不调 clear()，只 addEntity 远端独有的 bodies
+    // Legacy WebSocket delta apply, retained for old project history.
     bool applyRemoteIncrementalDelta(const QJsonObject& remoteContent, QString* errorMessage);
-    // 把单个 body 序列化为 SAT 文本（供增量 Push 使用）
-    QString serializeBodyToSat(ENTITY* body);
-    // 把远端 SAT 文本增量 restore 到画布（不 clear，UUID 去重）
-    int restoreRemoteDeltaSat(const QString& remoteSat, const QJsonObject& collabSnapshot, QString* errorMessage);
-
-    // ========== Mode1 Push / Pull（基于 HTTP delta API） ==========
-    // Mode1 Push: pendingEntityChanges → HTTP POST /delta → bridge → Neo4j
-    bool submitMode1Delta(const QString& reason);
-    // Mode1 Pull: HTTP GET /delta → UUID 差量合并
-    void pullMode1Delta();
 
     // Bridge-free Mode1: ACIS serialization stays on the client; server merges JSON.
     bool submitMode1JsonDelta(const QString& reason);
@@ -143,7 +122,7 @@ public:
     // 用户在协作面板选择 "JSON 反序列化" 模式时调用此路径。
     // 优先尝试纯 JSON 反序列化（deserializeACISEntityGraph），失败则 fallback 到 SAT restore。
     // 不调用 Window::clear()，避免破坏 restore 出来的 body。
-    bool pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, const QString& satContent, bool deltaGraph = false, const QStringList& removedIds = {});
+    bool pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, const QString& satContent, bool deltaGraph = false, const QStringList& removedIds = {}, const QHash<QString, QString>& remoteNames = {});
     // SAT restore + UUID 对齐辅助函数（EntityGraph fallback 路径）
     bool restoreSatWithUuidAlignment(
         const QString& satContent,
@@ -214,8 +193,6 @@ private:
     bool saveFile(const QString& fileName);
     bool restoreFastAPIModelFromSat(const QString& satContent);
     bool applyRemoteSatSnapshot(const QString& satContent, const QString& reason);
-    bool syncFastAPIRemoteVersion(int remoteVersion, const QString& reason);
-    bool applyFastAPIRemoteSat(int remoteVersion, const QString& satContent, const QString& reason);
     void updateCollabPanelUi();
     void setCollabConnectionState(const QString& stateText);
     void reconnectFastAPISync();

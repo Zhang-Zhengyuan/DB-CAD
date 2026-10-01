@@ -878,6 +878,9 @@ Start all services and the client:
 Start all services and two clients:
   .\start_dbcad_two_clients.cmd
 
+Open the Neo4j project history WebUI:
+  http://127.0.0.1:8000/webui
+
 Stop services started by the launcher:
   .\stop_dbcad_fullstack.cmd
 
@@ -1330,6 +1333,7 @@ if ($directJsonMode) {
 }
 Write-Host "[INFO] FastAPI health: $fastApiUrl/health"
 Write-Host "[INFO] FastAPI docs: $fastApiUrl/docs"
+Write-Host "[INFO] Neo4j history WebUI: $fastApiUrl/webui"
 if (-not $SkipClient) {
     Write-Host "[INFO] Client instances: $($clientProcesses.Count)"
 }

@@ -7,13 +7,15 @@ DB-CAD Neo4j 管理 WebUI — 直接连接 Neo4j，提供项目/版本/图数据
 【数据模型】（统一命名，兼容旧 label）
   BridgeProject / DBCADProject  — 项目根节点
   BridgeVersion / DBCADVersion   — Mode0 全量版本（每次 Save 写一份完整 SAT）
-  BridgeDeltaVersion / DBCADDelta — Mode1 增量 delta（每次 push 只写增量）
+  JsonGraphVersion / JsonGraphEntity — 当前 Mode1 纯 JSON 快照与可查询实体
+  BridgeDeltaVersion / DBCADDelta — 历史 SAT 增量数据
   BridgeEntityGraphVersion / entity_graph_version — Entity Graph 版本
   part / DBCADPart                — ACIS N 叉拓扑树根
 
 【实际关系】（以 Neo4j 实测为准，本版按真实存在的字段与关系重写）
   (BridgeProject)-[:HAS_VERSION]->(BridgeVersion)
   (BridgeProject)-[:HAS_EG_VERSION]->(BridgeEntityGraphVersion)
+  JsonGraphVersion 通过 HAS_JSON_GRAPH_VERSION 关联项目
   BridgeDeltaVersion 没有 BELONGS_TO 关系，仅通过 project_id 属性挂载
   part 拓扑树是孤立节点，通过 BridgeVersion/BridgeEntityGraphVersion.part_name 引用
 """
@@ -21,13 +23,21 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import settings
+
+
+def _verify_admin_password(x_api_password: str | None = Header(default=None)) -> None:
+    if not settings.api_password:
+        raise HTTPException(status_code=503, detail="Configure CAD_DB_API_PASSWORD for the admin dashboard")
+    if x_api_password != settings.api_password:
+        raise HTTPException(status_code=401, detail="Invalid API password")
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +89,59 @@ def _iso(value: Any) -> str:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
+
+
+_TOPOLOGY_LABEL_ZH = {
+    "body": "Body 实体",
+    "lump": "Lump 体块",
+    "shell": "Shell 壳体",
+    "face": "Face 面",
+    "loop": "Loop 环",
+    "coedge": "Coedge 半边",
+    "edge": "Edge 边",
+    "vertex": "Vertex 顶点",
+    "transform": "Transform 变换",
+}
+
+
+def _semantic_label(labels: list[str], props: dict[str, Any] | None = None,
+                    body_name: str = "") -> str:
+    """Return a readable CAD meaning while retaining the raw ACIS label."""
+    lowered = {str(label).lower() for label in labels}
+    if "body" in lowered and body_name:
+        return f"{body_name} · Body"
+    for label in labels:
+        key = str(label).lower()
+        if key in _TOPOLOGY_LABEL_ZH:
+            return _TOPOLOGY_LABEL_ZH[key]
+    entity_type = str((props or {}).get("entity_type") or "").strip()
+    return entity_type or (str(labels[0]) if labels else "实体节点")
+
+
+def _decode_changes(raw: Any) -> list[dict[str, str]]:
+    """Decode the compact per-version change manifest for WebUI display."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return []
+    result: list[dict[str, str]] = []
+    for item in (parsed.get("changes", []) if isinstance(parsed, dict) else []):
+        if not isinstance(item, dict):
+            continue
+        result.append({
+            "change_type": str(item.get("changeType") or item.get("change_type") or "").upper(),
+            "uuid": str(item.get("uuid") or item.get("id") or ""),
+            "entity_type": str(item.get("entityType") or item.get("entity_type") or ""),
+            "name": str(item.get("name") or ""),
+        })
+    known_removed = {item["uuid"] for item in result if item["change_type"] == "REMOVE" and item["uuid"]}
+    for removed_id in (parsed.get("removed_ids", []) if isinstance(parsed, dict) else []):
+        removed_uuid = str(removed_id)
+        if removed_uuid not in known_removed:
+            result.append({"change_type": "REMOVE", "uuid": removed_uuid, "entity_type": "", "name": ""})
+    return [item for item in result if item["uuid"] or item["entity_type"] or item["name"]]
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +211,7 @@ def _invalidate_label_cache():
 # 路由
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/api/neo4j", tags=["Neo4j 管理"])
+router = APIRouter(prefix="/api/neo4j", tags=["Neo4j 管理"], dependencies=[Depends(_verify_admin_password)])
 
 
 # ---------------------------------------------------------------------------
@@ -177,14 +240,11 @@ def get_overview() -> dict[str, Any]:
     )
 
     # 三种存储模式累计版本数（仅查询真实存在的 label，避免 warning）
-    proj_label = _label_in("BridgeProject", "DBCADProject")
-    mv0_label = _label_in("BridgeVersion", "DBCADVersion")
-    mv1_label = _label_in("BridgeDeltaVersion", "DBCADDelta")
     eg_label  = _label_in("BridgeEntityGraphVersion", "entity_graph_version")
 
-    total_projects = _count_with(f"MATCH (n:{proj_label}) RETURN count(n) AS c")
-    total_mode0    = _count_with(f"MATCH (n:{mv0_label}) RETURN count(n) AS c")
-    total_mode1    = _count_with(f"MATCH (n:{mv1_label}) RETURN count(n) AS c")
+    total_projects = _count_with("MATCH (n) WHERE any(l IN labels(n) WHERE l IN ['BridgeProject','DBCADProject','Project']) RETURN count(n) AS c")
+    total_mode0    = _count_with("MATCH (n) WHERE any(l IN labels(n) WHERE l IN ['BridgeVersion','DBCADVersion','ModelVersion']) RETURN count(n) AS c")
+    total_mode1    = _count_with("MATCH (n:JsonGraphVersion) RETURN count(n) AS c")
     total_eg       = _count_with(f"MATCH (n:{eg_label}) RETURN count(n) AS c")
 
     total_nodes = sum(int(r["n"] or 0) for r in label_stats)
@@ -200,9 +260,11 @@ def get_overview() -> dict[str, Any]:
               WHEN l IN ['part', 'DBCADPart'] THEN '拓扑根'
               WHEN l IN ['body', 'lump', 'shell', 'face', 'loop', 'coedge', 'edge', 'vertex', 'transform', 'point'] THEN '拓扑节点'
               WHEN l IN ['straight-curve','ellipse-curve','int_cur','plane-surface','sphere-surface','cone-surface','spl_sur','curve','surface'] THEN '几何元素'
-              WHEN l IN ['BridgeProject','DBCADProject'] THEN '项目'
-              WHEN l IN ['BridgeVersion','DBCADVersion'] THEN 'Mode0版本'
-              WHEN l IN ['BridgeDeltaVersion','DBCADDelta'] THEN 'Mode1增量'
+              WHEN l IN ['BridgeProject','DBCADProject','Project'] THEN '项目'
+              WHEN l IN ['BridgeVersion','DBCADVersion','ModelVersion'] THEN 'Mode0版本'
+              WHEN l IN ['JsonGraphVersion'] THEN 'Mode1 JSON版本'
+              WHEN l IN ['JsonGraphEntity'] THEN 'Mode1实体'
+              WHEN l IN ['BridgeDeltaVersion','DBCADDelta'] THEN '历史SAT增量'
               WHEN l IN ['BridgeEntityGraphVersion','entity_graph_version'] THEN 'Entity Graph版本'
               WHEN l IN ['entity_node'] THEN 'Entity节点'
               ELSE '其他'
@@ -217,7 +279,7 @@ def get_overview() -> dict[str, Any]:
         "total_relationships": int(total_rels),
         "total_projects": int(total_projects),
         "total_mode0_versions": int(total_mode0),
-        "total_mode1_deltas": int(total_mode1),
+        "total_mode1_json_versions": int(total_mode1),
         "total_entity_graph_versions": int(total_eg),
         "label_counts": [{"label": r["label"], "count": int(r["n"] or 0)} for r in label_stats],
         "relationship_counts": [{"type": r["rel_type"], "count": int(r["n"] or 0)} for r in rel_stats],
@@ -236,8 +298,9 @@ class ProjectSummary(BaseModel):
     updated_at: str
     mode0_version_count: int
     mode0_latest: int | None
-    mode1_delta_count: int
+    mode1_json_count: int
     mode1_latest: int | None
+    legacy_delta_count: int
     entity_graph_version_count: int
     entity_graph_latest: int | None
 
@@ -248,39 +311,43 @@ def list_projects() -> list[ProjectSummary]:
     列出所有项目，并附带三种模式版本计数。
 
     数据真实性修正（与 Neo4j 实测一致）：
-      - BridgeVersion 通过 :HAS_VERSION 关系挂到项目
+      - ModelVersion / BridgeVersion 通过 :HAS_VERSION 关系挂到项目
+      - JsonGraphVersion 通过 :HAS_JSON_GRAPH_VERSION 关系挂到项目
       - BridgeEntityGraphVersion 通过 :HAS_EG_VERSION 关系挂到项目
       - BridgeDeltaVersion 没有 BELONGS_TO 关系，按 project_id 属性匹配
     """
     rows = _run_cypher(
         """
         MATCH (p)
-        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
         WITH p, labels(p)[0] AS label
         // Mode0：通过关系
         OPTIONAL MATCH (p)-[:HAS_VERSION]->(v)
-        WHERE labels(v)[0] IN ['BridgeVersion', 'DBCADVersion']
+        WHERE labels(v)[0] IN ['BridgeVersion', 'DBCADVersion', 'ModelVersion']
         WITH p, label,
              count(DISTINCT v) AS m0_count,
              max(v.version) AS m0_latest
-        // Mode1：按 project_id 属性匹配（实测无 BELONGS_TO 关系）
+        // Historical SAT delta, retained for migration audit.
         OPTIONAL MATCH (d)
         WHERE labels(d)[0] IN ['BridgeDeltaVersion', 'DBCADDelta']
           AND (d.project_id = p.id OR d.project_id = p.project_id)
         WITH p, label, m0_count, m0_latest,
-             count(DISTINCT d) AS m1_count,
-             max(d.version) AS m1_latest
+             count(DISTINCT d) AS legacy_delta_count
+        OPTIONAL MATCH (p)-[:HAS_JSON_GRAPH_VERSION]->(j:JsonGraphVersion)
+        WITH p, label, m0_count, m0_latest, legacy_delta_count,
+             count(DISTINCT j) AS m1_count,
+             max(j.version) AS m1_latest
         // Entity Graph：通过关系
         OPTIONAL MATCH (p)-[:HAS_EG_VERSION]->(egv)
         WHERE labels(egv)[0] IN ['BridgeEntityGraphVersion', 'entity_graph_version']
-        WITH p, label, m0_count, m0_latest, m1_count, m1_latest,
+        WITH p, label, m0_count, m0_latest, legacy_delta_count, m1_count, m1_latest,
              count(DISTINCT egv) AS eg_count,
              max(egv.version) AS eg_latest
         RETURN p.name AS name,
                p.id AS project_id,
                p.created_at AS created_at,
                COALESCE(p.updated_at, p.created_at) AS updated_at,
-               m0_count, m0_latest, m1_count, m1_latest, eg_count, eg_latest
+               m0_count, m0_latest, legacy_delta_count, m1_count, m1_latest, eg_count, eg_latest
         ORDER BY updated_at DESC
         LIMIT 500
         """
@@ -295,8 +362,9 @@ def list_projects() -> list[ProjectSummary]:
                 updated_at=_iso(r.get("updated_at")),
                 mode0_version_count=int(r.get("m0_count") or 0),
                 mode0_latest=int(r["m0_latest"]) if r.get("m0_latest") is not None else None,
-                mode1_delta_count=int(r.get("m1_count") or 0),
+                mode1_json_count=int(r.get("m1_count") or 0),
                 mode1_latest=int(r["m1_latest"]) if r.get("m1_latest") is not None else None,
+                legacy_delta_count=int(r.get("legacy_delta_count") or 0),
                 entity_graph_version_count=int(r.get("eg_count") or 0),
                 entity_graph_latest=int(r["eg_latest"]) if r.get("eg_latest") is not None else None,
             )
@@ -310,11 +378,11 @@ def list_projects() -> list[ProjectSummary]:
 
 @router.get("/projects/{project_name}")
 def get_project_detail(project_name: str) -> dict[str, Any]:
-    """查询某项目的完整信息：元数据 + mode0 版本列表 + mode1 delta 列表 + eg 版本列表。"""
+    """Return project metadata, current JSON versions, and legacy history."""
     project_row = _run_single_cypher(
         """
         MATCH (p)
-        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
           AND p.name = $name
         RETURN p
         """,
@@ -329,9 +397,9 @@ def get_project_detail(project_name: str) -> dict[str, Any]:
     mode0_rows = _run_cypher(
         """
         MATCH (p)-[:HAS_VERSION]->(v)
-        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
           AND p.name = $name
-          AND labels(v)[0] IN ['BridgeVersion', 'DBCADVersion']
+          AND labels(v)[0] IN ['BridgeVersion', 'DBCADVersion', 'ModelVersion']
         RETURN v.version AS version, v.author AS author,
                v.created_at AS created_at,
                v.part_name AS part_name,
@@ -341,7 +409,7 @@ def get_project_detail(project_name: str) -> dict[str, Any]:
         {"name": project_name},
     )
 
-    # Mode1 delta：按 project_id 属性匹配
+    # Historical SAT delta: retained for audit; the UI uses JSON versions.
     delta_rows = _run_cypher(
         """
         MATCH (d)
@@ -355,12 +423,31 @@ def get_project_detail(project_name: str) -> dict[str, Any]:
         """,
         {"pid": pid},
     )
+    json_rows = _run_cypher(
+        "MATCH (v:JsonGraphVersion {project_id: $pid}) "
+        "RETURN v.version AS version, v.author AS author, "
+        "v.created_at AS created_at, size(coalesce(v.delta_json, v.content_json)) AS content_bytes, "
+        "v.storage_mode AS storage_mode "
+        "ORDER BY v.version ASC",
+        {"pid": pid},
+    )
+    json_history = _run_cypher(
+        "MATCH (v:JsonGraphVersion {project_id: $pid}) "
+        "OPTIONAL MATCH (v)-[:HAS_COMPONENT]->(c:JsonGraphComponent) "
+        "OPTIONAL MATCH (v)-[:HAS_RELATION]->(r:JsonGraphRelation) "
+        "RETURN v.version AS version, v.author AS author, v.created_at AS created_at, "
+        "v.storage_mode AS storage_mode, v.graph_hash AS graph_hash, "
+        "count(DISTINCT c) AS component_count, count(DISTINCT r) AS relation_count, "
+        "collect(DISTINCT c.component_hash) AS component_hashes, v.delta_json AS delta_json "
+        "ORDER BY v.version ASC",
+        {"pid": pid},
+    )
 
     # Entity Graph 版本：通过关系
     eg_rows = _run_cypher(
         """
         MATCH (p)-[:HAS_EG_VERSION]->(egv)
-        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
           AND p.name = $name
           AND labels(egv)[0] IN ['BridgeEntityGraphVersion', 'entity_graph_version']
         RETURN egv.version AS version, egv.author AS author,
@@ -418,6 +505,27 @@ def get_project_detail(project_name: str) -> dict[str, Any]:
             info["preview"] = content_text[:200]
         parsed_deltas.append(info)
 
+    previous_component_hashes: set[str] = set()
+    history_chain: list[dict[str, Any]] = []
+    for value in json_history:
+        hashes = {str(item) for item in (value.get("component_hashes") or []) if item}
+        changed_hashes = hashes - previous_component_hashes
+        change_items = _decode_changes(value.get("delta_json"))
+        history_chain.append({
+            "version": int(value.get("version") or 0),
+            "author": str(value.get("author") or ""),
+            "created_at": _iso(value.get("created_at")),
+            "storage_mode": str(value.get("storage_mode") or "legacy_snapshot"),
+            "graph_hash": str(value.get("graph_hash") or ""),
+            "component_count": int(value.get("component_count") or 0),
+            "relation_count": int(value.get("relation_count") or 0),
+            "changed_component_count": len(changed_hashes),
+            "reused_component_count": max(0, len(hashes) - len(changed_hashes)),
+            "changes": change_items,
+            "new_entity_types": sorted({item["entity_type"] for item in change_items if item["change_type"] == "ADD" and item["entity_type"]}),
+        })
+        previous_component_hashes = hashes
+
     return {
         "project": {
             "name": str(p.get("name") or ""),
@@ -436,7 +544,18 @@ def get_project_detail(project_name: str) -> dict[str, Any]:
             }
             for v in mode0_rows
         ],
-        "mode1_deltas": parsed_deltas,
+        "legacy_sat_deltas": parsed_deltas,
+        "mode1_json_versions": [
+            {
+                "version": int(v.get("version") or 0),
+                "author": str(v.get("author") or ""),
+                "created_at": _iso(v.get("created_at")),
+                "content_bytes": int(v.get("content_bytes") or 0),
+                "storage_mode": str(v.get("storage_mode") or "legacy_snapshot"),
+            }
+            for v in json_rows
+        ],
+        "mode1_history_chain": history_chain,
         "entity_graph_versions": [
             {
                 "version": int(eg.get("version") or 0),
@@ -460,9 +579,9 @@ def get_mode0_version_detail(project_name: str, version: int) -> dict[str, Any]:
     row = _run_single_cypher(
         """
         MATCH (p)-[:HAS_VERSION]->(v)
-        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
           AND p.name = $name
-          AND labels(v)[0] IN ['BridgeVersion', 'DBCADVersion']
+          AND labels(v)[0] IN ['BridgeVersion', 'DBCADVersion', 'ModelVersion']
           AND v.version = $version
         RETURN v, p.name AS pname
         """,
@@ -501,7 +620,7 @@ def get_mode1_detail(project_name: str, version: int) -> dict[str, Any]:
     project_row = _run_single_cypher(
         """
         MATCH (p)
-        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
           AND p.name = $name
         RETURN p.id AS pid
         """,
@@ -549,7 +668,7 @@ def get_eg_version_detail(project_name: str, version: int) -> dict[str, Any]:
     row = _run_single_cypher(
         """
         MATCH (p)-[:HAS_EG_VERSION]->(egv)
-        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
           AND p.name = $name
           AND labels(egv)[0] IN ['BridgeEntityGraphVersion', 'entity_graph_version']
           AND egv.version = $version
@@ -615,7 +734,7 @@ def get_part_topology(
         latest = _run_single_cypher(
             """
             MATCH (p)-[:HAS_VERSION]->(v)
-            WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+            WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
               AND p.name = $name
               AND labels(v)[0] IN ['BridgeVersion', 'DBCADVersion']
             RETURN v.part_name AS pn
@@ -676,20 +795,11 @@ def get_part_topology(
 
 @router.get("/projects/{project_name}/neo4j-state")
 def get_neo4j_graph_state(project_name: str) -> dict[str, Any]:
-    """返回某项目当前在 Neo4j 中存储的 part 子图状态。
-
-    数据真相（实测）：
-      - bridge 在每次 save 后都会全量覆写 part 子图（acis_save_entity_list_neo4j_part）
-      - Neo4j 里始终只有一个「当前 part 子图」，反映最新状态
-      - 历史回放通过 BridgeDeltaVersion 增量链（不在子图里）
-      - EntityGraph 模式走的是另一条路径，把整图存到 BridgeEntityGraphVersion.entity_graph_text
-
-    返回：part_name / part_version / total_nodes / 按 label 分类的节点数 / body 列表
-    """
+    """Return the latest JSON entity graph, or historical part graph state."""
     project_row = _run_single_cypher(
         """
         MATCH (p)
-        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+        WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
           AND p.name = $name
         RETURN p
         """,
@@ -699,6 +809,77 @@ def get_neo4j_graph_state(project_name: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found")
     p = project_row["p"]
     pid = str(p.get("id") or p.get("project_id") or "")
+
+    json_latest = _run_single_cypher(
+        "MATCH (v:JsonGraphVersion {project_id: $pid}) "
+        "RETURN v.version AS version, v.created_at AS created_at "
+        "ORDER BY v.version DESC LIMIT 1",
+        {"pid": pid},
+    )
+    if json_latest is not None:
+        buckets = _run_cypher(
+            "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version})"
+            "-[:HAS_COMPONENT]->(c:JsonGraphComponent)-[:HAS_JSON_ENTITY]->(e:JsonGraphEntity) "
+            "RETURN e.labels_json AS label, count(e) AS n ORDER BY n DESC",
+            {"pid": pid, "version": int(json_latest["version"])},
+        )
+        body_rows = _run_cypher(
+            "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version})"
+            "-[:HAS_COMPONENT]->(c:JsonGraphComponent)-[:HAS_JSON_ENTITY]->(e:JsonGraphEntity) "
+            "WHERE e.labels_json CONTAINS 'body' "
+            "RETURN e.entity_id AS uuid LIMIT 1000",
+            {"pid": pid, "version": int(json_latest["version"])},
+        )
+        history = _run_cypher(
+            "MATCH (v:JsonGraphVersion {project_id: $pid}) "
+            "OPTIONAL MATCH (v)-[:HAS_COMPONENT]->(c:JsonGraphComponent) "
+            "OPTIONAL MATCH (v)-[:HAS_RELATION]->(r:JsonGraphRelation) "
+            "RETURN v.version AS version, v.storage_mode AS storage_mode, "
+            "count(DISTINCT c) AS component_count, count(DISTINCT r) AS relation_count "
+            "ORDER BY v.version ASC",
+            {"pid": pid},
+        )
+        graph_nodes = _run_cypher(
+            "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version})"
+            "-[:HAS_COMPONENT]->(:JsonGraphComponent)-[:HAS_JSON_ENTITY]->(e:JsonGraphEntity) "
+            "RETURN e.entity_id AS id, e.labels_json AS labels_json, e.props_json AS props_json "
+            "ORDER BY e.entity_id LIMIT 180",
+            {"pid": pid, "version": int(json_latest["version"])},
+        )
+        graph_rels = _run_cypher(
+            "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version})"
+            "-[:HAS_COMPONENT]->(:JsonGraphComponent)-[:HAS_JSON_ENTITY]->(s:JsonGraphEntity)"
+            "-[r:JSON_TO]->(e:JsonGraphEntity) "
+            "RETURN s.entity_id AS start, e.entity_id AS end, r.type AS type LIMIT 360",
+            {"pid": pid, "version": int(json_latest["version"])},
+        )
+        return {
+            "project_id": pid, "storage_label": "Mode1 JSON graph",
+            "has_part": True, "part_name": "JSON graph", "part_version": int(json_latest["version"]),
+            "total_nodes": sum(int(item["n"]) for item in buckets),
+            "buckets": [{
+                "label": ",".join(json.loads(item["label"])),
+                "label_zh": _semantic_label(json.loads(item["label"])),
+                "count": int(item["n"]),
+            } for item in buckets],
+            "bodies": [{"uuid": str(item["uuid"])} for item in body_rows],
+            "body_count": len(body_rows),
+            "graph": {
+                "nodes": [{
+                    "id": str(item["id"]),
+                    "labels": json.loads(item["labels_json"]),
+                    "props": json.loads(item["props_json"]),
+                } for item in graph_nodes],
+                "rels": [{"start": str(item["start"]), "end": str(item["end"]), "type": str(item["type"])} for item in graph_rels],
+            },
+            "history_chain": [
+                {"version": int(item.get("version") or 0),
+                 "storage_mode": str(item.get("storage_mode") or "legacy_snapshot"),
+                 "component_count": int(item.get("component_count") or 0),
+                 "relation_count": int(item.get("relation_count") or 0)}
+                for item in history
+            ],
+        }
 
     # 优先用最新的 Mode0 版本的 part_name（如果是 Mode1 项目则用 delta 路径）
     # 三种选择：Mode0 / Mode1 / EG，按"最近一次更新"取
@@ -810,23 +991,92 @@ def get_neo4j_graph_state(project_name: str) -> dict[str, Any]:
 # 原始 Cypher（只读）
 # ---------------------------------------------------------------------------
 
+@router.get("/projects/{project_name}/json/{version}")
+def get_json_version_detail(project_name: str, version: int) -> dict[str, Any]:
+    """A bounded summary of one queryable Mode1 JSON version."""
+    row = _run_single_cypher(
+        "MATCH (p {name: $name})-[:HAS_JSON_GRAPH_VERSION]->"
+        "(v:JsonGraphVersion {version: $version}) "
+        "RETURN v.project_id AS project_id, v.version AS version, "
+        "v.author AS author, v.created_at AS created_at, "
+        "size(coalesce(v.delta_json, v.content_json)) AS content_bytes, v.graph_hash AS graph_hash",
+        {"name": project_name, "version": version},
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="JSON version not found")
+    counts = _run_cypher(
+        "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version})"
+        "-[:HAS_COMPONENT]->(c:JsonGraphComponent)-[:HAS_JSON_ENTITY]->(e:JsonGraphEntity) "
+        "RETURN e.labels_json AS labels_json, count(e) AS count "
+        "ORDER BY count DESC",
+        {"pid": row["project_id"], "version": version},
+    )
+    components = _run_cypher(
+        "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version})"
+        "-[hc:HAS_COMPONENT]->(c:JsonGraphComponent) "
+        "RETURN c.component_hash AS component_hash, hc.root_uuid AS root_uuid, "
+        "c.node_count AS node_count, c.rel_count AS rel_count, c.created_at AS created_at "
+        "ORDER BY root_uuid",
+        {"pid": row["project_id"], "version": version},
+    )
+    relation_count = _run_single_cypher(
+        "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version})"
+        "-[:HAS_RELATION]->(r:JsonGraphRelation) RETURN count(r) AS count",
+        {"pid": row["project_id"], "version": version},
+    )
+    version_meta = _run_single_cypher(
+        "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version}) "
+        "RETURN v.storage_mode AS storage_mode, v.delta_json AS delta_json",
+        {"pid": row["project_id"], "version": version},
+    ) or {}
+    delta: Any = {}
+    try:
+        delta = json.loads(version_meta.get("delta_json") or "{}")
+    except (TypeError, ValueError):
+        delta = {"raw": str(version_meta.get("delta_json") or "")}
+    return {
+        **{key: (_iso(value) if key == "created_at" else value) for key, value in row.items()},
+        "storage_mode": version_meta.get("storage_mode") or "legacy_snapshot",
+        "delta": delta,
+        "component_count": len(components),
+        "components": [
+            {"component_hash": str(item.get("component_hash") or ""),
+             "root_uuid": str(item.get("root_uuid") or ""),
+             "node_count": int(item.get("node_count") or 0),
+             "rel_count": int(item.get("rel_count") or 0),
+             "created_at": _iso(item.get("created_at"))}
+            for item in components
+        ],
+        "cross_component_relation_count": int((relation_count or {}).get("count") or 0),
+        "entity_counts": [
+            {"labels": json.loads(item["labels_json"]), "count": int(item["count"])}
+            for item in counts
+        ],
+    }
+
 class CypherRequest(BaseModel):
     query: str
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post("/query")
 def execute_cypher(req: CypherRequest) -> dict[str, Any]:
-    """执行只读 Cypher（拒绝 CREATE/DELETE/SET/MERGE/DROP/DETACH）。"""
-    q = req.query.strip().upper()
-    for kw in ["CREATE", "DELETE", "REMOVE", "SET", "MERGE", "DROP", "DETACH"]:
-        if q.startswith(kw + " ") or q.startswith(kw + "\n") or q == kw:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Write keyword '{kw}' is not allowed. This endpoint is read-only.",
-            )
+    """Run a bounded, read-only Cypher query for administrators."""
+    q = req.query.strip()
+    if not re.match(r"^(MATCH|OPTIONAL\s+MATCH)\b", q, re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="Only MATCH queries are allowed")
+    if re.search(r"\b(CREATE|DELETE|REMOVE|SET|MERGE|DROP|DETACH|CALL|LOAD|FOREACH|USE|ALTER|GRANT|DENY|REVOKE|START|STOP)\b", q, re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="Write or procedure clauses are not allowed")
+    if ";" in q or "//" in q or "/*" in q or not re.search(r"\bRETURN\b", q, re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="One MATCH/RETURN query is required")
     try:
-        rows = _run_cypher(req.query, req.params)
+        from neo4j import Query
+
+        driver = _get_driver()
+        with driver.session(database=settings.neo4j_database, default_access_mode="READ") as session:
+            rows = [dict(record) for record in session.run(
+                Query(q, timeout=5.0), req.params or {}
+            ).fetch(200)]
         return {"rows": rows, "count": len(rows)}
     except Exception as ex:
         return JSONResponse(
@@ -856,7 +1106,7 @@ def clear_database(confirm: bool = Query(default=False)) -> dict[str, str]:
 
 @router.delete("/projects/{project_name}")
 def delete_project(project_name: str, confirm: bool = Query(default=False)) -> dict[str, str]:
-    """删除某项目及其所有 BridgeVersion/BridgeEntityGraphVersion，并级联删除该项目的 BridgeDeltaVersion。"""
+    """Delete one project and its version-scoped JSON and historical records."""
     if not confirm:
         raise HTTPException(
             status_code=400,
@@ -866,20 +1116,32 @@ def delete_project(project_name: str, confirm: bool = Query(default=False)) -> d
         info = _run_cypher(
             """
             MATCH (p)
-            WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject']
+            WHERE labels(p)[0] IN ['BridgeProject', 'DBCADProject', 'Project']
               AND p.name = $name
             WITH p, p.id AS pid
             OPTIONAL MATCH (p)-[:HAS_VERSION]->(v)
             OPTIONAL MATCH (p)-[:HAS_EG_VERSION]->(egv)
+            OPTIONAL MATCH (p)-[:HAS_JSON_GRAPH_VERSION]->(jv:JsonGraphVersion)
+            OPTIONAL MATCH (jv)-[:HAS_COMPONENT]->(jc:JsonGraphComponent)
+            OPTIONAL MATCH (jc)-[:HAS_JSON_ENTITY]->(je:JsonGraphEntity)
+            OPTIONAL MATCH (jv)-[:HAS_RELATION]->(jr:JsonGraphRelation)
             OPTIONAL MATCH (d)
               WHERE (d.project_id = pid)
                 AND labels(d)[0] IN ['BridgeDeltaVersion', 'DBCADDelta']
-            WITH p, collect(DISTINCT v) AS vs, collect(DISTINCT egv) AS egvs, collect(DISTINCT d) AS ds
+            WITH p, collect(DISTINCT v) AS vs, collect(DISTINCT egv) AS egvs,
+                 collect(DISTINCT jv) AS jvs, collect(DISTINCT jc) AS jcs,
+                 collect(DISTINCT je) AS jes, collect(DISTINCT jr) AS jrs,
+                 collect(DISTINCT d) AS ds
+            FOREACH (x IN jes | DETACH DELETE x)
+            FOREACH (x IN jrs | DETACH DELETE x)
+            FOREACH (x IN jcs | DETACH DELETE x)
+            FOREACH (x IN jvs | DETACH DELETE x)
             FOREACH (x IN vs | DETACH DELETE x)
             FOREACH (x IN egvs | DETACH DELETE x)
             FOREACH (x IN ds | DETACH DELETE x)
+            WITH p, p.name AS deleted
             DETACH DELETE p
-            RETURN p.name AS deleted
+            RETURN deleted
             """,
             {"name": project_name},
         )
@@ -1644,6 +1906,11 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   .center { text-align: center; }
   .muted { color: var(--text-dim); }
   .mt-12 { margin-top: 12px; } .mt-16 { margin-top: 16px; } .mt-24 { margin-top: 24px; }
+  .neo4j-graph-wrap { margin-top: 18px; background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 12px; overflow: auto; }
+  .neo4j-graph-wrap svg { display: block; min-width: 760px; }
+  .neo4j-graph-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0 0; font-size: var(--fz-xs); color: var(--text-dim); }
+  .neo4j-graph-detail { margin-top: 10px; color: var(--text-dim); font-size: var(--fz-sm); word-break: break-word; }
+  .neo4j-graph-node { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -1786,6 +2053,21 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <script>
 const API = '/api/neo4j';
+let adminPassword = sessionStorage.getItem('dbcad_admin_password') || '';
+async function adminFetch(url, options={}) {
+  const headers = {...(options.headers || {})};
+  if (adminPassword) headers['X-API-Password'] = adminPassword;
+  let response = await fetch(url, {...options, headers});
+  if (response.status === 401) {
+    const entered = window.prompt('请输入管理员 API 密码');
+    if (!entered) return response;
+    adminPassword = entered;
+    sessionStorage.setItem('dbcad_admin_password', entered);
+    headers['X-API-Password'] = entered;
+    response = await fetch(url, {...options, headers});
+  }
+  return response;
+}
 
 const $ = (s, p=document) => p.querySelector(s);
 const $$ = (s, p=document) => [...p.querySelectorAll(s)];
@@ -1800,7 +2082,7 @@ function toast(msg, kind='') {
 }
 
 async function getJSON(url) {
-  const r = await fetch(url);
+  const r = await adminFetch(url);
   if (!r.ok) {
     let detail = r.statusText;
     try { const j = await r.json(); detail = j.detail || JSON.stringify(j); } catch(_) {}
@@ -1831,7 +2113,7 @@ async function loadOverview() {
     const data = await getJSON(`${API}/overview`);
     $('#topbar-projects').textContent = data.total_projects.toLocaleString();
     $('#topbar-mode0').textContent = data.total_mode0_versions.toLocaleString();
-    $('#topbar-mode1').textContent = data.total_mode1_deltas.toLocaleString();
+    $('#topbar-mode1').textContent = data.total_mode1_json_versions.toLocaleString();
     $('#topbar-eg').textContent = data.total_entity_graph_versions.toLocaleString();
 
     $('#overview-sub').textContent = `共 ${data.total_nodes.toLocaleString()} 节点 · ${data.total_relationships.toLocaleString()} 关系`;
@@ -1841,7 +2123,7 @@ async function loadOverview() {
       <div class="stat-card project">
         <div class="label">项目总数</div>
         <div class="value">${data.total_projects.toLocaleString()}</div>
-        <div class="sub">BridgeProject + DBCADProject</div>
+        <div class="sub">Project / BridgeProject / DBCADProject</div>
       </div>
       <div class="stat-card mode0">
         <div class="label">Mode0 全量版本</div>
@@ -1849,9 +2131,9 @@ async function loadOverview() {
         <div class="sub">BridgeVersion（完整 SAT）</div>
       </div>
       <div class="stat-card mode1">
-        <div class="label">Mode1 增量 Delta</div>
-        <div class="value">${data.total_mode1_deltas.toLocaleString()}</div>
-        <div class="sub">BridgeDeltaVersion（增量 SAT）</div>
+        <div class="label">Mode1 JSON 版本</div>
+        <div class="value">${data.total_mode1_json_versions.toLocaleString()}</div>
+        <div class="sub">JsonGraphVersion（完整快照）</div>
       </div>
       <div class="stat-card eg">
         <div class="label">Entity Graph 版本</div>
@@ -1921,14 +2203,14 @@ async function loadProjects() {
     renderProjects();
 
     const totalMode0 = projects.reduce((s,p) => s + p.mode0_version_count, 0);
-    const totalMode1 = projects.reduce((s,p) => s + p.mode1_delta_count, 0);
+    const totalMode1 = projects.reduce((s,p) => s + p.mode1_json_count, 0);
     const totalEG    = projects.reduce((s,p) => s + p.entity_graph_version_count, 0);
 
     $('#project-stats').innerHTML = `
       <div class="stat-card project">
         <div class="label">项目总数</div>
         <div class="value">${projects.length.toLocaleString()}</div>
-        <div class="sub">BridgeProject / DBCADProject</div>
+        <div class="sub">Project / BridgeProject / DBCADProject</div>
       </div>
       <div class="stat-card mode0">
         <div class="label">Mode0 总版本</div>
@@ -1936,9 +2218,9 @@ async function loadProjects() {
         <div class="sub">累计完整 SAT 版本</div>
       </div>
       <div class="stat-card mode1">
-        <div class="label">Mode1 总 Delta</div>
+        <div class="label">Mode1 JSON 版本</div>
         <div class="value">${totalMode1.toLocaleString()}</div>
-        <div class="sub">累计增量 Delta</div>
+        <div class="sub">累计 JSON 图版本</div>
       </div>
       <div class="stat-card eg">
         <div class="label">Entity Graph 总版本</div>
@@ -2003,7 +2285,7 @@ function projectRowHTML(p) {
         <span class="pid">${(p.project_id||'').slice(0,8)}</span>
       </td>
       <td class="center">${badge('mode0', p.mode0_version_count)}</td>
-      <td class="center">${badge('mode1', p.mode1_delta_count)}</td>
+      <td class="center">${badge('mode1', p.mode1_json_count)}</td>
       <td class="center">${badge('eg', p.entity_graph_version_count)}</td>
       <td class="center"><span class="mono muted" style="font-size: var(--fz-sm);">${latest.length ? latest.join(' / ') : '—'}</span></td>
       <td class="right muted" style="font-size: var(--fz-sm);">${fmtTime(p.updated_at)}</td>
@@ -2044,7 +2326,7 @@ async function toggleProject(name, tr) {
 
 function renderDetail(d, el) {
   const totalM0 = d.mode0_versions.length;
-  const totalM1 = d.mode1_deltas.length;
+  const totalM1 = d.mode1_json_versions.length;
   const totalEG = d.entity_graph_versions.length;
 
   el.innerHTML = `
@@ -2062,9 +2344,10 @@ function renderDetail(d, el) {
     <div id="neo4j-state-${cssEscape(d.project.id)}"></div>
     <div class="detail-grid">
       ${renderModeCol('mode0', 'Mode 0', 'SAT 全量版本', d.mode0_versions, totalM0, 'mode0')}
-      ${renderModeCol('mode1', 'Mode 1', 'Delta 增量', d.mode1_deltas, totalM1, 'mode1')}
+      ${renderModeCol('mode1', 'Mode 1', 'JSON 图版本', d.mode1_json_versions, totalM1, 'mode1')}
       ${renderModeCol('eg', 'Entity Graph', '图版本', d.entity_graph_versions, totalEG, 'eg')}
     </div>
+    ${renderMode1History(d.mode1_history_chain || [])}
   `;
 
   // 加载 Neo4j 当前图状态
@@ -2089,6 +2372,38 @@ function renderDetail(d, el) {
   }
 }
 
+function renderMode1History(history) {
+  if (!history.length) return '';
+  return `<div class="mt-16">
+    <div class="section-title">Mode1 增量存储历史链</div>
+    <div class="table-wrap"><table><thead><tr>
+      <th>版本</th><th>提交人</th><th>本次变更</th><th>组件数</th><th>跨组件关系</th><th>存储模式</th><th>时间</th>
+    </tr></thead><tbody>${history.slice().reverse().map(v => `<tr>
+      <td class="mono">v${v.version}</td><td>${escapeHTML(v.author)}</td>
+      <td>${renderChangeSummary(v)}</td><td>${v.component_count}<div class="muted" style="font-size: var(--fz-xs);">本次新增/替换 ${v.changed_component_count ?? '—'} · 复用 ${v.reused_component_count ?? '—'}</div></td><td>${v.relation_count}</td>
+      <td><span class="badge mode1">${escapeHTML(v.storage_mode)}</span></td>
+      <td class="muted">${fmtTime(v.created_at)}</td>
+    </tr>`).join('')}</tbody></table></div>
+    <div class="muted mt-8" style="font-size: var(--fz-xs);">组件数是该版本引用的 Body 拓扑组件数；跨组件关系是组件之间的设计依赖关系。Coedge、Edge 等是 Body 内部拓扑节点。</div>
+  </div>`;
+}
+
+function renderChangeSummary(v) {
+  const changes = v.changes || [];
+  if (!changes.length) return '<span class="muted">无显式变更记录</span>';
+  const groups = {};
+  for (const c of changes) {
+    const key = c.change_type || 'CHANGE';
+    groups[key] = (groups[key] || 0) + 1;
+  }
+  const parts = Object.entries(groups).map(([key, count]) => {
+    const label = key === 'ADD' ? '新增' : key === 'REMOVE' ? '删除' : key === 'MODIFY' ? '修改' : key;
+    return `${label} ${count}`;
+  });
+  const types = (v.new_entity_types || []).map(t => escapeHTML(topologyLabelZh(t))).join('、');
+  return `${parts.join(' · ')}${types ? `<div class="muted" style="font-size: var(--fz-xs); margin-top: 3px;">类型：${types}</div>` : ''}`;
+}
+
 // ============== Neo4j 当前图状态 ==============
 
 async function loadNeo4jState(projectId) {
@@ -2096,7 +2411,7 @@ async function loadNeo4jState(projectId) {
   if (!target) return;
   target.innerHTML = `<div class="neo4j-state-strip"><div class="neo4j-state-empty">加载 Neo4j 图状态…</div></div>`;
   try {
-    const r = await fetch(`${API}/projects/${encodeURIComponent(ALL_PROJECTS.find(p => p.project_id === projectId)?.name || '')}/neo4j-state`);
+    const r = await adminFetch(`${API}/projects/${encodeURIComponent(ALL_PROJECTS.find(p => p.project_id === projectId)?.name || '')}/neo4j-state`);
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
     renderNeo4jStateStrip(target, data);
@@ -2111,7 +2426,7 @@ function renderNeo4jStateStrip(el, data) {
       <div class="neo4j-state-strip">
         <div class="neo4j-state-header">
           <div class="neo4j-state-title"><span class="dot"></span> Neo4j 当前图状态</div>
-          <div class="neo4j-state-meta">该模式尚未在 Neo4j 写入 part 子图</div>
+          <div class="neo4j-state-meta">该项目尚无可查询的实体图</div>
         </div>
       </div>
     `;
@@ -2122,7 +2437,7 @@ function renderNeo4jStateStrip(el, data) {
   el.innerHTML = `
     <div class="neo4j-state-strip">
       <div class="neo4j-state-header">
-        <div class="neo4j-state-title"><span class="dot"></span> Neo4j 当前图状态 <small class="muted" style="font-size: var(--fz-sm); font-weight: 400;">— 单次完整拓扑，覆写式</small></div>
+        <div class="neo4j-state-title"><span class="dot"></span> Neo4j 当前图状态 <small class="muted" style="font-size: var(--fz-sm); font-weight: 400;">— ${escapeHTML(data.storage_label || '')}</small></div>
         <div class="neo4j-state-meta">
           part: <b>${escapeHTML(data.part_name)}</b>
           · version: <b>${data.part_version}</b>
@@ -2132,7 +2447,7 @@ function renderNeo4jStateStrip(el, data) {
       <div class="neo4j-state-grid">
         ${buckets.map(b => `
           <div class="neo4j-stat">
-            <div class="label">${escapeHTML(b.label)}</div>
+            <div class="label">${escapeHTML(b.label_zh || b.label)}</div>
             <div class="value">${b.count.toLocaleString()}</div>
           </div>
         `).join('')}
@@ -2146,7 +2461,7 @@ async function openNeo4jStateModal(projectName, projectId) {
   const body = $('#modal-body');
   body.innerHTML = '<div class="muted center" style="padding: 30px;">加载中…</div>';
   try {
-    const r = await fetch(`${API}/projects/${encodeURIComponent(projectName)}/neo4j-state`);
+    const r = await adminFetch(`${API}/projects/${encodeURIComponent(projectName)}/neo4j-state`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || '加载失败');
     renderNeo4jStateModal(body, data, projectName);
@@ -2158,7 +2473,7 @@ async function openNeo4jStateModal(projectName, projectId) {
 function renderNeo4jStateModal(body, data, projectName) {
   if (!data.has_part) {
     body.innerHTML = `
-      <div class="empty-state">该项目在 Neo4j 中尚未写入 part 子图（可能只用了 Mode0 但还没做 Save，或模式不同）。</div>
+      <div class="empty-state">该项目尚无可查询的实体图。</div>
     `;
     return;
   }
@@ -2168,16 +2483,16 @@ function renderNeo4jStateModal(body, data, projectName) {
     <table class="kv-table">
       <tr><th>项目名</th><td>${escapeHTML(projectName)}</td></tr>
       <tr><th>项目 ID</th><td>${escapeHTML(data.project_id)}</td></tr>
-      <tr><th>当前 part 名</th><td>${escapeHTML(data.part_name)}</td></tr>
-      <tr><th>当前 part 版本</th><td>${data.part_version}</td></tr>
-      <tr><th>part 总节点数</th><td>${data.total_nodes}</td></tr>
+      <tr><th>图标识</th><td>${escapeHTML(data.part_name)}</td></tr>
+      <tr><th>当前版本</th><td>${data.part_version}</td></tr>
+      <tr><th>实体节点数</th><td>${data.total_nodes}</td></tr>
       <tr><th>存储模式</th><td>${escapeHTML(data.storage_label || '—')}</td></tr>
     </table>
     <h4 style="margin-top: 22px; color: var(--text-bright); font-size: var(--fz-md);">ACIS 拓扑节点分布</h4>
     <div style="margin-top: 10px;">
       ${buckets.map(b => `
         <div class="bar-row">
-          <div class="bar-label">${escapeHTML(b.label)}</div>
+          <div class="bar-label">${escapeHTML(b.label_zh || b.label)}</div>
           <div class="bar-track"><div class="bar-fill" style="width: ${(b.count / max * 100).toFixed(1)}%"></div></div>
           <div class="bar-val">${b.count.toLocaleString()}</div>
         </div>
@@ -2189,12 +2504,59 @@ function renderNeo4jStateModal(body, data, projectName) {
         <div class="topo-pill" title="${escapeHTML(b.uuid)}">body <span class="count">${escapeHTML(b.uuid.slice(0, 8))}…</span></div>
       `).join('') || '<div class="muted">无 body</div>'}
     </div>
+    ${renderNeo4jGraph(data.graph)}
     <p class="muted mt-16" style="font-size: var(--fz-sm);">
-      【解读】这是 bridge 在最后一次 save 后写入的「part 子图」快照——
-      ACIS 拓扑节点从 part 出发，沿 part_entity_ptr 链展开（body → lump → shell → face → loop → coedge → edge → vertex + transform/几何）。
-      历史回放见 BridgeDeltaVersion 增量链。
+      【解读】图中 Body 是可理解的 CAD 实体根节点；Lump、Shell、Face、Loop、Coedge、Edge、Vertex 是 ACIS 几何拓扑的组成层级。点击节点可查看原始 Neo4j 属性。
     </p>
   `;
+  const graphRoot = body.querySelector('[data-neo4j-graph]');
+  if (graphRoot) bindNeo4jGraph(graphRoot, data.graph);
+}
+
+function renderNeo4jGraph(graph) {
+  if (!graph || !graph.nodes || !graph.nodes.length) return '<div class="neo4j-graph-detail">当前版本没有可绘制的实体图。</div>';
+  const nodes = graph.nodes.slice(0, 120);
+  const rels = (graph.rels || []).filter(r => nodes.some(n => n.id === r.start) && nodes.some(n => n.id === r.end)).slice(0, 240);
+  const width = 900, height = 460, cx = width / 2, cy = height / 2;
+  const positions = {};
+  const bodyNodes = nodes.filter(n => (n.labels || []).map(String).map(x => x.toLowerCase()).includes('body'));
+  nodes.forEach((n, i) => {
+    const root = (n.labels || []).map(String).map(x => x.toLowerCase()).includes('body');
+    const radius = root ? 90 : 170;
+    const angle = root ? (bodyNodes.indexOf(n) * Math.PI * 2 / Math.max(1, bodyNodes.length)) : (i * 2.399);
+    positions[n.id] = { x: cx + (root ? radius * Math.cos(angle) : radius * Math.cos(angle)), y: cy + (root ? radius * Math.sin(angle) : radius * Math.sin(angle)) };
+  });
+  const presentTypes = [...new Set(nodes.flatMap(n => (n.labels || []).map(x => String(x).toLowerCase())))];
+  const legend = presentTypes.map(key => `${escapeHTML(topologyLabelZh(key))}`).join('　·　');
+  return `<div data-neo4j-graph class="neo4j-graph-wrap"><div class="muted" style="font-size: var(--fz-xs);">Neo4j 实际存储图（展示前 ${nodes.length} 个节点 / ${rels.length} 条关系；点击节点查看属性和相邻关系）</div><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Neo4j CAD 拓扑图">
+    ${rels.map(r => { const a=positions[r.start], b=positions[r.end]; return a&&b ? `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="var(--border)" stroke-width="1" opacity=".7"><title>${escapeHTML(r.type || '关系')}</title></line>` : ''; }).join('')}
+    ${nodes.map(n => { const p=positions[n.id], key=String((n.labels||[])[0]||'entity').toLowerCase(), body=key==='body'; return `<g class="neo4j-graph-node" data-node-id="${escapeAttr(n.id)}" transform="translate(${p.x},${p.y})"><circle r="${body?18:8}" fill="${body?'var(--mode1)':'var(--surface)'}" stroke="var(--cyan)" stroke-width="${body?3:1.5}"/><text y="${body?34:20}" text-anchor="middle" fill="var(--text)" font-size="${body?13:10}">${escapeHTML(topologyLabelZh(key))}</text></g>`; }).join('')}
+  </svg><div class="neo4j-graph-legend">${legend || '实体节点'}　·　线条表示 Neo4j 中实际保存的拓扑关系</div><div class="neo4j-graph-detail" data-graph-detail>点击节点查看 UUID、属性和相邻关系</div></div>`;
+}
+
+function _topologyLabel(key) {
+  return ({body:'Body', lump:'Lump', shell:'Shell', face:'Face', loop:'Loop', coedge:'Coedge', edge:'Edge', vertex:'Vertex', transform:'Transform'})[key] || key;
+}
+
+function topologyLabelZh(key) {
+  const k = String(key || '').toLowerCase();
+  return ({body:'Body 实体', lump:'Lump 体块', shell:'Shell 壳体', face:'Face 面', loop:'Loop 环', coedge:'Coedge 半边', edge:'Edge 边', vertex:'Vertex 顶点', transform:'Transform 变换'})[k] || _topologyLabel(k) || '实体节点';
+}
+
+function bindNeo4jGraph(root, graph) {
+  const detail = root.querySelector('[data-graph-detail]');
+  root.querySelectorAll('[data-node-id]').forEach(node => node.addEventListener('click', () => {
+    const item = (graph.nodes || []).find(n => n.id === node.dataset.nodeId);
+    if (!item || !detail) return;
+    const key = String((item.labels || ['entity'])[0]).toLowerCase();
+    const adjacent = (graph.rels || []).filter(r => r.start === item.id || r.end === item.id).slice(0, 12).map(r => {
+      const otherId = r.start === item.id ? r.end : r.start;
+      const other = (graph.nodes || []).find(n => n.id === otherId);
+      const otherKey = String((other?.labels || ['entity'])[0]).toLowerCase();
+      return `${r.start === item.id ? '→' : '←'}${r.type || '关系'} ${topologyLabelZh(otherKey)}`;
+    });
+    detail.textContent = `${topologyLabelZh(key)} · ${item.id} · 属性 ${JSON.stringify(item.props || {})}${adjacent.length ? ` · 相邻：${adjacent.join('；')}` : ''}`;
+  }));
 }
 
 function renderModeCol(cls, title, sub, items, total, mode) {
@@ -2212,6 +2574,7 @@ function renderModeCol(cls, title, sub, items, total, mode) {
               </div>
               <div class="muted" style="font-size: var(--fz-xs); margin-top: 2px;">
                 ${v.graph_bytes ? `${(v.graph_bytes/1024).toFixed(1)} KB graph` : ''}
+                ${v.content_bytes ? `${(v.content_bytes/1024).toFixed(1)} KB JSON snapshot` : ''}
                 ${v.delta_uuid_count !== undefined && v.delta_uuid_count >= 0
                   ? ` · +${v.delta_uuid_count} bodies · -${v.removed_uuid_count || 0}`
                   : ''}
@@ -2236,7 +2599,7 @@ function renderModeCol(cls, title, sub, items, total, mode) {
 async function openVersionDetail(project, mode, version) {
   const url =
     mode === 'mode0' ? `${API}/projects/${encodeURIComponent(project)}/mode0/${version}`
-    : mode === 'mode1' ? `${API}/projects/${encodeURIComponent(project)}/mode1/${version}`
+    : mode === 'mode1' ? `${API}/projects/${encodeURIComponent(project)}/json/${version}`
     : `${API}/projects/${encodeURIComponent(project)}/eg/${version}`;
 
   openModal(`版本详情 · ${mode.toUpperCase()} v${version}`);
@@ -2245,7 +2608,7 @@ async function openVersionDetail(project, mode, version) {
   try {
     const d = await getJSON(url);
     if (mode === 'mode0') renderMode0Modal(d, body, project);
-    else if (mode === 'mode1') renderMode1Modal(d, body, project);
+    else if (mode === 'mode1') renderJsonMode1Modal(d, body, project);
     else renderEGModal(d, body, project);
   } catch (e) {
     body.innerHTML = `<div class="empty-state" style="color: var(--red);">失败：${escapeHTML(e.message)}</div>`;
@@ -2254,7 +2617,7 @@ async function openVersionDetail(project, mode, version) {
 
 function renderMode0Modal(d, body, project) {
   const rows = d.topology_by_label.map(t =>
-    `<tr><th>${escapeHTML(t.label)}</th><td>${t.count.toLocaleString()}</td></tr>`
+    `<tr><th>${escapeHTML(topologyLabelZh(t.label))}<div class="muted" style="font-size: var(--fz-xs);">Neo4j label: ${escapeHTML(t.label)}</div></th><td>${t.count.toLocaleString()}</td></tr>`
   ).join('');
   body.innerHTML = `
     <table class="kv-table">
@@ -2272,19 +2635,19 @@ function renderMode0Modal(d, body, project) {
   `;
 }
 
-function renderMode1Modal(d, body, project) {
-  const c = d.parsed_content;
+function renderJsonMode1Modal(d, body, project) {
   body.innerHTML = `
     <table class="kv-table">
       <tr><th>版本号</th><td>#${d.version}</td></tr>
       <tr><th>作者</th><td>${escapeHTML(d.author)}</td></tr>
       <tr><th>创建时间</th><td>${fmtTime(d.created_at)}</td></tr>
-      <tr><th>所属项目</th><td>${escapeHTML(project)}</td></tr>
-      <tr><th>原始长度</th><td>${d.raw_length.toLocaleString()} 字符</td></tr>
+      <tr><th>快照字节</th><td>${Number(d.content_bytes || 0).toLocaleString()}</td></tr>
+      <tr><th>图哈希</th><td class="mono">${escapeHTML(d.graph_hash || '')}</td></tr>
     </table>
-    <h4 style="margin-top: 18px; color: var(--text-bright); font-size: var(--fz-md);">Delta JSON 内容</h4>
-    <pre class="code">${escapeHTML(JSON.stringify(c, null, 2))}</pre>
-  `;
+    <h3>实体类型</h3>
+    <table class="kv-table">${(d.entity_counts || []).map(item =>
+      `<tr><th>${escapeHTML((item.labels || []).map(topologyLabelZh).join('、'))}<div class="muted" style="font-size: var(--fz-xs);">Neo4j label: ${escapeHTML((item.labels || []).join(', '))}</div></th><td>${item.count}</td></tr>`
+    ).join('')}</table>`;
 }
 
 function renderEGModal(d, body, project) {
@@ -2342,7 +2705,7 @@ async function runCypher() {
   const out = $('#cypher-result');
   out.innerHTML = '<div class="muted">执行中…</div>';
   try {
-    const r = await fetch(`${API}/query`, {
+    const r = await adminFetch(`${API}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: q, params: {} }),

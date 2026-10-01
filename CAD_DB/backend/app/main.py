@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from . import crud, schemas
 from .config import settings
 from .sync import sync_manager
-from .json_collab import GraphValidationError, graph_component, graph_hash, graph_diff, merge_graph, validate_graph
+from .json_collab import GraphValidationError, graph_component, graph_hash, merge_graph, validate_graph
 from .json_graph_store import get_json_graph_store, shutdown_json_graph_store
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
@@ -145,7 +145,7 @@ def _model_saved_event(
     trigger: str,
     request_id: str | None = None,
     source_client_id: str | None = None,
-    include_content: bool = False,
+    include_content: bool = True,
 ) -> dict[str, Any]:
     event = {
         "type": "model_saved",
@@ -154,7 +154,6 @@ def _model_saved_event(
         "author": version.author,
         "created_at": version.created_at.isoformat(),
         "trigger": trigger,
-        "include_content": include_content,
     }
     if include_content:
         event["content"] = version.content
@@ -236,7 +235,7 @@ async def _create_model_version_serialized(
             trigger=trigger,
             request_id=request_id,
             source_client_id=source_client_id,
-            include_content=False,
+            include_content=True,
         )
         print(f"[_create_model_version_serialized]   routing to: {'entity_graph_saved' if has_entity_graph else 'model_saved'}",
               flush=True)
@@ -244,6 +243,7 @@ async def _create_model_version_serialized(
             project_id,
             broadcast_event,
             exclude_client_id=source_client_id,
+            stream="mode0",
         )
     return version
 
@@ -284,11 +284,11 @@ async def save_json_delta(
         latest = store.latest(project_id)
         latest_version = latest.version if latest else None
         base_version = payload.base_version
-        # The JSON stream is intentionally a new version namespace.  If a
-        # project only has legacy SAT versions, the first JSON push seeds
-        # version 1 from the client's complete graph; legacy numbers are not
-        # valid JSON compare-and-swap tokens.
+        # The JSON stream has its own version namespace. A client joining an
+        # existing SAT project must Pull or start from an empty JSON version.
         if latest_version is None:
+            if base_version not in (None, 0):
+                raise HTTPException(status_code=409, detail={"reason": "stale_base", "latest_version": 0})
             base_version = None
         elif base_version is None:
             raise HTTPException(
@@ -304,7 +304,7 @@ async def save_json_delta(
                     "base_version": base_version,
                 },
             )
-        base_graph = latest.content.get("entity_graph", {"nodes": [], "rels": []}) if latest else {"nodes": [], "rels": []}
+        base_graph = store.graph(project_id, latest.version) if latest else {"nodes": [], "rels": []}
         try:
             merged = merge_graph(base_graph, incoming, payload.changes, payload.removed_ids)
         except GraphValidationError as ex:
@@ -334,6 +334,7 @@ async def save_json_delta(
                 "trigger": "json_delta",
             },
             exclude_client_id=payload.source_client_id,
+            stream="mode1",
         )
         return {
             "project_id": project_id,
@@ -343,144 +344,8 @@ async def save_json_delta(
         }
 
 
-# ---------------------------------------------------------------------------
-# Mode1 Delta Push / Pull — delegates to C++ storage_bridge
-# ---------------------------------------------------------------------------
-
-@app.post("/projects/{project_id}/delta", status_code=201)
-async def save_delta(
-    project_id: str,
-    payload: schemas.SaveDeltaRequest,
-    _: None = Depends(verify_api_password),
-) -> dict[str, Any]:
-    """
-    Mode1 Delta Push: delegate to C++ storage_bridge handleSaveDelta.
-
-    Request body:
-    {
-        "author": "<name>",
-        "base_version": <int|null>,
-        "delta_uuids": ["uuid1", ...],
-        "delta_sat_segments": ["sat_body_1", ...],
-        "removed_uuids": ["uuid3", ...],
-        "source_client_id": "<optional, 提交方 client_id 用于 broadcast 排除自身>"
-    }
-
-    Response:
-    {
-        "version": <int>,
-        "project_id": "<id>",
-        "author": "<name>",
-        "created_at": "<iso-timestamp>"
-    }
-
-    【Phase B】save_delta 成功后通过 WebSocket 广播 mode1_delta_saved 事件，
-    让其他连接到该项目 room 的客户端自动 pull。源 client 自身通过 exclude_client_id
-    排除，避免回声。
-    """
-    from . import crud
-    bridge = crud.storage_bridge
-    if bridge is None:
-        raise HTTPException(status_code=503, detail="Storage bridge not configured")
-
-    print(f"[fastapi save_delta] project_id={project_id} base_version={payload.base_version} "
-          f"delta_uuids={len(payload.delta_uuids)} "
-          f"delta_sat_segments={len(payload.delta_sat_segments)} "
-          f"removed_uuids={len(payload.removed_uuids)} "
-          f"source_client_id={payload.source_client_id or '(empty)'}",
-          flush=True)
-
-    try:
-        result = bridge.save_delta(
-            project_id=project_id,
-            author=payload.author,
-            base_version=payload.base_version,
-            delta_uuids=payload.delta_uuids,
-            delta_sat_segments=payload.delta_sat_segments,
-            removed_uuids=payload.removed_uuids,
-            source_client_id=payload.source_client_id,
-        )
-        print(f"[fastapi save_delta] SUCCESS version={result.get('version')} project_id={project_id}", flush=True)
-    except HTTPException:
-        raise
-    except Exception as ex:
-        print(f"[fastapi save_delta] FAILED project_id={project_id} ex={ex}", flush=True)
-        raise HTTPException(status_code=500, detail=str(ex))
-
-    # 【Phase B】成功后广播 mode1_delta_saved 给该项目下的其他客户端
-    # 排除提交方自身（payload.source_client_id），避免自己的回声触发二次 pull。
-    new_version = result.get("version", 0)
-    broadcast_event = {
-        "type": "mode1_delta_saved",
-        "project_id": project_id,
-        "version": new_version,
-        "delta_count": len(payload.delta_uuids),
-        "deleted_count": len(payload.removed_uuids),
-        "author": payload.author,
-        "created_at": result.get("created_at"),
-        "trigger": "http_save_delta",
-        "source_client_id": payload.source_client_id,
-    }
-    print(f"[fastapi save_delta] broadcasting mode1_delta_saved v={new_version} to room={project_id} "
-          f"exclude_client_id={payload.source_client_id or '(none)'}",
-          flush=True)
-    try:
-        await sync_manager.broadcast(
-            project_id,
-            broadcast_event,
-            exclude_client_id=payload.source_client_id,
-        )
-        print(f"[fastapi save_delta] broadcast OK", flush=True)
-    except Exception as ex:
-        # 广播失败不影响 push 成功的语义——B 端仍可手动 Pull
-        print(f"[fastapi save_delta] broadcast FAILED (push still succeeds): {ex}", flush=True)
-
-    return result
-
-
-@app.get("/projects/{project_id}/delta")
-async def get_delta(
-    project_id: str,
-    base_version: int = Query(..., ge=0),
-    _: None = Depends(verify_api_password),
-) -> dict[str, Any]:
-    """
-    Mode1 Delta Pull: delegate to C++ storage_bridge handleGetDelta.
-
-    Query params:
-      base_version: B 端上次 sync 的版本号
-
-    Response:
-    {
-        "version": <int>,                    # 最新版本号
-        "delta_bodies": [                   # 本次所有 body 的 uuid + SAT
-            {"uuid": "<uuid>", "sat": "<sat>"},
-            ...
-        ],
-        "deleted_uuids": []                # 当前为空，B 端通过集合差计算
-    }
-    """
-    from . import crud
-    bridge = crud.storage_bridge
-    if bridge is None:
-        raise HTTPException(status_code=503, detail="Storage bridge not configured")
-
-    print(f"[fastapi get_delta] project_id={project_id} base_version={base_version}", flush=True)
-
-    try:
-        result = bridge.get_delta(project_id=project_id, base_version=base_version)
-        print(f"[fastapi get_delta] SUCCESS version={result.get('version')} "
-              f"delta_bodies={len(result.get('delta_bodies', []))} project_id={project_id}", flush=True)
-        return result
-    except HTTPException:
-        raise
-    except Exception as ex:
-        print(f"[fastapi get_delta] FAILED project_id={project_id} ex={ex}", flush=True)
-        raise HTTPException(status_code=500, detail=str(ex))
-
-
-async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, trigger: str) -> None:
-    if settings.direct_json_mode:
+async def _send_latest_model_saved_event(project_id: str, websocket: WebSocket, trigger: str, stream: str = "mode0") -> None:
+    if stream == "mode1":
         json_latest = get_json_graph_store().latest(project_id)
         if json_latest is not None:
             await websocket.send_json(
@@ -538,7 +403,7 @@ def get_json_delta(
     base_version: int = Query(..., ge=0),
     _: None = Depends(verify_api_password),
 ) -> dict[str, Any]:
-    """Return a canonical snapshot plus a deterministic change summary."""
+    """Return changed body components since the requested JSON version."""
     if not settings.direct_json_mode:
         raise HTTPException(status_code=503, detail="Direct JSON collaboration is disabled")
     store = get_json_graph_store()
@@ -550,9 +415,7 @@ def get_json_delta(
     base = store.get(project_id, base_version) if base_version > 0 else None
     if base_version > 0 and base is None:
         raise HTTPException(status_code=404, detail="Base JSON graph version not found")
-    empty = {"nodes": [], "rels": []}
-    base_graph = base.content.get("entity_graph", empty) if base else empty
-    graph = latest.content["entity_graph"]
+    graph = store.graph(project_id, latest.version) if hasattr(store, "graph") else latest.content.get("entity_graph", {"nodes": [], "rels": []})
     commits = store.list_after(project_id, base_version)
     latest_changes = [
         item
@@ -565,23 +428,36 @@ def get_json_delta(
         for item in latest_changes
         if isinstance(item, dict) and str(item.get("uuid", item.get("id", ""))).strip()
     }
+    changed_roots.update(item.strip() for item in latest_changes if isinstance(item, str) and item.strip())
     removed_ids = [
         str(value).strip()
         for commit in commits
         for value in commit.content.get("removed_ids", [])
         if str(value).strip()
     ]
+    # A body deleted and subsequently re-added in the requested interval is
+    # present in the latest graph. Do not delete it again on the client.
+    current_node_ids = {node["id"] for node in graph["nodes"]}
+    removed_ids = sorted({value for value in removed_ids if value not in current_node_ids})
     # A Pull carries only complete topology components for bodies changed by
     # this commit. The client can merge these components into a dirty canvas.
     # It must never interpret the absence of an unchanged body as a deletion.
-    delta_graph = graph_component(graph, changed_roots) if changed_roots else {"nodes": [], "rels": []}
+    if base_version == 0:
+        delta_graph = graph
+    elif changed_roots:
+        delta_graph = graph_component(graph, changed_roots)
+    else:
+        delta_graph = {
+            "nodes": [], "rels": [],
+            **{key: value for key, value in graph.items() if key not in {"nodes", "rels"}},
+        }
     return {
         "version": latest.version,
         "entity_graph": delta_graph,
         "changes": latest_changes,
-        "diff": graph_diff(base_graph, graph),
         "removed_ids": removed_ids,
-        "delta": True,
+        "delta": base_version != 0,
+        "schema": latest.content.get("schema", "dbcad.entity_graph.v1"),
         "graph_hash": latest.content.get("graph_hash"),
     }
 
@@ -798,6 +674,7 @@ async def _handle_submit_entity_graph_message(
                     source_client_id=client_id,
                 ),
                 exclude_client_id=client_id,
+                stream="mode0",
             )
             print(f"[fastapi _handle_submit_entity_graph] BROADCAST entity_graph_saved v={version.version} project_id={project_id} (exclude {client_id})", flush=True)
     except HTTPException as ex:
@@ -829,11 +706,12 @@ async def _handle_project_ws_message(
     client_id: str,
     author: str,
     message: str,
+    stream: str = "mode0",
 ) -> None:
     normalized = message.strip()
     lowered = normalized.lower()
     if lowered == "sync_now":
-        await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now")
+        await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now", stream=stream)
         return
     if lowered == "ping":
         await websocket.send_json({"type": "pong", "project_id": project_id})
@@ -851,11 +729,17 @@ async def _handle_project_ws_message(
 
     message_type = str(data.get("type") or "").strip()
     if message_type == "submit_model":
+        if stream != "mode0":
+            await websocket.send_json({"type": "error", "project_id": project_id, "detail": "Wrong version stream"})
+            return
         await _handle_submit_model_message(websocket, project_id, client_id, author, data)
     elif message_type == "submit_entity_graph":
+        if stream != "mode0":
+            await websocket.send_json({"type": "error", "project_id": project_id, "detail": "Wrong version stream"})
+            return
         await _handle_submit_entity_graph_message(websocket, project_id, client_id, author, data)
     elif message_type == "sync_now":
-        await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now")
+        await _send_latest_model_saved_event(project_id, websocket, trigger="sync_now", stream=stream)
     elif message_type == "ping":
         await websocket.send_json({"type": "pong", "project_id": project_id})
     else:
@@ -866,6 +750,10 @@ async def _handle_project_ws_message(
 async def ws_project_sync(websocket: WebSocket, project_id: str) -> None:
     incoming_ts = datetime.now(timezone.utc).isoformat()
     incoming_query = dict(websocket.query_params)
+    stream = str(websocket.query_params.get("stream") or "mode0").lower()
+    if stream not in {"mode0", "mode1"} or (stream == "mode1" and not settings.direct_json_mode):
+        await websocket.close(code=1008)
+        return
     has_pw = bool(incoming_query.get("password"))
     print(f"[WS] incoming ts={incoming_ts} project_id={project_id} "
           f"client_id={incoming_query.get('client_id')} "
@@ -877,14 +765,11 @@ async def ws_project_sync(websocket: WebSocket, project_id: str) -> None:
         await websocket.close(code=1008)
         return
 
-    print(f"[WS] ACCEPT project_id={project_id} (awaiting websocket.accept)", flush=True)
-    await websocket.accept()
-    print(f"[WS] ACCEPTED project_id={project_id}", flush=True)
-
     client_id = websocket.query_params.get("client_id") or uuid4().hex
     author = (websocket.query_params.get("author") or "anonymous").strip() or "anonymous"
 
-    await sync_manager.connect(project_id, websocket, client_id=client_id, author=author)
+    await sync_manager.connect(project_id, websocket, client_id=client_id, author=author, stream=stream)
+    print(f"[WS] ACCEPTED project_id={project_id}", flush=True)
     try:
         members = await sync_manager.list_members(project_id)
         await websocket.send_json(
@@ -906,10 +791,10 @@ async def ws_project_sync(websocket: WebSocket, project_id: str) -> None:
             exclude_client_id=client_id,
         )
 
-        await _send_latest_model_saved_event(project_id, websocket, trigger="snapshot")
+        await _send_latest_model_saved_event(project_id, websocket, trigger="snapshot", stream=stream)
         while True:
             message = await websocket.receive_text()
-            await _handle_project_ws_message(websocket, project_id, client_id, author, message)
+            await _handle_project_ws_message(websocket, project_id, client_id, author, message, stream)
     except WebSocketDisconnect:
         disconnected = await sync_manager.disconnect(project_id, websocket)
         if disconnected is not None:

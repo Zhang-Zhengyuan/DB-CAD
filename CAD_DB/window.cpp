@@ -937,7 +937,11 @@ ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, i
     ENTITY_TREE_ITEM eti;
     eti.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     eti.name = name;
-    eti.index = entity_tree.size();
+    // Index is an identity used by dependency lists and collaboration
+    // bookkeeping.  entity_tree.size() is not stable after a deletion (it
+    // would reuse an existing index and make two rows address the same
+    // entity), so allocate from the monotonic counter instead.
+    eti.index = latest_index++;
     eti.ptrEntity = ptrEntity;
     eti.handles = handles;
     eti.visible = true;

@@ -92,7 +92,8 @@ def test_handle_project_ws_message_routes_protocol_messages(monkeypatch: pytest.
         calls: list[tuple[str, str]] = []
         socket = FakeJsonWebSocket()
 
-        async def fake_send_latest(project_id: str, websocket: FakeJsonWebSocket, trigger: str) -> None:
+        async def fake_send_latest(project_id: str, websocket: FakeJsonWebSocket, trigger: str, stream: str = "mode0") -> None:
+            assert stream == "mode0"
             calls.append((project_id, trigger))
 
         async def fake_handle_submit(
