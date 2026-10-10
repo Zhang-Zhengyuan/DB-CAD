@@ -35,9 +35,13 @@ class StorageBridgeClient:
     def __init__(self, base_url: str, timeout_seconds: float) -> None:
         trimmed = base_url.strip().rstrip("/")
         if not trimmed:
-            raise RuntimeError("CAD_DB_STORAGE_BRIDGE_URL is required when storage_backend=neo4j")
+            raise RuntimeError(
+                "CAD_DB_STORAGE_BRIDGE_URL is required when storage_backend=neo4j"
+            )
 
-        self._client = httpx.Client(base_url=trimmed, timeout=timeout_seconds, trust_env=False)
+        self._client = httpx.Client(
+            base_url=trimmed, timeout=timeout_seconds, trust_env=False
+        )
 
     def close(self) -> None:
         self._client.close()
@@ -94,7 +98,11 @@ class StorageBridgeClient:
         project_value = str(data.get("project_id") or project_id)
         author_value = str(data.get("author") or author)
         content_value_raw = data.get("content", content)
-        content_value = dict(content_value_raw) if isinstance(content_value_raw, dict) else dict(content)
+        content_value = (
+            dict(content_value_raw)
+            if isinstance(content_value_raw, dict)
+            else dict(content)
+        )
 
         return VersionRecord(
             id=version_id,
@@ -173,11 +181,20 @@ class StorageBridgeClient:
     ) -> VersionRecord:
         encoded = quote(project_id, safe="")
         latest = self.get_latest_version_or_none(project_id)
-        print(f"[storage_bridge.create_model_version] project_id={project_id} base_version_in={base_version} latest_seen={latest.version if latest else None}", flush=True)
+        print(
+            f"[storage_bridge.create_model_version] project_id={project_id} base_version_in={base_version} latest_seen={latest.version if latest else None}",
+            flush=True,
+        )
         if base_version is None and latest is not None:
             base_version = latest.version
-            print(f"[storage_bridge.create_model_version] project_id={project_id} auto-set base_version={base_version} from latest", flush=True)
-        print(f"[storage_bridge.create_model_version] POST /projects/{encoded}/models base_version={base_version} author={author}", flush=True)
+            print(
+                f"[storage_bridge.create_model_version] project_id={project_id} auto-set base_version={base_version} from latest",
+                flush=True,
+            )
+        print(
+            f"[storage_bridge.create_model_version] POST /projects/{encoded}/models base_version={base_version} author={author}",
+            flush=True,
+        )
         response = self._request(
             "POST",
             f"/projects/{encoded}/models",
@@ -187,7 +204,10 @@ class StorageBridgeClient:
                 "base_version": base_version,
             },
         )
-        print(f"[storage_bridge.create_model_version] POST /projects/{encoded}/models status={response.status_code}", flush=True)
+        print(
+            f"[storage_bridge.create_model_version] POST /projects/{encoded}/models status={response.status_code}",
+            flush=True,
+        )
         try:
             data = response.json()
         except Exception as ex:
@@ -205,7 +225,9 @@ class StorageBridgeClient:
                 detail="Storage bridge returned invalid save response",
             )
 
-        full = self._parse_saved_version_fallback(data, project_id=project_id, author=author, content=content)
+        full = self._parse_saved_version_fallback(
+            data, project_id=project_id, author=author, content=content
+        )
         if full is not None:
             return full
 
@@ -234,7 +256,9 @@ class StorageBridgeClient:
             raise
         return self._parse_version(response.json())
 
-    def get_version_or_none(self, project_id: str, version: int) -> VersionRecord | None:
+    def get_version_or_none(
+        self, project_id: str, version: int
+    ) -> VersionRecord | None:
         encoded = quote(project_id, safe="")
         try:
             response = self._request("GET", f"/projects/{encoded}/models/{version}")
@@ -244,7 +268,9 @@ class StorageBridgeClient:
             raise
         return self._parse_version(response.json())
 
-    def list_versions(self, project_id: str, limit: int, offset: int) -> list[VersionRecord]:
+    def list_versions(
+        self, project_id: str, limit: int, offset: int
+    ) -> list[VersionRecord]:
         encoded = quote(project_id, safe="")
         response = self._request(
             "GET",

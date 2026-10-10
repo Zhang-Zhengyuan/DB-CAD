@@ -49,7 +49,9 @@ def validate_graph(graph: Any) -> dict[str, Any]:
         labels = node.get("labels", [])
         props = node.get("props", {})
         if not isinstance(labels, list) or not all(isinstance(v, str) for v in labels):
-            raise GraphValidationError(f"nodes[{index}].labels must be an array of strings")
+            raise GraphValidationError(
+                f"nodes[{index}].labels must be an array of strings"
+            )
         if not isinstance(props, dict):
             raise GraphValidationError(f"nodes[{index}].props must be an object")
         ids.add(node_id)
@@ -68,7 +70,9 @@ def validate_graph(graph: Any) -> dict[str, Any]:
         props = rel.get("props", {})
         if not isinstance(props, dict):
             raise GraphValidationError(f"rels[{index}].props must be an object")
-        rels.append({"type": rel_type, "start": start, "end": end, "props": deepcopy(props)})
+        rels.append(
+            {"type": rel_type, "start": start, "end": end, "props": deepcopy(props)}
+        )
 
     # Preserve arbitrary metadata, but keep the graph payload itself stable.
     result = {"nodes": nodes, "rels": rels}
@@ -83,7 +87,9 @@ def canonical_json(value: Any) -> str:
 
 
 def graph_hash(graph: Any) -> str:
-    return hashlib.sha256(canonical_json(validate_graph(graph)).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        canonical_json(validate_graph(graph)).encode("utf-8")
+    ).hexdigest()
 
 
 def _changed_ids(changes: Iterable[Any] | None, incoming: dict[str, Any]) -> set[str]:
@@ -117,18 +123,47 @@ def _component_ids(graph: dict[str, Any], roots: set[str]) -> set[str]:
     # face_next truncates a cube during a delta merge and leaves an
     # apparently valid, but unrenderable, BODY.
     topology_types = {
-        "body_lump", "body_wire", "body_transform", "lump_shell", "lump_next", "lump_body",
-        "shell_next", "shell_face", "shell_wire", "shell_lump",
-        "wire_coedge", "wire_next", "wire_owner", "face_loop", "face_next", "face_shell", "loop_face",
-        "loop_start", "loop_next",
-        "coedge_next", "coedge_previous", "coedge_partner", "coedge_edge", "coedge_owner",
-        "edge_start", "edge_end", "edge_coedge", "vertex_edge",
-        "edge_vertex", "face_geometry", "edge_geometry", "vertex_geometry",
+        "body_lump",
+        "body_wire",
+        "body_transform",
+        "lump_shell",
+        "lump_next",
+        "lump_body",
+        "shell_next",
+        "shell_face",
+        "shell_wire",
+        "shell_lump",
+        "wire_coedge",
+        "wire_next",
+        "wire_owner",
+        "face_loop",
+        "face_next",
+        "face_shell",
+        "loop_face",
+        "loop_start",
+        "loop_next",
+        "coedge_next",
+        "coedge_previous",
+        "coedge_partner",
+        "coedge_edge",
+        "coedge_owner",
+        "edge_start",
+        "edge_end",
+        "edge_coedge",
+        "vertex_edge",
+        "edge_vertex",
+        "face_geometry",
+        "edge_geometry",
+        "vertex_geometry",
     }
     adjacency: dict[str, set[str]] = {}
     for rel in graph["rels"]:
         rel_type = rel["type"].lower()
-        if rel_type not in topology_types and not rel_type.endswith("_ptr") and rel_type not in {"body_face", "body_edge", "body_vertex"}:
+        if (
+            rel_type not in topology_types
+            and not rel_type.endswith("_ptr")
+            and rel_type not in {"body_face", "body_edge", "body_vertex"}
+        ):
             continue
         adjacency.setdefault(rel["start"], set()).add(rel["end"])
         adjacency.setdefault(rel["end"], set()).add(rel["start"])
@@ -153,10 +188,15 @@ def graph_component(graph: Any, roots: Iterable[str]) -> dict[str, Any]:
         {
             "nodes": [node for node in canonical["nodes"] if node["id"] in scope],
             "rels": [
-                rel for rel in canonical["rels"]
+                rel
+                for rel in canonical["rels"]
                 if rel["start"] in scope and rel["end"] in scope
             ],
-            **{key: deepcopy(value) for key, value in canonical.items() if key not in {"nodes", "rels"}},
+            **{
+                key: deepcopy(value)
+                for key, value in canonical.items()
+                if key not in {"nodes", "rels"}
+            },
         }
     )
 
@@ -176,7 +216,9 @@ def merge_graph(
     base = validate_graph(base_graph or {"nodes": [], "rels": []})
     incoming = validate_graph(incoming_graph or {"nodes": [], "rels": []})
     changed_roots = _changed_ids(changes, incoming)
-    removed_roots = {str(value).strip() for value in (removed_ids or []) if str(value).strip()}
+    removed_roots = {
+        str(value).strip() for value in (removed_ids or []) if str(value).strip()
+    }
     changed_roots -= removed_roots
 
     # Replace complete topology components.  This is the crucial difference
@@ -191,7 +233,8 @@ def merge_graph(
             nodes_by_id[node["id"]] = deepcopy(node)
 
     old_rels = [
-        rel for rel in base["rels"]
+        rel
+        for rel in base["rels"]
         if rel["start"] in nodes_by_id and rel["end"] in nodes_by_id
     ]
     new_rels = [
@@ -222,18 +265,32 @@ def graph_diff(old_graph: Any, new_graph: Any) -> dict[str, Any]:
     new = validate_graph(new_graph or {"nodes": [], "rels": []})
     old_nodes = {node["id"]: node for node in old["nodes"]}
     new_nodes = {node["id"]: node for node in new["nodes"]}
-    old_rels = {(r["type"], r["start"], r["end"], canonical_json(r["props"])): r for r in old["rels"]}
-    new_rels = {(r["type"], r["start"], r["end"], canonical_json(r["props"])): r for r in new["rels"]}
+    old_rels = {
+        (r["type"], r["start"], r["end"], canonical_json(r["props"])): r
+        for r in old["rels"]
+    }
+    new_rels = {
+        (r["type"], r["start"], r["end"], canonical_json(r["props"])): r
+        for r in new["rels"]
+    }
     return {
-        "added_nodes": [new_nodes[key] for key in sorted(new_nodes.keys() - old_nodes.keys())],
-        "removed_nodes": [old_nodes[key] for key in sorted(old_nodes.keys() - new_nodes.keys())],
+        "added_nodes": [
+            new_nodes[key] for key in sorted(new_nodes.keys() - old_nodes.keys())
+        ],
+        "removed_nodes": [
+            old_nodes[key] for key in sorted(old_nodes.keys() - new_nodes.keys())
+        ],
         "modified_nodes": [
             {"old": old_nodes[key], "new": new_nodes[key]}
             for key in sorted(old_nodes.keys() & new_nodes.keys())
             if old_nodes[key] != new_nodes[key]
         ],
-        "added_rels": [new_rels[key] for key in sorted(new_rels.keys() - old_rels.keys())],
-        "removed_rels": [old_rels[key] for key in sorted(old_rels.keys() - new_rels.keys())],
+        "added_rels": [
+            new_rels[key] for key in sorted(new_rels.keys() - old_rels.keys())
+        ],
+        "removed_rels": [
+            old_rels[key] for key in sorted(old_rels.keys() - new_rels.keys())
+        ],
     }
 
 
@@ -250,8 +307,16 @@ def conflicting_ids(base_graph: Any, local_graph: Any, remote_graph: Any) -> lis
     for node_id in sorted(all_ids):
         local_changed = local_nodes.get(node_id) != base_nodes.get(node_id)
         remote_changed = remote_nodes.get(node_id) != base_nodes.get(node_id)
-        if local_changed and remote_changed and local_nodes.get(node_id) != remote_nodes.get(node_id):
-            candidate = local_nodes.get(node_id) or remote_nodes.get(node_id) or base_nodes.get(node_id)
+        if (
+            local_changed
+            and remote_changed
+            and local_nodes.get(node_id) != remote_nodes.get(node_id)
+        ):
+            candidate = (
+                local_nodes.get(node_id)
+                or remote_nodes.get(node_id)
+                or base_nodes.get(node_id)
+            )
             # Child ACIS IDs can be regenerated by each serialization.  Only
             # stable roots (or explicitly UUID-tagged nodes) are conflict keys.
             labels = set(candidate.get("labels", [])) if candidate else set()

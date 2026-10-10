@@ -1008,8 +1008,13 @@ ENTITY_TREE_ITEM* Window::addEntity(ENTITY* ptrEntity, const std::string name, i
             bodySat);
     }
 
-    std::fprintf(stderr, "[Collab][DEBUG] <<< Window::addEntity EXIT OK\n");
-    return &entity_tree[eti.index];
+    std::fprintf(stderr, "[Collab][DEBUG] <<< Window::addEntity EXIT OK logical_index=%d vector_index=%zu\n",
+                 eti.index, entity_tree.size() - 1);
+    // `ENTITY_TREE_ITEM::index` is a monotonic logical identity.  It is not
+    // the current std::vector position after an entity has been deleted.
+    // Returning entity_tree[eti.index] therefore asserts as soon as a new
+    // entity receives an index larger than the compacted vector size.
+    return &entity_tree.back();
 }
 
 void Window::updateMeshData() {

@@ -1,6 +1,8 @@
 # DBCAD 一键部署和启动
 
-当前只保留一套部署入口：
+默认采用直接 JSON Mode1：启动 Neo4j 与 FastAPI，不需要 C++ Bridge。已有 SAT / Bridge 路径通过 `-LegacyBridgeMode` 保留。首次环境准备见 [新成员指南](../docs/GETTING_STARTED.md)。
+
+统一部署入口：
 
 ```powershell
 .\CAD_DB\deploy\start_dbcad_fullstack.cmd
@@ -11,6 +13,21 @@
 ```powershell
 .\CAD_DB\deploy\start_dbcad_two_clients.cmd
 ```
+
+构建和启动统一使用仓库根目录的 `x64/Debug/CAD_DB.exe` 或 `x64/Release/CAD_DB.exe`。Visual Studio 解决方案构建、直接 vcxproj 构建和 `scripts/build.ps1` 的输出目录一致，不再需要复制到 `CAD_DB/x64/`。启动器默认在这两个目录中选择最新构建；不使用旧目录或旧 dist 包作为源码构建的兜底。
+
+Qt 打包工具优先从所选构建的 `x64/obj/CAD_DB/<Configuration>/qt/qtvars.xml` 自动读取，使用与 exe 相同的 kit；也可显式传 `-WinDeployQtPath`。Debug/Release 根据 exe 的 PE 导入判断，不根据旁边残留的 DLL 猜测。找不到打包工具即停止，不能带着缺失 DLL 的包继续启动。每次源码打包清理包内旧二进制和 Qt 插件，按当前构建生成；保留模型、日志和数据库。启动前检查 x64 DLL 的传递依赖和 Qt 平台插件，不依赖维护者机器的 PATH。
+
+`neo4j-apoc` 是 `dbcad.local.env` 中的默认容器名称，`neo4j` 是数据库名称，镜像版本为配置中的 `neo4j:5.15`。它们与客户端代码是否重构无关。保持容器名是为了复用原数据库；更名不会升级代码，切勿为了更名重置数据。
+
+日常双客户端测试可以明确使用 Debug：
+
+```powershell
+.\scripts\build.ps1 -Configuration Debug
+.\CAD_DB\deploy\start_dbcad_two_clients.cmd -Configuration Debug
+```
+
+双击 cmd 时保持默认 `Auto`；指定 Release 使用 `-Configuration Release`。启动时自动把选中的 exe、运行时、最新后端模块、静态资源和部署辅助脚本同步到部署包，然后从包中启动两份客户端。日志的 `Source executable` 显示源构建，`Client executable` 显示自动复制后的部署文件。
 
 停止入口：
 
@@ -24,10 +41,10 @@
 .\CAD_DB\deploy\reset_dbcad_deployment.cmd
 ```
 
-重新生成 `dist` 并启动最新构建：
+重新生成 `dist` 并启动最新构建（保留数据库）：
 
 ```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -ResetNeo4jDockerData
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd
 ```
 
 ## 统一密码管理
@@ -146,7 +163,7 @@ dist\DBCAD-fullstack-package
 强制使用某个 exe：
 
 ```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -ClientExePath ..\x64\Release\CAD_DB.exe
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd -Configuration Release
 ```
 
 指定 `windeployqt`：
@@ -193,24 +210,26 @@ http://127.0.0.1:8000/docs
 | `-Neo4jHost` / `-Neo4jPort` | Neo4j Bolt 地址，默认来自 `dbcad.local.env` |
 | `-Neo4jUser` / `-Neo4jPassword` | Neo4j 认证信息。默认使用 `DBCAD_NEO4J_USER` 和统一的 `DBCAD_PASSWORD`。命令行参数优先级高于配置文件 |
 | `-ApiPassword` | FastAPI 访问密码。默认使用统一的 `DBCAD_PASSWORD`。不建议传空值；空 FastAPI 密码会关闭鉴权 |
-| `-ClientExePath` | 指定要部署的 `CAD_DB.exe`。不传时，脚本优先使用真实构建输出目录中的最新 exe |
+| `-Configuration` | Auto（默认）选择仓库根 x64 下最新构建；Debug/Release 只使用指定配置 |
+| `-ClientExePath` | 显式指定自定义构建路径，优先于 Configuration；相对路径以当前工作目录解析 |
 | `-WinDeployQtPath` | 指定 `windeployqt.exe`。不传时自动查找 `D:\Qt`、`C:\Qt`、PATH 和 qmake 所在目录 |
 | `-PackageRoot` | 指定部署包输出目录，默认 `dist\DBCAD-fullstack-package` |
 | `-PrepareOnly` | 只同步部署包和写配置，不启动 Docker、Bridge、FastAPI 或客户端 |
-| `-SkipClient` | 只启动 Docker、Bridge 和 FastAPI，不打开桌面客户端 |
+| `-SkipClient` | 启动服务，不打开客户端；默认不启动 Bridge |
+| `-LegacyBridgeMode` | 启用原有 C++ Bridge + SAT 存储路径 |
 | `-ClientCount` | 启动客户端实例数量，默认 `1`。传 `-ClientCount 2` 等价于使用 `start_dbcad_two_clients.cmd` |
 | `-SkipDependencySync` | 跳过 `uv sync`，适合依赖已经安装好的快速重启 |
 | `-KeepExistingServices` | 如果 8000/8100 已有健康服务，复用现有服务。默认要求先停止旧服务，避免误用旧版本 |
 
 ### 推荐流程
 
-1. 构建 `CAD_DB.exe`（`msbuild CAD_DB.sln /p:Configuration=Release /p:Platform=x64`）。
+1. 按依赖文档准备 SDK，运行 `scripts/build.ps1 -Configuration Release` 构建并暂存运行时。
 2. 执行一次启动器，让它创建或迁移 `CAD_DB\deploy\dbcad.local.env`。
 3. 确认配置里只有一个 `DBCAD_PASSWORD`，不要再维护 `DBCAD_NEO4J_PASSWORD` 或 `DBCAD_API_PASSWORD`。
-4. 重建本地 Neo4j 数据并启动：
+4. 正常启动（无需重置）：
 
 ```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -ResetNeo4jDockerData
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd
 ```
 
 5. 两台客户端打开同一个 FastAPI 项目，验证实时协作。

@@ -11,6 +11,9 @@ from neo4j import Driver, GraphDatabase
 
 from .config import settings
 
+# Both persistence adapters return the same DTO consumed by crud.deserialize_version.
+from .storage_bridge import VersionRecord
+
 
 @dataclass
 class ProjectRecord:
@@ -20,20 +23,12 @@ class ProjectRecord:
     updated_at: datetime
 
 
-@dataclass
-class VersionRecord:
-    id: int
-    project_id: str
-    version: int
-    author: str
-    content: dict[str, Any]
-    created_at: datetime
-
-
 class Neo4jStore:
     def __init__(self) -> None:
         if not settings.neo4j_uri:
-            raise RuntimeError("CAD_DB_NEO4J_URI is required when storage_backend=neo4j")
+            raise RuntimeError(
+                "CAD_DB_NEO4J_URI is required when storage_backend=neo4j"
+            )
 
         self._driver: Driver = GraphDatabase.driver(
             settings.neo4j_uri,
@@ -46,8 +41,12 @@ class Neo4jStore:
 
     def initialize(self) -> None:
         with self._driver.session(database=self._database) as session:
-            session.run("CREATE CONSTRAINT project_id_unique IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE")
-            session.run("CREATE CONSTRAINT project_name_unique IF NOT EXISTS FOR (p:Project) REQUIRE p.name IS UNIQUE")
+            session.run(
+                "CREATE CONSTRAINT project_id_unique IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE"
+            )
+            session.run(
+                "CREATE CONSTRAINT project_name_unique IF NOT EXISTS FOR (p:Project) REQUIRE p.name IS UNIQUE"
+            )
             session.run(
                 "CREATE CONSTRAINT model_version_unique IF NOT EXISTS FOR (m:ModelVersion) REQUIRE (m.project_id, m.version) IS UNIQUE"
             )
@@ -92,7 +91,9 @@ class Neo4jStore:
             project_id=str(props.get("project_id", "")),
             version=int(props.get("version", 0)),
             author=str(props.get("author", "")),
-            content=self._parse_content(props.get("content_json", props.get("content"))),
+            content=self._parse_content(
+                props.get("content_json", props.get("content"))
+            ),
             created_at=self._parse_time_or_now(props.get("created_at")),
         )
 
@@ -117,7 +118,10 @@ class Neo4jStore:
             ).single()
 
         if record is None:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create project")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create project",
+            )
 
         return self._project_from_node(record["project"])
 
@@ -169,7 +173,9 @@ class Neo4jStore:
                 token=str(uuid4()),
             ).single()
             if exists_record is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+                )
 
             latest_record = tx.run(
                 """
@@ -219,6 +225,18 @@ class Neo4jStore:
         with self._driver.session(database=self._database) as session:
             return session.execute_write(write)
 
+    def record_version_audit(
+        self, project_id: str, version: int, audit: dict[str, Any]
+    ) -> None:
+        with self._driver.session(database=self._database) as session:
+            session.run(
+                "MATCH (m:ModelVersion {project_id: $project_id, version: $version}) "
+                "SET m.audit_json = $audit_json",
+                project_id=project_id,
+                version=version,
+                audit_json=json.dumps(audit, ensure_ascii=False, separators=(",", ":")),
+            ).consume()
+
     def get_latest_version_or_none(self, project_id: str) -> VersionRecord | None:
         with self._driver.session(database=self._database) as session:
             record = session.run(
@@ -236,7 +254,9 @@ class Neo4jStore:
 
         return self._version_from_node(record["version"])
 
-    def get_version_or_none(self, project_id: str, version: int) -> VersionRecord | None:
+    def get_version_or_none(
+        self, project_id: str, version: int
+    ) -> VersionRecord | None:
         with self._driver.session(database=self._database) as session:
             record = session.run(
                 """
@@ -253,7 +273,9 @@ class Neo4jStore:
 
         return self._version_from_node(record["version"])
 
-    def list_versions(self, project_id: str, limit: int, offset: int) -> list[VersionRecord]:
+    def list_versions(
+        self, project_id: str, limit: int, offset: int
+    ) -> list[VersionRecord]:
         with self._driver.session(database=self._database) as session:
             result = session.run(
                 """

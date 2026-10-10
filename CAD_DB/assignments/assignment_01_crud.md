@@ -14,25 +14,25 @@
 
 只允许修改这个文件：
 
-- [backend/app/crud.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/crud.py:19>)
+- [backend/app/crud.py](../backend/app/crud.py)
 
 只需要完成这 3 个函数：
 
-1. [create_project](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/crud.py:19>)
-2. [create_model_version](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/crud.py:40>)
-3. [deserialize_version](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/crud.py:71>)
+1. [create_project](../backend/app/crud.py)
+2. [create_model_version](../backend/app/crud.py)
+3. [deserialize_version](../backend/app/crud.py)
 
 ## 你需要先看什么
 
 先按下面顺序阅读：
 
-1. [backend/app/schemas.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/schemas.py:1>)
+1. [backend/app/schemas.py](../backend/app/schemas.py)
    看清楚 `ProjectCreate`、`ModelVersionCreate`、`ModelVersionRead` 的字段结构。
-2. [backend/app/storage_bridge.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/storage_bridge.py:1>)
+2. [backend/app/storage_bridge.py](../backend/app/storage_bridge.py)
    只需要知道 `VersionRecord` 和 `StorageBridgeClient` 返回什么。
-3. [backend/app/crud.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/crud.py:1>)
+3. [backend/app/crud.py](../backend/app/crud.py)
    这是你真正要改的地方。
-4. [backend/tests/test_assignment_01_crud_logic.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/tests/test_assignment_01_crud_logic.py:1>)
+4. [backend/tests/test_assignment_01_crud_logic.py](../backend/tests/test_assignment_01_crud_logic.py)
    这是判题标准。
 
 ## 具体要求

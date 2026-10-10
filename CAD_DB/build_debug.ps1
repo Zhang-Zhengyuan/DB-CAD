@@ -1,5 +1,2 @@
-$env:Path += ";C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current\Bin\amd64"
-$projectPath = Join-Path $PSScriptRoot "CAD_DB.vcxproj"
-
-Write-Host "Starting Debug Build..." -ForegroundColor Cyan
-msbuild $projectPath /p:Configuration=Debug /p:Platform=x64
+﻿param([string]$QtRoot = $env:DBCAD_QT_ROOT, [string]$QtMsBuildPath = $env:QtMsBuild)
+& (Join-Path $PSScriptRoot "..\scripts\build.ps1") -Configuration Debug -QtRoot $QtRoot -QtMsBuildPath $QtMsBuildPath

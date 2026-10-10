@@ -18,23 +18,23 @@
 
 只允许修改这个文件：
 
-- [backend/app/sync.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/sync.py:19>)
+- [backend/app/sync.py](../backend/app/sync.py)
 
 只需要完成这 3 个函数：
 
-1. [disconnect](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/sync.py:42>)
-2. [list_members](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/sync.py:68>)
-3. [broadcast](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/sync.py:81>)
+1. [disconnect](../backend/app/sync.py)
+2. [list_members](../backend/app/sync.py)
+3. [broadcast](../backend/app/sync.py)
 
 ## 你需要先看什么
 
 先按下面顺序阅读：
 
-1. [backend/app/sync.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/sync.py:1>)
+1. [backend/app/sync.py](../backend/app/sync.py)
    重点看 `ProjectSyncManager.__init__` 和 `connect`。
-2. [backend/app/main.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/main.py:309>)
+2. [backend/app/collaboration/protocol.py](../backend/app/collaboration/protocol.py)
    看这些函数最终怎么被调用，但不用修改。
-3. [backend/tests/test_assignment_02_sync_manager.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/tests/test_assignment_02_sync_manager.py:1>)
+3. [backend/tests/test_assignment_02_sync_manager.py](../backend/tests/test_assignment_02_sync_manager.py)
    这是判题标准。
 
 ## 数据结构说明

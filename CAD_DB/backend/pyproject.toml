@@ -19,3 +19,5 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+markers = ["integration: requires running FastAPI and storage services"]

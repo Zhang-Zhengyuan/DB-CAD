@@ -16,23 +16,19 @@
 
 ## 你只需要改哪里
 
-只允许修改这个文件：
+只修改下列三个函数所在的文件：
 
-- [backend/app/main.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/main.py:120>)
-
-只需要完成这 3 个函数：
-
-1. [_model_saved_event](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/main.py:120>)
-2. [_send_submit_rejected](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/main.py:218>)
-3. [_handle_project_ws_message](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/main.py:309>)
+1. `backend/app/services/events.py` 的 `_model_saved_event`
+2. `backend/app/collaboration/submissions.py` 的 `_send_submit_rejected`
+3. `backend/app/collaboration/protocol.py` 的 `_handle_project_ws_message`
 
 ## 你需要先看什么
 
 先按下面顺序阅读：
 
-1. [backend/app/main.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/main.py:120>)
-2. [backend/app/crud.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/app/crud.py:50>)
-3. [backend/tests/test_assignment_03_ws_protocol.py](<C:/Users/17126/source/repos/cad-db-store-develop/CAD_DB/backend/tests/test_assignment_03_ws_protocol.py:1>)
+1. [backend/app/collaboration/protocol.py](../backend/app/collaboration/protocol.py)
+2. [backend/app/crud.py](../backend/app/crud.py)
+3. [backend/tests/test_assignment_03_ws_protocol.py](../backend/tests/test_assignment_03_ws_protocol.py)
 
 ## 具体要求
 
@@ -143,3 +139,6 @@ uv run pytest tests/test_assignment_03_ws_protocol.py
 - 协议字段是否完整
 - 错误分支是否覆盖到位
 - 是否能正确区分字符串命令和 JSON 命令
+
+
+配套的 `assignment-03-student.patch` 已按上述三个模块更新；请使用当前仓库中的补丁。

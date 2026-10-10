@@ -7,14 +7,14 @@ $ErrorActionPreference = "Stop"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $launcher = Join-Path $scriptRoot "start_dbcad_fullstack.ps1"
-$powershellExe = Join-Path $PSHOME "powershell.exe"
+$powershellExe = (Get-Process -Id $PID).Path
 
 if (!(Test-Path -LiteralPath $launcher)) {
     throw "Launcher not found: $launcher"
 }
 
 if (!(Test-Path -LiteralPath $powershellExe)) {
-    throw "powershell.exe not found: $powershellExe"
+    throw "PowerShell host not found: $powershellExe"
 }
 
 & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $launcher -ClientCount 2 @RemainingArgs

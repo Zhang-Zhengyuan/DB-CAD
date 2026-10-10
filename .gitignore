@@ -83,3 +83,12 @@ neo4j-plugins/
 
 # Third-party dependencies vendored under _deps/ — never commit
 _deps/
+
+# Developer-local artifacts and runtime state
+CAD_DB/log/
+.chart-data-*/
+.codex-finalizer/
+artifacts/
+build.local.props
+.coverage
+**/.coverage

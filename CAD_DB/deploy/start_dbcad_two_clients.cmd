@@ -1,4 +1,4 @@
 @echo off
 setlocal
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start_dbcad_two_clients.ps1" %*
-endlocal
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start_dbcad_fullstack.ps1" -ClientCount 2 %*
+endlocal & exit /b %ERRORLEVEL%

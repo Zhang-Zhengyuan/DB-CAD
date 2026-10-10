@@ -5,7 +5,11 @@ import pytest
 from fastapi import HTTPException, status
 
 from app import crud
-from app.main import _handle_project_ws_message, _model_saved_event, _send_submit_rejected
+from app.main import (
+    _handle_project_ws_message,
+    _model_saved_event,
+    _send_submit_rejected,
+)
 from app.storage_bridge import VersionRecord
 from tests.assignment_support import install_memory_storage
 
@@ -49,7 +53,9 @@ def test_model_saved_event_includes_optional_fields() -> None:
     }
 
 
-def test_send_submit_rejected_includes_latest_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_send_submit_rejected_includes_latest_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     install_memory_storage(monkeypatch)
     latest = VersionRecord(
         id=3,
@@ -87,12 +93,19 @@ def test_send_submit_rejected_includes_latest_metadata(monkeypatch: pytest.Monke
     ]
 
 
-def test_handle_project_ws_message_routes_protocol_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_handle_project_ws_message_routes_protocol_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
         calls: list[tuple[str, str]] = []
         socket = FakeJsonWebSocket()
 
-        async def fake_send_latest(project_id: str, websocket: FakeJsonWebSocket, trigger: str, stream: str = "mode0") -> None:
+        async def fake_send_latest(
+            project_id: str,
+            websocket: FakeJsonWebSocket,
+            trigger: str,
+            stream: str = "mode0",
+        ) -> None:
             assert stream == "mode0"
             calls.append((project_id, trigger))
 
@@ -103,16 +116,34 @@ def test_handle_project_ws_message_routes_protocol_messages(monkeypatch: pytest.
             author: str,
             data: dict,
         ) -> None:
+            assert (
+                data["_raw_request_json"]
+                == '{"type":"submit_model","content":{"sat":"v1"}}'
+            )
             calls.append((project_id, data["type"]))
 
-        monkeypatch.setattr("app.main._send_latest_model_saved_event", fake_send_latest)
-        monkeypatch.setattr("app.main._handle_submit_model_message", fake_handle_submit)
+        monkeypatch.setattr(
+            "app.collaboration.protocol._send_latest_model_saved_event",
+            fake_send_latest,
+        )
+        monkeypatch.setattr(
+            "app.collaboration.protocol._handle_submit_model_message",
+            fake_handle_submit,
+        )
 
         await _handle_project_ws_message(socket, "project-a", "c1", "alice", "sync_now")
         await _handle_project_ws_message(socket, "project-a", "c1", "alice", "ping")
-        await _handle_project_ws_message(socket, "project-a", "c1", "alice", '{"type":"submit_model","content":{"sat":"v1"}}')
+        await _handle_project_ws_message(
+            socket,
+            "project-a",
+            "c1",
+            "alice",
+            '{"type":"submit_model","content":{"sat":"v1"}}',
+        )
         await _handle_project_ws_message(socket, "project-a", "c1", "alice", "not-json")
-        await _handle_project_ws_message(socket, "project-a", "c1", "alice", '{"type":"unknown"}')
+        await _handle_project_ws_message(
+            socket, "project-a", "c1", "alice", '{"type":"unknown"}'
+        )
 
         assert ("project-a", "sync_now") in calls
         assert ("project-a", "submit_model") in calls
@@ -120,16 +151,23 @@ def test_handle_project_ws_message_routes_protocol_messages(monkeypatch: pytest.
         assert socket.messages[1]["type"] == "error"
         assert "Unsupported WebSocket message" in socket.messages[1]["detail"]
         assert socket.messages[2]["type"] == "error"
-        assert "Unsupported WebSocket message type: unknown" == socket.messages[2]["detail"]
+        assert (
+            "Unsupported WebSocket message type: unknown"
+            == socket.messages[2]["detail"]
+        )
 
     asyncio.run(scenario())
 
 
-def test_send_submit_rejected_omits_latest_when_project_has_no_versions(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_send_submit_rejected_omits_latest_when_project_has_no_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     install_memory_storage(monkeypatch)
 
     def raise_not_found(project_id: str):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No model version found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No model version found"
+        )
 
     monkeypatch.setattr(crud, "get_latest_version_or_404", raise_not_found)
     socket = FakeJsonWebSocket()

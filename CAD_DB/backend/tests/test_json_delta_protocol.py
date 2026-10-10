@@ -2,15 +2,25 @@
 
 from datetime import UTC, datetime
 
-from app import main
+from app.api import json_delta as main
 from app.json_graph_store import JsonGraphVersion
 
 
-def _version(number: int, graph: dict, changes: list, removed: list) -> JsonGraphVersion:
+def _version(
+    number: int, graph: dict, changes: list, removed: list
+) -> JsonGraphVersion:
     return JsonGraphVersion(
-        project_id="p", version=number, author="tester", created_at=datetime.now(UTC),
-        content={"entity_graph": graph, "changes": changes, "removed_ids": removed,
-                 "schema": "dbcad.entity_graph.v1", "graph_hash": f"hash-{number}"},
+        project_id="p",
+        version=number,
+        author="tester",
+        created_at=datetime.now(UTC),
+        content={
+            "entity_graph": graph,
+            "changes": changes,
+            "removed_ids": removed,
+            "schema": "dbcad.entity_graph.v1",
+            "graph_hash": f"hash-{number}",
+        },
     )
 
 
@@ -45,7 +55,11 @@ def test_initial_pull_is_complete_and_readded_body_is_not_removed(monkeypatch):
 
     initial = main.get_json_delta("p", base_version=0, _=None)
     assert not initial["delta"]
-    assert {node["id"] for node in initial["entity_graph"]["nodes"]} == {"b1", "f1", "b2"}
+    assert {node["id"] for node in initial["entity_graph"]["nodes"]} == {
+        "b1",
+        "f1",
+        "b2",
+    }
     assert initial["removed_ids"] == []
     assert initial["entity_graph"]["serializer_build"] == "test-v1"
 

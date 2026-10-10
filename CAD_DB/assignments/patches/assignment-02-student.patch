@@ -1,8 +1,9 @@
-diff --git a/backend/app/sync.py b/backend/app/sync.py
 --- a/backend/app/sync.py
 +++ b/backend/app/sync.py
-@@ -42,61 +42,14 @@ class ProjectSyncManager:
-     async def disconnect(self, project_id: str, websocket: WebSocket) -> dict[str, Any] | None:
+@@ -51,43 +51,10 @@
+     async def disconnect(
+         self, project_id: str, websocket: WebSocket
+     ) -> dict[str, Any] | None:
 -        async with self._lock:
 -            clients = self._connections.get(project_id)
 -            if not clients:
@@ -27,8 +28,7 @@ diff --git a/backend/app/sync.py b/backend/app/sync.py
 -                "client_id": disconnected_client_id,
 -                "author": disconnected_author or "unknown",
 -            }
-+        # TODO(assignment-02): remove a websocket from the project member table.
-+        raise NotImplementedError("assignment-02: disconnect is not implemented")
++        raise NotImplementedError("TODO: implement disconnect")
  
      async def list_members(self, project_id: str) -> list[dict[str, Any]]:
 -        async with self._lock:
@@ -42,10 +42,14 @@ diff --git a/backend/app/sync.py b/backend/app/sync.py
 -            }
 -            for client in clients
 -        ]
-+        # TODO(assignment-02): return a serializable member snapshot.
-+        raise NotImplementedError("assignment-02: list_members is not implemented")
++        raise NotImplementedError("TODO: implement list_members")
  
-     async def broadcast(self, project_id: str, event: dict[str, Any], exclude_client_id: str | None = None) -> None:
+     async def broadcast(
+         self,
+@@ -96,26 +63,7 @@
+         exclude_client_id: str | None = None,
+         stream: str | None = None,
+     ) -> None:
 -        message = json.dumps(event, ensure_ascii=False)
 -        async with self._lock:
 -            clients = list(self._connections.get(project_id, {}).values())
@@ -55,6 +59,8 @@ diff --git a/backend/app/sync.py b/backend/app/sync.py
 -
 -        disconnected: list[WebSocket] = []
 -        for client in clients:
+-            if stream is not None and client.stream != stream:
+-                continue
 -            if exclude_client_id and client.client_id == exclude_client_id:
 -                continue
 -            try:
@@ -64,8 +70,7 @@ diff --git a/backend/app/sync.py b/backend/app/sync.py
 -
 -        for socket in disconnected:
 -            await self.disconnect(project_id, socket)
-+        # TODO(assignment-02): broadcast JSON text to active sockets and clean failed ones.
-+        raise NotImplementedError("assignment-02: broadcast is not implemented")
++        raise NotImplementedError("TODO: implement broadcast")
  
  
  sync_manager = ProjectSyncManager()

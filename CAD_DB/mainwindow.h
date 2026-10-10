@@ -198,6 +198,10 @@ private:
     void reconnectFastAPISync();
     void disconnectFastAPISync();
     void handleFastAPISyncMessage(const QString& message);
+    void handlePresenceAndAckEvent(const QJsonObject& root, const QString& messageType);
+    void handleDeltaSyncEvent(const QJsonObject& root, const QString& messageType);
+    void handleEntityGraphSyncEvent(const QJsonObject& root, const QString& messageType);
+    void handleModelSyncEvent(const QJsonObject& root, const QString& messageType);
     void handleFastAPISyncMessageImpl(const QString& message);
     void requestFastAPISyncNow();
     void updateFastAPICollaboratorsStatus();

@@ -43,6 +43,7 @@ class SaveResult(BaseModel):
 # Entity Graph schemas — for neo4j entity graph storage (Phase 2+)
 # ---------------------------------------------------------------------------
 
+
 class EntityNodeSchema(BaseModel):
     id: str
     labels: list[str] = Field(default_factory=list)
@@ -69,6 +70,7 @@ class EntityVersionCreate(BaseModel):
 
 class JsonDeltaRequest(BaseModel):
     """Client serialized graph delta for the bridge-free Mode1 path."""
+
     author: str = Field(min_length=1, max_length=120)
     entity_graph: dict[str, Any]
     changes: list[dict[str, Any] | str] = Field(default_factory=list)

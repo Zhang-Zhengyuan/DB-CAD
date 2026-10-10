@@ -7,7 +7,7 @@
 每份作业都满足：
 
 - 只需要改 `3` 个函数
-- 只涉及 `1` 个 Python 文件
+- 前两份各涉及一个文件；第三份按事件、提交、协议职责涉及三个文件
 - 可以独立评测
 - 不需要碰 Qt / C++ / Neo4j / Bridge
 
@@ -32,7 +32,7 @@ git apply assignments\patches\assignment-03-student.patch
 
 ```powershell
 cd backend
-uv run pytest tests/test_assignment_01_crud_logic.py
+uv run --extra dev --frozen pytest tests/test_assignment_01_crud_logic.py
 ```
 
 ## 三份作业

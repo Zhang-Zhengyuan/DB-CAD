@@ -21,7 +21,9 @@ class Settings(BaseSettings):
             raise ValueError("Only neo4j storage backend is supported")
         return "neo4j"
 
-    model_config = SettingsConfigDict(env_prefix="CAD_DB_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="CAD_DB_", env_file=".env", extra="ignore"
+    )
 
 
 settings = Settings()
