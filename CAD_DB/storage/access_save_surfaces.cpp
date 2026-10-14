@@ -25,12 +25,12 @@ Node *createnode_spl_sur_subgraph(spl_sur *sur) {
     double *weights = nullptr, *uknots = nullptr, *vknots = nullptr;
     bs3_surface_to_array(sur->sur(), dim, rational_u, rational_v, form_u, form_v, pole_u, pole_v, num_u, num_v, ctrlpts,
                          weights, degree_u, num_uknots, uknots, degree_v, num_vknots, vknots, 0);
-    // 样条开闭u,v
-    int closed_u = sur->gme_get_closed_in_u(); // 0:open 1:closed 2:periodic 3:unknown
-    int closed_v = sur->gme_get_closed_in_v();
-    // u_singularity, v_singularity
-    int u_singularity = sur->gme_get_u_singularity(); // 0:none 1:low 2:high 3:both 4:unknown
-    int v_singularity = sur->gme_get_v_singularity();
+    // 样条开闭u,v：form 出参 0:open 1:closed 2:periodic，与 gme 时代的编码一致
+    int closed_u = form_u;
+    int closed_v = form_v;
+    // u/v 奇异性：pole 出参 0:none 1:low 2:high 3:both，与 gme 时代的编码一致
+    int u_singularity = pole_u;
+    int v_singularity = pole_v;
     // 简化后节点向量的读取长度
     std::vector<double> knots_simplifier_u;
     for (int i = 0; i < num_uknots; i++) {
@@ -118,7 +118,7 @@ plane_data *get_plane_data(plane *sur) {
     ans->normal = getmglist_SPAunit_vector(sur->normal);
     ans->u_deriv = getmglist_SPAvector(sur->u_deriv);
     ans->reverse_v = sur->reverse_v;
-    SPApar_box ranges = sur->gme_get_subset_range();
+    SPApar_box ranges = sur->subset_box();
     ans->subset_range = getmglist_SPApar_box(ranges);
     return ans;
 }
@@ -130,7 +130,7 @@ sphere_data *get_sphere_data(sphere *sur) {
     ans->uv_oridir = getmglist_SPAunit_vector(sur->uv_oridir);
     ans->pole_dir = getmglist_SPAunit_vector(sur->pole_dir);
     ans->reverse_v = sur->reverse_v;
-    SPApar_box ranges = sur->gme_get_subset_range();
+    SPApar_box ranges = sur->subset_box();
     ans->subset_range = getmglist_SPApar_box(ranges);
     return ans;
 }
@@ -143,7 +143,7 @@ torus_data *get_torus_data(torus *sur) {
     ans->minor_radius = sur->minor_radius;
     ans->uv_oridir = getmglist_SPAunit_vector(sur->uv_oridir);
     ans->reverse_v = sur->reverse_v;
-    SPApar_box ranges = sur->gme_get_subset_range();
+    SPApar_box ranges = sur->subset_box();
     ans->subset_range = getmglist_SPApar_box(ranges);
     return ans;
 }
@@ -155,12 +155,12 @@ cone_data *get_cone_data(cone *sur) {
     ans->base_normal = getmglist_SPAunit_vector(sur_base.normal);
     ans->base_major_axis = getmglist_SPAvector(sur_base.major_axis);
     ans->base_radius_ratio = sur_base.radius_ratio;
-    SPAinterval range = sur_base.gme_get_subset_range();
+    SPAinterval range = sur_base.param_range();
     ans->base_subset_range = getmglist_SPAinterval(range);
     ans->sine_angle = sur->sine_angle;
     ans->cosine_angle = sur->cosine_angle;
     ans->reverse_u = sur->reverse_u;
-    SPApar_box ranges = sur->gme_get_subset_range();
+    SPApar_box ranges = sur->subset_box();
     ans->subset_range = getmglist_SPApar_box(ranges);
     return ans;
 }

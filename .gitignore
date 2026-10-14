@@ -92,3 +92,6 @@ artifacts/
 build.local.props
 .coverage
 **/.coverage
+
+# Spatial 商业许可密钥 —— 不入库（与 _deps 同级的授权材料）
+CAD_DB/spatial_license.h

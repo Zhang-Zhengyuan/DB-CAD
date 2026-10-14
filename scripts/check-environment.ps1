@@ -4,7 +4,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $DepsRoot) { $DepsRoot = Join-Path $repoRoot '_deps' }
 if (-not $PostgresInclude) { $PostgresInclude = Join-Path $DepsRoot 'postgresql\include' }
 $missing = @()
-foreach ($relative in @('acis\include\api.hxx', 'acis\lib\SpaACIS.lib', 'acis\lib\SpaACISd.lib', 'acis\bin\SpaACIS.dll', 'acis\bin\SpaACISd.dll', 'glaze-5.5.2\include\glaze\glaze.hpp', 'glfw\lib\glfw3_64.lib', 'mgclient-1.4.2\mgclient.h', 'openssl\lib\libssl64MD.lib', 'openssl\lib\libcrypto64MD.lib', 'libpqxx-7.10.1\lib\libpq.lib')) {
+foreach ($relative in @('acis\include\api.hxx', 'acis\lib\SPAAcisDs.lib', 'acis\lib\SPAAcisDsd.lib', 'acis\bin\SPAAcisDs.dll', 'acis\bin\SPAAcisDsd.dll', 'glaze-5.5.2\include\glaze\glaze.hpp', 'glfw\lib\glfw3_64.lib', 'mgclient-1.4.2\mgclient.h', 'openssl\lib\libssl64MD.lib', 'openssl\lib\libcrypto64MD.lib', 'libpqxx-7.10.1\lib\libpq.lib')) {
     if (-not (Test-Path -LiteralPath (Join-Path $DepsRoot $relative))) { $missing += "Dependency: $relative" }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $PostgresInclude 'libpq-fe.h'))) { $missing += 'libpq-fe.h: set DBCAD_POSTGRES_INCLUDE or supply _deps/postgresql/include' }

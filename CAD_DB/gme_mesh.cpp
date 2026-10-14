@@ -47,7 +47,7 @@ static void get_triangles_from_faceted_face(class FACE* face, std::vector<float>
         }
         if (polygon.size() < 3) return;
         SPAtransf tr = get_owner_transf(face);
-        SPAunit_vector n = ((PLANE*)face->geometry())->gme_get_def().normal;
+        SPAunit_vector n = static_cast<const plane &>(face->geometry()->equation()).normal;
         coords.reserve(polygon.size() * 3);
         normalCoords.reserve(polygon.size() * 3);
         for (const SPAposition& raw : polygon) {

@@ -96,10 +96,10 @@ struct bs2_curve_data {
 bs2_curve_data get_bs2_curve_data(bs2_curve pcur);
 
 Node *createnode_int_cur_subgraph(std::unordered_map<void *, Node *> &ptr2node,
-                                  std::vector<Relationship *> &relationship_list, int_cur *cur);
+                                  std::vector<Relationship *> &relationship_list, intcurve *icur);
 
 Node *createnode_par_cur_subgraph(std::unordered_map<void *, Node *> &ptr2node,
-                                  std::vector<Relationship *> &relationship_list, par_cur *cur);
+                                  std::vector<Relationship *> &relationship_list, pcurve *pcrv);
 
 } // namespace Save
 } // namespace AccessUtils

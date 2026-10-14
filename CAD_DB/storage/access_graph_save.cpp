@@ -144,7 +144,7 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
             } break;
             case PCURVE_ID: {
                 PCURVE *ptr = (PCURVE *)entity_ptr;
-                int def_type = ((PCURVE *)ptr)->gme_get_def_type();
+                int def_type = ((PCURVE *)ptr)->index();
                 if (def_type != 0) {
                     ITERATE_MACRO_WITH_PARAM2(_API_PUSH_PTR_NEO4J_SUBGRAPH, ptr, pcurve, ref_curve);
                     SPApar_vec offset = ((PCURVE *)ptr)->offset();
@@ -156,18 +156,18 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                     ptrnode->properties['c'] = mg_value_make_float(double(offset.du));
                     ptrnode->properties['d'] = mg_value_make_float(double(offset.dv));
                 } else {
-                    pcurve pcur = ((PCURVE *)ptr)->gme_get_def();
+                    const pcurve &pcur = ((PCURVE *)ptr)->def_pcur();
 
                     int rev = pcur.reversed();
                     SPApar_vec offset = pcur.offset();
-                    par_cur *cur = pcur.gme_get_fit();
-                    if (cur != nullptr) {
-                        if (ptr2node.find(cur) == ptr2node.end()) {
-                            ptr2node[cur] =
-                                AccessUtils::Save::createnode_par_cur_subgraph(ptr2node, relationship_list, cur);
+                    if (pcur.cur() != nullptr) {
+                        pcurve *cur_heap = ACIS_NEW pcurve(pcur);
+                        if (ptr2node.find(cur_heap) == ptr2node.end()) {
+                            ptr2node[cur_heap] =
+                                AccessUtils::Save::createnode_par_cur_subgraph(ptr2node, relationship_list, cur_heap);
                         }
                         Node *a = ptr2node.at(ptr);
-                        Node *b = ptr2node.at(cur);
+                        Node *b = ptr2node.at(cur_heap);
                         Relationship *r = new Relationship(a, b);
                         r->label = "pcurve_fit_ptr";
                         r->properties['a'] = mg_value_make_string("pcurve_fit_ptr");
@@ -197,13 +197,13 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                 switch (ptr->identity(2)) {
                 case STRAIGHT_ID: {
                     STRAIGHT *ptr = (STRAIGHT *)entity_ptr;
-                    straight gem = ((STRAIGHT *)ptr)->gme_get_def();
-                    SPAposition root_point = gem.root_point;
-                    SPAunit_vector direction = gem.direction;
+                    const straight &gem = static_cast<const straight &>(ptr->equation());
+                    SPAposition root_point = ptr->root_point();
+                    SPAunit_vector direction = ptr->direction();
                     direction.set_x(direction.x() * gem.param_scale);
                     direction.set_y(direction.y() * gem.param_scale);
                     direction.set_z(direction.z() * gem.param_scale);
-                    SPAinterval range = gem.gme_get_subset_range();
+                    SPAinterval range = gem.param_range();
                     Node *ptrnode = ptr2node.at(ptr);
                     ptrnode->labels.clear();
                     ptrnode->labels.push_back("straight-curve");
@@ -215,11 +215,11 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                 } break;
                 case ELLIPSE_ID: {
                     ELLIPSE *ptr = (ELLIPSE *)entity_ptr;
-                    ellipse gem = ((ELLIPSE *)ptr)->gme_get_def();
+                    const ellipse &gem = static_cast<const ellipse &>(ptr->equation());
                     SPAposition centre = gem.centre;
                     SPAunit_vector normal = gem.normal;
                     SPAvector major_axis = gem.major_axis;
-                    SPAinterval range = gem.gme_get_subset_range();
+                    SPAinterval range = gem.param_range();
                     Node *ptrnode = ptr2node.at(ptr);
                     ptrnode->labels.clear();
                     ptrnode->labels.push_back("ellipse-curve");
@@ -232,12 +232,12 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                 } break;
                 case HELIX_ID: {
                     HELIX *ptr = (HELIX *)entity_ptr;
-                    helix gem = ((HELIX *)ptr)->gme_get_def();
+                    const helix &gem = static_cast<const helix &>(ptr->equation());
                     SPAposition axis_root = gem.axis_root();
                     SPAunit_vector axis_dir = gem.axis_dir();
                     SPAvector start_disp = gem.start_disp();
                     SPAinterval helix_range = gem.helix_range();
-                    SPAinterval range = gem.gme_get_subset_range();
+                    SPAinterval range = gem.param_range();
                     Node *ptrnode = ptr2node.at(ptr);
                     ptrnode->labels.clear();
                     ptrnode->labels.push_back("helix-curve");
@@ -257,22 +257,21 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                 } break;
                 case INTCURVE_ID: {
                     INTCURVE *ptr = (INTCURVE *)entity_ptr;
-                    intcurve gem = ((INTCURVE *)ptr)->gme_get_def();
-                    SPAinterval range = gem.gme_get_subset_range();
-                    int_cur *cur = gem.gme_get_fit();
-                    gem.cur();
-                    if (cur != nullptr) {
-                        if (ptr2node.find(cur) == ptr2node.end()) {
-                            ptr2node[cur] =
-                                AccessUtils::Save::createnode_int_cur_subgraph(ptr2node, relationship_list, cur);
-                        }
-                        Node *a = ptr2node.at(ptr);
-                        Node *b = ptr2node.at(cur);
-                        Relationship *r = new Relationship(a, b);
-                        r->label = "intcurve-curve_fit_ptr";
-                        r->properties['a'] = mg_value_make_string("intcurve-curve_fit_ptr");
-                        relationship_list.push_back(r);
+                    const intcurve &gem = static_cast<const intcurve &>(ptr->equation());
+                    SPAinterval range = gem.param_range();
+                    // INTCURVE 的 fit（int_cur）属于方程内部数据，保存子图时
+                    // 经由 intcurve 公有读取器重建；这里为子图节点分配稳定的堆地址。
+                    intcurve *cur_heap = ACIS_NEW intcurve(gem);
+                    if (ptr2node.find(cur_heap) == ptr2node.end()) {
+                        ptr2node[cur_heap] =
+                            AccessUtils::Save::createnode_int_cur_subgraph(ptr2node, relationship_list, cur_heap);
                     }
+                    Node *a = ptr2node.at(ptr);
+                    Node *b = ptr2node.at(cur_heap);
+                    Relationship *r = new Relationship(a, b);
+                    r->label = "intcurve-curve_fit_ptr";
+                    r->properties['a'] = mg_value_make_string("intcurve-curve_fit_ptr");
+                    relationship_list.push_back(r);
                     Node *ptrnode = ptr2node.at(ptr);
                     ptrnode->labels.clear();
                     ptrnode->labels.push_back("intcurve-curve");
@@ -290,7 +289,7 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                 switch (ptr->identity(2)) {
                 case PLANE_ID: {
                     PLANE *ptr = (PLANE *)entity_ptr;
-                    plane gem = ((PLANE *)ptr)->gme_get_def();
+                    plane &gem = static_cast<plane &>(const_cast<surface &>(ptr->equation()));
                     AccessUtils::Save::plane_data *gem_data = AccessUtils::Save::get_plane_data(&gem);
                     Node *ptrnode = ptr2node.at(ptr);
                     ptrnode->labels.clear();
@@ -305,7 +304,7 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                 } break;
                 case SPHERE_ID: {
                     SPHERE *ptr = (SPHERE *)entity_ptr;
-                    sphere gem = ((SPHERE *)ptr)->gme_get_def();
+                    sphere &gem = static_cast<sphere &>(const_cast<surface &>(ptr->equation()));
                     AccessUtils::Save::sphere_data *gem_data = AccessUtils::Save::get_sphere_data(&gem);
                     Node *ptrnode = ptr2node.at(ptr);
                     ptrnode->labels.clear();
@@ -321,7 +320,7 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                 } break;
                 case TORUS_ID: {
                     TORUS *ptr = (TORUS *)entity_ptr;
-                    torus gem = ((TORUS *)ptr)->gme_get_def();
+                    torus &gem = static_cast<torus &>(const_cast<surface &>(ptr->equation()));
                     AccessUtils::Save::torus_data *gem_data = AccessUtils::Save::get_torus_data(&gem);
                     Node *ptrnode = ptr2node.at(ptr);
                     ptrnode->labels.clear();
@@ -338,7 +337,7 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                 } break;
                 case CONE_ID: {
                     CONE *ptr = (CONE *)entity_ptr;
-                    cone gem = ((CONE *)ptr)->gme_get_def();
+                    cone &gem = static_cast<cone &>(const_cast<surface &>(ptr->equation()));
                     AccessUtils::Save::cone_data *gem_data = AccessUtils::Save::get_cone_data(&gem);
                     Node *ptrnode = ptr2node.at(ptr);
                     ptrnode->labels.clear();
@@ -357,7 +356,7 @@ void api_save_entity_list_neo4j(const Neo4jPart &conn, const ENTITY_LIST &entity
                 } break;
                 case SPLINE_ID: {
                     SPLINE *ptr = (SPLINE *)entity_ptr;
-                    spline gem = ((SPLINE *)ptr)->gme_get_def();
+                    spline &gem = static_cast<spline &>(const_cast<surface &>(ptr->equation()));
                     AccessUtils::Save::spline_data *gem_data =
                         AccessUtils::Save::get_spline_data_subgraph(ptr2node, &gem);
                     if (gem_data->spl_node != nullptr) {

@@ -5,10 +5,12 @@ namespace Save {
 spline_data *get_spline_data_subgraph(std::unordered_map<void *, Node *> &ptr2node, spline *sur) {
     spline_data *ans = new spline_data();
     ans->reversed = sur->reversed();
-    SPApar_box ranges = sur->gme_get_subset_range();
+    SPApar_box ranges = sur->subset_box();
     ans->subset_range = getmglist_SPApar_box(ranges);
     ans->spl_node = nullptr;
-    spl_sur *spl = sur->gme_get_spl();
+    // get_spl_sur() 返回方程内部 spl_sur 的只读引用；保存侧直接读取其数据，
+    // 不做拷贝（读取路径：bs3_surface_to_array 均为公有函数）。
+    spl_sur *spl = (spl_sur *)&sur->get_spl_sur();
     if (spl != nullptr) {
         if (ptr2node.find(spl) == ptr2node.end()) {
             ptr2node[spl] = createnode_spl_sur_subgraph(spl); // 创建spl_sur节点
@@ -78,11 +80,12 @@ bs2_curve_data get_bs2_curve_data(bs2_curve pcur) {
 }
 
 Node *createnode_int_cur_subgraph(std::unordered_map<void *, Node *> &ptr2node,
-                                  std::vector<Relationship *> &relationship_list, int_cur *cur) {
-    // 子类类型
+                                  std::vector<Relationship *> &relationship_list, intcurve *icur) {
+    // 子类类型：intcurve 公有 get_int_cur() 返回内部 int_cur 的只读引用，
+    // type()/type_name() 是 subtype_object 的公有虚函数。
+    const int_cur &cur = icur->get_int_cur();
     int subtype;
-    int tmpp = cur->type();
-    switch (cur->type()) {
+    switch (cur.type()) {
     case 22: // int_int_cur: mark as surfintcur
     case 31: {
         // int_int_cur: mark as surfintcur
@@ -100,8 +103,8 @@ Node *createnode_int_cur_subgraph(std::unordered_map<void *, Node *> &ptr2node,
         break;
     }
     }
-    // 样条类型
-    bs3_curve bs3_cur = cur->gme_get_cur_data();
+    // 样条类型：intcurve::cur() 返回逼近 bs3 曲线（公有）
+    bs3_curve bs3_cur = icur->cur();
     int rational = bs3_curve_rational(bs3_cur); // 0:nurbs 1:nubs
     // degree
     int dim_cur = 0, deg_cur = 0, num_ctrlpts_cur = 0, num_knots_cur = 0;
@@ -152,22 +155,27 @@ Node *createnode_int_cur_subgraph(std::unordered_map<void *, Node *> &ptr2node,
         if (rational)
             mg_list_append(ctrlpts_mglist, mg_value_make_float(*(weights_cur + i)));
     }
-    // fitol
-    double fitol = cur->gme_get_fitol_data();
-    // surf1
-    surface *surf1 = cur->gme_get_surf1_data(); // surf1
+    // fitol：intcurve 公有 fitol()
+    double fitol = icur->fitol();
+    // surf1/surf2：intcurve::pcur(1/2) 返回堆上的 pcurve，其公有 surf() 给出定义曲面；
+    // 曲面指针由 pcurve 拥有，保存侧只读取内容。
+    surface *surf1 = nullptr;
+    surface *surf2 = nullptr;
+    pcurve *pc1 = icur->pcur(1, TRUE);
+    pcurve *pc2 = icur->pcur(2, TRUE);
+    if (pc1 != nullptr)
+        surf1 = (surface *)&pc1->surf();
+    if (pc2 != nullptr)
+        surf2 = (surface *)&pc2->surf();
     surface_data *surf1_data = get_surface_data_subgraph(ptr2node, surf1);
-    // surf2
-    surface *surf2 = cur->gme_get_surf2_data(); // surf2
     surface_data *surf2_data = get_surface_data_subgraph(ptr2node, surf2);
-    // pcur1
-    bs2_curve pcur1 = cur->gme_get_pcur1_data(); // pcur1
+    // pcur1/pcur2：参数域曲线，pcurve 公有 cur()
+    bs2_curve pcur1 = (pc1 != nullptr) ? pc1->cur() : nullptr;
+    bs2_curve pcur2 = (pc2 != nullptr) ? pc2->cur() : nullptr;
     bs2_curve_data pcur1_data = get_bs2_curve_data(pcur1);
-    // pcur2
-    bs2_curve pcur2 = cur->gme_get_pcur2_data(); // pcur2
     bs2_curve_data pcur2_data = get_bs2_curve_data(pcur2);
-    // safe_range
-    SPAinterval safe_range = cur->gme_get_safe_range();
+    // safe_range：intcurve 公有 safe_range()
+    SPAinterval safe_range = icur->safe_range();
     mg_list *safe_range_jsonarray = getmglist_SPAinterval(safe_range);
     // 曲线所在曲面
     int surface_tag = 0;
@@ -309,6 +317,11 @@ Node *createnode_int_cur_subgraph(std::unordered_map<void *, Node *> &ptr2node,
 
     ptrnode->properties['o'] = mg_value_make_integer(surface_tag);
 
+    // pcur(1/2) 返回堆对象（temporary=TRUE 时为临时对象），由本函数负责销毁。
+    if (pc1 != nullptr)
+        delete pc1;
+    if (pc2 != nullptr)
+        delete pc2;
     delete surf1_data;
     delete surf2_data;
 
@@ -316,25 +329,27 @@ Node *createnode_int_cur_subgraph(std::unordered_map<void *, Node *> &ptr2node,
 }
 
 Node *createnode_par_cur_subgraph(std::unordered_map<void *, Node *> &ptr2node,
-                                  std::vector<Relationship *> &relationship_list, par_cur *cur) {
-    switch (cur->type()) {
+                                  std::vector<Relationship *> &relationship_list, pcurve *pcrv) {
+    // pcurve 方程类公有 get_par_cur() 给出 par_cur 定义；type() 为 subtype_object 公有虚函数。
+    const par_cur &cur = pcrv->get_par_cur();
+    switch (cur.type()) {
     case 32: {
         // exp_par_cur//exppc
         // 子类类型
         int subtype = 32; // exppc
 
-        exp_par_cur *pcur = (exp_par_cur *)cur;
-        bs2_curve bs2_cur = pcur->gme_get_cur_data();
+        // 公有读取器：cur()/fitol()/surf()
+        bs2_curve bs2_cur = pcrv->cur();
         bs2_curve_data bs2_cur_data = get_bs2_curve_data(bs2_cur);
 
         // 样条类型
         int rational = bs2_cur_data.subtype; // rational
 
         // fitol
-        double fitol = pcur->gme_get_fitol_data();
+        double fitol = pcrv->fitol();
 
-        surface *surf = pcur->gme_get_surf_data();
-        surface_data *surf_data = get_surface_data_subgraph(ptr2node, surf);
+        surface const &surf = pcrv->surf();
+        surface_data *surf_data = get_surface_data_subgraph(ptr2node, (surface *)&surf);
 
         Node *ptrnode = new Node();
         ptrnode->labels.clear();

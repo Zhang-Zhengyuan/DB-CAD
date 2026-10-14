@@ -26,7 +26,7 @@
 #include <acis/include/exp_par.hxx>
 #include <acis/include/fileinfo.hxx>
 #include <acis/include/kernapi.hxx>
-#include <acis/include/int_int.hxx>
+#include <acis/include/att_tag.hxx>
 #include <acis/include/par_int.hxx>
 #include <acis/include/pcurve.hxx>
 #include <acis/include/point.hxx>

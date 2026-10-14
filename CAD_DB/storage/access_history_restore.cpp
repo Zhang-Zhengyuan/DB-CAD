@@ -169,11 +169,10 @@ void api_restore_neo4j(const Neo4jPart &conn, int generation_id, IncrementalCont
                             mg_value_list(mg_map_at(node_properties, "c")), 3);
                         SPAvector direction =
                             AccessUtils::Restore::parsemglist_SPAvector(mg_value_list(mg_map_at(node_properties, "d")));
-                        straight *def = ACIS_NEW straight(root_point, normalise(direction));
-                        def->gme_set_param_scale(direction.len());
+                        straight *def = ACIS_NEW straight(root_point, normalise(direction), direction.len());
                         SPAinterval subset_range = AccessUtils::Restore::parsemglist_SPAinterval(
                             mg_value_list(mg_map_at(node_properties, "b")));
-                        def->gme_set_subset_range(subset_range);
+                        def->limit(subset_range);
                         STRAIGHT *straight_curve = nullptr;
                         API_BEGIN;
                         straight_curve = ACIS_NEW STRAIGHT(*def);
@@ -193,7 +192,7 @@ void api_restore_neo4j(const Neo4jPart &conn, int generation_id, IncrementalCont
                         ellipse *def = ACIS_NEW ellipse(centre, normal, major_axis, radius_ratio);
                         SPAinterval subset_range = AccessUtils::Restore::parsemglist_SPAinterval(
                             mg_value_list(mg_map_at(node_properties, "b")));
-                        def->gme_set_subset_range(subset_range);
+                        def->limit(subset_range);
                         ELLIPSE *ellipse_curve = nullptr;
                         API_BEGIN;
                         ellipse_curve = ACIS_NEW ELLIPSE(*def);
@@ -219,7 +218,7 @@ void api_restore_neo4j(const Neo4jPart &conn, int generation_id, IncrementalCont
                                                     par_scaling, taper);
                         SPAinterval subset_range = AccessUtils::Restore::parsemglist_SPAinterval(
                             mg_value_list(mg_map_at(node_properties, "b")));
-                        def->gme_set_subset_range(subset_range);
+                        def->limit(subset_range);
                         HELIX *helix_curve = nullptr;
                         API_BEGIN;
                         helix_curve = ACIS_NEW HELIX(*def);
@@ -237,7 +236,7 @@ void api_restore_neo4j(const Neo4jPart &conn, int generation_id, IncrementalCont
                             AccessUtils::Restore::parsemglist_SPAvector(mg_value_list(mg_map_at(node_properties, "e")));
                         plane *def = ACIS_NEW plane(root_point, normal, u_deriv);
                         def->reverse_v = mg_value_integer(mg_map_at(node_properties, "f"));
-                        def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                        def->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                             mg_value_list(mg_map_at(node_properties, "b"))));
                         PLANE *plane_surface = nullptr;
                         API_BEGIN;
@@ -257,7 +256,7 @@ void api_restore_neo4j(const Neo4jPart &conn, int generation_id, IncrementalCont
                         def->pole_dir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                             mg_value_list(mg_map_at(node_properties, "f")));
                         def->reverse_v = mg_value_integer(mg_map_at(node_properties, "g"));
-                        def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                        def->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                             mg_value_list(mg_map_at(node_properties, "b"))));
                         SPHERE *sphere_surface = nullptr;
                         API_BEGIN;
@@ -278,7 +277,7 @@ void api_restore_neo4j(const Neo4jPart &conn, int generation_id, IncrementalCont
                         def->uv_oridir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                             mg_value_list(mg_map_at(node_properties, "g")));
                         def->reverse_v = mg_value_integer(mg_map_at(node_properties, "h"));
-                        def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                        def->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                             mg_value_list(mg_map_at(node_properties, "b"))));
                         TORUS *torus_surface = nullptr;
                         API_BEGIN;
@@ -298,14 +297,14 @@ void api_restore_neo4j(const Neo4jPart &conn, int generation_id, IncrementalCont
                         double base_radius_ratio = mg_value_float(mg_map_at(node_properties, "f"));
                         ellipse *gem_base =
                             ACIS_NEW ellipse(base_centre, base_normal, base_major_axis, base_radius_ratio);
-                        gem_base->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPAinterval(
+                        gem_base->limit(AccessUtils::Restore::parsemglist_SPAinterval(
                             mg_value_list(mg_map_at(node_properties, "g"))));
                         double sine_angle = mg_value_float(mg_map_at(node_properties, "h"));
                         double cosine_angle = mg_value_float(mg_map_at(node_properties, "i"));
                         cone *def = ACIS_NEW cone(*gem_base, sine_angle, cosine_angle);
                         ACIS_DELETE gem_base;
                         def->reverse_u = mg_value_integer(mg_map_at(node_properties, "j"));
-                        def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                        def->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                             mg_value_list(mg_map_at(node_properties, "b"))));
                         CONE *cone_surface = nullptr;
                         API_BEGIN;
@@ -546,36 +545,27 @@ void api_restore_neo4j(const Neo4jPart &conn, int generation_id, IncrementalCont
                     } break;
                     case AccessUtils::Restore::Neo4jEdge::pcurve_fit_ptr: {
                         PCURVE *p = (PCURVE *)id2ptr.at(rel_startnode_id);
-                        par_cur *fit = (par_cur *)id2ptr.at(rel_endnode_id);
-                        p->set_fit(fit);
-                        fit->add_ref();
+                        pcurve *fit = (pcurve *)id2ptr.at(rel_endnode_id);
+                        p->set_def(*fit);
                     } break;
                     case AccessUtils::Restore::Neo4jEdge::spline_surface_spl_ptr: {
                         SPLINE *spline_surface = (SPLINE *)id2ptr.at(rel_startnode_id);
                         spl_sur *spl = (spl_sur *)id2ptr.at(rel_endnode_id);
-                        spline_surface->gme_set_spl(spl);
-                        spl->add_ref();
+                        spline cur_def(static_cast<spline &>(spline_surface->equation_for_update()));
+                        cur_def.replace_spl_sur(*spl);
+                        spline_surface->set_def(cur_def);
                     } break;
                     case AccessUtils::Restore::Neo4jEdge::intcurve_curve_fit_ptr: {
                         INTCURVE *intcurve_curve = (INTCURVE *)id2ptr.at(rel_startnode_id);
                         int_cur *fit = (int_cur *)id2ptr.at(rel_endnode_id);
-                        intcurve_curve->gme_set_fit(fit);
-                        fit->add_ref();
+                        intcurve cur_def(fit);
+                        intcurve_curve->set_def(cur_def);
                     } break;
-                    case AccessUtils::Restore::Neo4jEdge::int_cur_surf1_spl_ptr: {
-                        int_cur *ic = (int_cur *)id2ptr.at(rel_startnode_id);
-                        spl_sur *surf1_spl = (spl_sur *)id2ptr.at(rel_endnode_id);
-                        ic->set_surf1_spl(surf1_spl);
-                    } break;
-                    case AccessUtils::Restore::Neo4jEdge::int_cur_surf2_spl_ptr: {
-                        int_cur *ic = (int_cur *)id2ptr.at(rel_startnode_id);
-                        spl_sur *surf2_spl = (spl_sur *)id2ptr.at(rel_endnode_id);
-                        ic->set_surf2_spl(surf2_spl);
-                    } break;
+                    // history 保存侧只落解析几何（样条/交线实体在源头被过滤），
+                    // int_cur/par_cur 样条承载边不会出现在历史图中；保留分支仅为枚举完整性。
+                    case AccessUtils::Restore::Neo4jEdge::int_cur_surf1_spl_ptr:
+                    case AccessUtils::Restore::Neo4jEdge::int_cur_surf2_spl_ptr:
                     case AccessUtils::Restore::Neo4jEdge::par_cur_surf_spl_ptr: {
-                        par_cur *pc = (par_cur *)id2ptr.at(rel_startnode_id);
-                        spl_sur *surf_spl = (spl_sur *)id2ptr.at(rel_endnode_id);
-                        ((exp_par_cur *)pc)->gme_set_surf_spl(surf_spl);
                     } break;
                     default: {
                         myerror("不支持的neo4j边类型。");

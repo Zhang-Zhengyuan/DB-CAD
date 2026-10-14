@@ -108,12 +108,12 @@ static surface *parseSurface(const QJsonObject &gj, QString *error) {
         SPAvector u_deriv = parseVector(gj.value("u_deriv").toArray());
         plane *def = ACIS_NEW plane(root, normal, u_deriv);
         // 仅在 uv_range 有效时设置 subset_range。
-        // A 端原始 PLANE 的 gme_get_subset_range() 默认是 empty，
+        // A 端原始 PLANE 的 subset_box() 默认是 empty，
         // 若强制设置退化的 uv_range（如 [0,0,0,0]）会破坏后续 facet 行为，
         // 导致 B 端 CreateMeshFromEntity 拿到 0 face coord。
         SPApar_box uvrange = parseParBox(gj.value("uv_range").toArray());
         if (!uvrange.u_range().empty() && !uvrange.v_range().empty()) {
-            def->gme_set_subset_range(uvrange);
+            def->limit(uvrange);
         }
         PLANE *pl = ACIS_NEW PLANE(*def);
         ACIS_DELETE def;
@@ -144,7 +144,7 @@ static surface *parseSurface(const QJsonObject &gj, QString *error) {
         ellipse *gem_base = ACIS_NEW ellipse(base_centre, base_normal, major_axis, rratio);
         SPAinterval base_u_range = parseInterval(gj.value("uv_range").toArray());
         if (!base_u_range.empty()) {
-            gem_base->gme_set_subset_range(base_u_range);
+            gem_base->limit(base_u_range);
         }
         cone *def = ACIS_NEW cone(*gem_base, sine, cosine);
         ACIS_DELETE gem_base;
@@ -164,11 +164,10 @@ static curve *parseCurve(const QJsonObject &gj, QString *error) {
     if (type == "straight") {
         SPAposition root = parsePosition(gj.value("root_point").toArray());
         SPAvector direction = parseVector(gj.value("direction").toArray());
-        straight *def = ACIS_NEW straight(root, normalise(direction));
-        def->gme_set_param_scale(direction.len());
+        straight *def = ACIS_NEW straight(root, normalise(direction), direction.len());
         SPAinterval range = parseInterval(gj.value("range").toArray());
         if (!range.empty()) {
-            def->gme_set_subset_range(range);
+            def->limit(range);
         }
         STRAIGHT *st = ACIS_NEW STRAIGHT(*def);
         ACIS_DELETE def;
@@ -181,7 +180,7 @@ static curve *parseCurve(const QJsonObject &gj, QString *error) {
         ellipse *def = ACIS_NEW ellipse(centre, normal, major_axis, ratio);
         SPAinterval range = parseInterval(gj.value("range").toArray());
         if (!range.empty()) {
-            def->gme_set_subset_range(range);
+            def->limit(range);
         }
         ELLIPSE *el = ACIS_NEW ELLIPSE(*def);
         ACIS_DELETE def;
@@ -344,9 +343,8 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 SPAposition root = parsePosition(node.value("props").toObject().value("root_point").toArray());
                 SPAvector direction = parseVector(node.value("props").toObject().value("direction").toArray());
                 SPAinterval range = parseInterval(node.value("props").toObject().value("range").toArray());
-                straight *def = ACIS_NEW straight(root, normalise(direction));
-                def->gme_set_param_scale(direction.len());
-                def->gme_set_subset_range(range);
+                straight *def = ACIS_NEW straight(root, normalise(direction), direction.len());
+                def->limit(range);
                 STRAIGHT *st = nullptr;
                 API_BEGIN;
                 st = ACIS_NEW STRAIGHT(*def);
@@ -360,7 +358,7 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 double ratio = node.value("props").toObject().value("radius_ratio").toDouble(1.0);
                 SPAinterval range = parseInterval(node.value("props").toObject().value("range").toArray());
                 ellipse *def = ACIS_NEW ellipse(centre, normal, major_axis, ratio);
-                def->gme_set_subset_range(range);
+                def->limit(range);
                 ELLIPSE *el = nullptr;
                 API_BEGIN;
                 el = ACIS_NEW ELLIPSE(*def);

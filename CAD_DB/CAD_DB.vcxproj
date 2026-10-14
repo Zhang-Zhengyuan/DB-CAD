@@ -76,12 +76,19 @@
     <ClCompile>
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(MSBuildProjectDirectory)\storage;$(DBCADPostgresInclude);$(DBCADDepsRoot);$(DBCADDepsRoot)/glaze-5.5.2/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp23</LanguageStandard>
-      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- ACIS 官方要求：调用方必须用 /MD（即使 Debug 构建）。SPAAcisDsd.dll 自身链接
+           Release 动态 CRT，若调用方使用 /MDd，跨边界传递 FILE*/内存会在运行时崩溃
+           （已实证：ftelli64 触发 0xC0000409）。见 docs/ACIS_2026_MIGRATION.md。 -->
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <!-- ACIS 官方要求：链接 ACIS 的代码必须用 /EHa（异步异常），官方 scm/sample 工程均为 Async。 -->
+      <ExceptionHandling>Async</ExceptionHandling>
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SpaACISd.lib;ws2_32.lib;openssl\lib\libssl64MDd.lib;openssl\lib\libcrypto64MDd.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SPAAcisDsd.lib;ws2_32.lib;openssl\lib\libssl64MDd.lib;openssl\lib\libcrypto64MDd.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- ACIS 官方要求：栈保留 4MB（深度递归的几何算法），对应链接器 /STACK:4194304。 -->
+      <StackReserveSize>4194304</StackReserveSize>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -89,12 +96,14 @@
       <LanguageStandard>stdcpp23</LanguageStandard>
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(MSBuildProjectDirectory)\storage;$(DBCADPostgresInclude);$(DBCADDepsRoot);$(DBCADDepsRoot)/glaze-5.5.2/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ExceptionHandling>Async</ExceptionHandling>
       <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SpaACIS.lib;ws2_32.lib;openssl\lib\libssl64MD.lib;openssl\lib\libcrypto64MD.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SPAAcisDs.lib;ws2_32.lib;openssl\lib\libssl64MD.lib;openssl\lib\libcrypto64MD.lib;libpqxx-7.10.1\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
+      <StackReserveSize>4194304</StackReserveSize>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">

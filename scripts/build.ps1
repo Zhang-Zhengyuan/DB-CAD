@@ -36,7 +36,7 @@ foreach ($sourceDir in $runtimeCandidates) {
         Get-ChildItem -LiteralPath $sourceDir -Filter '*.dll' -File | Copy-Item -Destination $outputDir -Force
     }
 }
-foreach ($required in @('libpq.dll', 'libssl-3-x64.dll', 'libcrypto-3-x64.dll', $(if ($Configuration -eq 'Debug') { 'SpaACISd.dll' } else { 'SpaACIS.dll' }))) {
+foreach ($required in @('libpq.dll', 'libssl-3-x64.dll', 'libcrypto-3-x64.dll', $(if ($Configuration -eq 'Debug') { 'SPAAcisDsd.dll' } else { 'SPAAcisDs.dll' }))) {
     if (-not (Test-Path -LiteralPath (Join-Path $outputDir $required))) { throw "Build succeeded but runtime DLL is missing: $required. Supply -RuntimeDir or the dependency kit; see docs/DEPENDENCIES.md." }
 }
 Write-Host "[OK] Client build and non-Qt runtime staging complete: $outputDir"

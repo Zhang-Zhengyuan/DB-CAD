@@ -403,13 +403,13 @@ void api_save_neo4j(const Neo4jPart &conn, IncrementalContext &ctx) {
             switch (ptr->identity(2)) {
             case STRAIGHT_ID: {
                 STRAIGHT *ptr = (STRAIGHT *)entity_ptr;
-                straight gem = ((STRAIGHT *)ptr)->gme_get_def();
-                SPAposition root_point = gem.root_point;
-                SPAunit_vector direction = gem.direction;
+                const straight &gem = static_cast<const straight &>(ptr->equation());
+                SPAposition root_point = ptr->root_point();
+                SPAunit_vector direction = ptr->direction();
                 direction.set_x(direction.x() * gem.param_scale);
                 direction.set_y(direction.y() * gem.param_scale);
                 direction.set_z(direction.z() * gem.param_scale);
-                SPAinterval range = gem.gme_get_subset_range();
+                SPAinterval range = gem.param_range();
                 Node *ptrnode = new Node();
                 if (ctx.ptr2nodeid.find(ptr) != ctx.ptr2nodeid.end()) {
                     updated_entity_nodeid_list.push_back(ctx.ptr2nodeid.at(ptr));
@@ -426,11 +426,11 @@ void api_save_neo4j(const Neo4jPart &conn, IncrementalContext &ctx) {
             } break;
             case ELLIPSE_ID: {
                 ELLIPSE *ptr = (ELLIPSE *)entity_ptr;
-                ellipse gem = ((ELLIPSE *)ptr)->gme_get_def();
-                SPAposition centre = gem.centre;
-                SPAunit_vector normal = gem.normal;
-                SPAvector major_axis = gem.major_axis;
-                SPAinterval range = gem.gme_get_subset_range();
+                const ellipse &gem = static_cast<const ellipse &>(ptr->equation());
+                SPAposition centre = ptr->centre();
+                SPAunit_vector normal = ptr->normal();
+                SPAvector major_axis = ptr->major_axis();
+                SPAinterval range = gem.param_range();
                 Node *ptrnode = new Node();
                 if (ctx.ptr2nodeid.find(ptr) != ctx.ptr2nodeid.end()) {
                     updated_entity_nodeid_list.push_back(ctx.ptr2nodeid.at(ptr));
@@ -449,12 +449,12 @@ void api_save_neo4j(const Neo4jPart &conn, IncrementalContext &ctx) {
             } break;
             case HELIX_ID: {
                 HELIX *ptr = (HELIX *)entity_ptr;
-                helix gem = ((HELIX *)ptr)->gme_get_def();
+                const helix &gem = static_cast<const helix &>(ptr->equation());
                 SPAposition axis_root = gem.axis_root();
                 SPAunit_vector axis_dir = gem.axis_dir();
                 SPAvector start_disp = gem.start_disp();
                 SPAinterval helix_range = gem.helix_range();
-                SPAinterval range = gem.gme_get_subset_range();
+                SPAinterval range = gem.param_range();
                 Node *ptrnode = new Node();
                 if (ctx.ptr2nodeid.find(ptr) != ctx.ptr2nodeid.end()) {
                     updated_entity_nodeid_list.push_back(ctx.ptr2nodeid.at(ptr));
@@ -485,7 +485,7 @@ void api_save_neo4j(const Neo4jPart &conn, IncrementalContext &ctx) {
             switch (ptr->identity(2)) {
             case PLANE_ID: {
                 PLANE *ptr = (PLANE *)entity_ptr;
-                plane gem = ((PLANE *)ptr)->gme_get_def();
+                plane &gem = static_cast<plane &>(const_cast<surface &>(ptr->equation()));
                 AccessUtils::Save::plane_data *gem_data = AccessUtils::Save::get_plane_data(&gem);
                 Node *ptrnode = new Node();
                 if (ctx.ptr2nodeid.find(ptr) != ctx.ptr2nodeid.end()) {
@@ -506,7 +506,7 @@ void api_save_neo4j(const Neo4jPart &conn, IncrementalContext &ctx) {
             } break;
             case SPHERE_ID: {
                 SPHERE *ptr = (SPHERE *)entity_ptr;
-                sphere gem = ((SPHERE *)ptr)->gme_get_def();
+                sphere &gem = static_cast<sphere &>(const_cast<surface &>(ptr->equation()));
                 AccessUtils::Save::sphere_data *gem_data = AccessUtils::Save::get_sphere_data(&gem);
                 Node *ptrnode = new Node();
                 if (ctx.ptr2nodeid.find(ptr) != ctx.ptr2nodeid.end()) {
@@ -528,7 +528,7 @@ void api_save_neo4j(const Neo4jPart &conn, IncrementalContext &ctx) {
             } break;
             case TORUS_ID: {
                 TORUS *ptr = (TORUS *)entity_ptr;
-                torus gem = ((TORUS *)ptr)->gme_get_def();
+                torus &gem = static_cast<torus &>(const_cast<surface &>(ptr->equation()));
                 AccessUtils::Save::torus_data *gem_data = AccessUtils::Save::get_torus_data(&gem);
                 Node *ptrnode = new Node();
                 if (ctx.ptr2nodeid.find(ptr) != ctx.ptr2nodeid.end()) {
@@ -551,7 +551,7 @@ void api_save_neo4j(const Neo4jPart &conn, IncrementalContext &ctx) {
             } break;
             case CONE_ID: {
                 CONE *ptr = (CONE *)entity_ptr;
-                cone gem = ((CONE *)ptr)->gme_get_def();
+                cone &gem = static_cast<cone &>(const_cast<surface &>(ptr->equation()));
                 AccessUtils::Save::cone_data *gem_data = AccessUtils::Save::get_cone_data(&gem);
                 Node *ptrnode = new Node();
                 if (ctx.ptr2nodeid.find(ptr) != ctx.ptr2nodeid.end()) {

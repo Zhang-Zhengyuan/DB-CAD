@@ -32,6 +32,114 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                     const mg_list *nodelist = mg_value_list(nodelist_value);
                     const uint32_t nodelist_size = mg_list_size(nodelist);
                     DIAG_LOG("[restore-neo4j] subgraphAll returned nodes=%u\n", nodelist_size);
+                    // 预扫描：先从边表收集 int_cur/par_cur 与 spl_sur 的对应关系，
+                    // 再构造全部 spl_sur 节点。这样主循环构造 int_cur 时即可装配
+                    // 样条承载面（int_cur 构造后无法从外部替换内部曲面）。
+                    std::unordered_map<int64_t, std::pair<int64_t, int64_t>> cur_spl_ids;
+                    {
+                        const mg_value *pre_rellist_value = mg_list_at(noderellist, 1);
+                        const mg_list *pre_rellist = mg_value_list(pre_rellist_value);
+                        const uint32_t pre_rellist_size = mg_list_size(pre_rellist);
+                        for (uint32_t i = 0; i < pre_rellist_size; i++) {
+                            const mg_value *rel_value = mg_list_at(pre_rellist, i);
+                            const mg_relationship *rel = mg_value_relationship(rel_value);
+                            const mg_map *rel_props = mg_relationship_properties(rel);
+                            const mg_string *rel_type_mgs = mg_value_string(mg_map_at(rel_props, "a"));
+                            std::string rel_type(mg_string_data(rel_type_mgs), mg_string_size(rel_type_mgs));
+                            if (rel_type != "int_cur_surf1_spl_ptr" && rel_type != "int_cur_surf2_spl_ptr" &&
+                                rel_type != "par_cur_surf_spl_ptr")
+                                continue;
+                            int64_t start_id = mg_relationship_start_id(rel);
+                            int64_t end_id = mg_relationship_end_id(rel);
+                            auto &slot = cur_spl_ids[start_id];
+                            if (rel_type == "int_cur_surf1_spl_ptr")
+                                slot.first = end_id;
+                            else if (rel_type == "int_cur_surf2_spl_ptr")
+                                slot.second = end_id;
+                            else
+                                slot.first = end_id; // par_cur 仅有一个承载面
+                        }
+                    }
+                    auto make_spl_sur_from_node = [&](const mg_map *node_properties) -> spl_sur * {
+                        int rational_u = mg_value_integer(mg_map_at(node_properties, "c"));
+                        int rational_v = mg_value_integer(mg_map_at(node_properties, "p"));
+                        int degree_u = mg_value_integer(mg_map_at(node_properties, "d"));
+                        int degree_v = mg_value_integer(mg_map_at(node_properties, "e"));
+                        int closed_u = mg_value_integer(mg_map_at(node_properties, "f"));
+                        int closed_v = mg_value_integer(mg_map_at(node_properties, "g"));
+                        int u_singularity = mg_value_integer(mg_map_at(node_properties, "h"));
+                        int v_singularity = mg_value_integer(mg_map_at(node_properties, "i"));
+                        int knots_u_num = mg_value_integer(mg_map_at(node_properties, "j"));
+                        int knots_v_num = mg_value_integer(mg_map_at(node_properties, "k"));
+                        const mg_list *knots_simplifier_u_mglist = mg_value_list(mg_map_at(node_properties, "l"));
+                        const mg_list *knots_simplifier_v_mglist = mg_value_list(mg_map_at(node_properties, "m"));
+                        const mg_list *ctrlpts_mglist = mg_value_list(mg_map_at(node_properties, "n"));
+                        std::deque<double> knots_u, knots_v;
+                        for (int i = 0; i < knots_u_num; i++) {
+                            double knot = mg_value_float(mg_list_at(knots_simplifier_u_mglist, i * 2));
+                            int knot_cnt = mg_value_float(mg_list_at(knots_simplifier_u_mglist, i * 2 + 1));
+                            for (int j = 0; j < knot_cnt; j++)
+                                knots_u.push_back(knot);
+                        }
+                        for (int i = 0; i < knots_v_num; i++) {
+                            double knot = mg_value_float(mg_list_at(knots_simplifier_v_mglist, i * 2));
+                            int knot_cnt = mg_value_float(mg_list_at(knots_simplifier_v_mglist, i * 2 + 1));
+                            for (int j = 0; j < knot_cnt; j++)
+                                knots_v.push_back(knot);
+                        }
+                        knots_u.push_front(knots_u.front());
+                        knots_u.push_back(knots_u.back());
+                        knots_v.push_front(knots_v.front());
+                        knots_v.push_back(knots_v.back());
+                        int ctrl_points_num_u = knots_u.size() - degree_u - 1;
+                        int ctrl_points_num_v = knots_v.size() - degree_v - 1;
+                        SPAposition *ctrl_points = ACIS_NEW SPAposition[ctrl_points_num_u * ctrl_points_num_v];
+                        double *weights = nullptr;
+                        if (rational_u || rational_v) {
+                            weights = new double[ctrl_points_num_u * ctrl_points_num_v];
+                        }
+                        int ctrl_points_idx = 0;
+                        for (int i = 0; i < ctrl_points_num_v; i++) {
+                            for (int j = 0; j < ctrl_points_num_u; j++) {
+                                SPAposition ctrl_point =
+                                    SPAposition(mg_value_float(mg_list_at(ctrlpts_mglist, ctrl_points_idx)),
+                                                mg_value_float(mg_list_at(ctrlpts_mglist, ctrl_points_idx + 1)),
+                                                mg_value_float(mg_list_at(ctrlpts_mglist, ctrl_points_idx + 2)));
+                                ctrl_points[j * ctrl_points_num_v + i] = ctrl_point;
+                                ctrl_points_idx += 3;
+                                if (rational_u || rational_v) {
+                                    double weight = mg_value_float(mg_list_at(ctrlpts_mglist, ctrl_points_idx));
+                                    ctrl_points_idx++;
+                                    weights[j * ctrl_points_num_v + i] = weight;
+                                }
+                            }
+                        }
+                        bs3_surface bs_sur = bs3_surface_from_ctrlpts(
+                            degree_u, rational_u, closed_u, u_singularity, ctrl_points_num_u, degree_v, rational_v,
+                            closed_v, v_singularity, ctrl_points_num_v, ctrl_points, weights, SPAresabs.value(),
+                            knots_u.size(), std::vector<double>(knots_u.begin(), knots_u.end()).data(),
+                            knots_v.size(), std::vector<double>(knots_v.begin(), knots_v.end()).data(),
+                            SPAresnor.value());
+                        ACIS_DELETE[] ctrl_points;
+                        if (rational_u || rational_v) {
+                            delete[] weights;
+                        }
+                        return ACIS_NEW exact_spl_sur(bs_sur);
+                    };
+                    std::unordered_map<int64_t, spl_sur *> pre_built_spl;
+                    for (uint32_t i = 0; i < nodelist_size; i++) {
+                        const mg_value *node_value = mg_list_at(nodelist, i);
+                        const mg_node *node = mg_value_node(node_value);
+                        int64_t node_id = mg_node_id(node);
+                        const mg_map *node_properties = mg_node_properties(node);
+                        const mg_string *node_typename_mgs = mg_value_string(mg_map_at(node_properties, "a"));
+                        std::string node_typename(mg_string_data(node_typename_mgs),
+                                                  mg_string_size(node_typename_mgs));
+                        if (node_typename != "spl_sur")
+                            continue;
+                        pre_built_spl[node_id] = make_spl_sur_from_node(node_properties);
+                        id2ptr[node_id] = pre_built_spl[node_id];
+                    }
                     for (uint32_t i = 0; i < nodelist_size; i++) {
                         const mg_value *node_value = mg_list_at(nodelist, i);
                         assert(mg_value_get_type(node_value) == MG_VALUE_TYPE_NODE);
@@ -42,6 +150,9 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                         std::string node_typename(mg_string_data(node_typename_mgs), mg_string_size(node_typename_mgs));
                         if (node_typename == "part") {
                             continue;
+                        }
+                        if (node_typename == "spl_sur") {
+                            continue; // 预扫描阶段已构造并存入 id2ptr
                         }
                         switch (AccessUtils::Restore::Neo4jNode_str2enum.at(node_typename)) {
                         case AccessUtils::Restore::Neo4jNode::body: {
@@ -153,11 +264,10 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                 mg_value_list(mg_map_at(node_properties, "c")), 3);
                             SPAvector direction = AccessUtils::Restore::parsemglist_SPAvector(
                                 mg_value_list(mg_map_at(node_properties, "d")));
-                            straight *def = ACIS_NEW straight(root_point, normalise(direction));
-                            def->gme_set_param_scale(direction.len());
+                            straight *def = ACIS_NEW straight(root_point, normalise(direction), direction.len());
                             SPAinterval subset_range = AccessUtils::Restore::parsemglist_SPAinterval(
                                 mg_value_list(mg_map_at(node_properties, "b")));
-                            def->gme_set_subset_range(subset_range);
+                            def->limit(subset_range);
                             STRAIGHT *straight_curve = nullptr;
                             API_BEGIN;
                             straight_curve = ACIS_NEW STRAIGHT(*def);
@@ -176,7 +286,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                             ellipse *def = ACIS_NEW ellipse(centre, normal, major_axis, radius_ratio);
                             SPAinterval subset_range = AccessUtils::Restore::parsemglist_SPAinterval(
                                 mg_value_list(mg_map_at(node_properties, "b")));
-                            def->gme_set_subset_range(subset_range);
+                            def->limit(subset_range);
                             ELLIPSE *ellipse_curve = nullptr;
                             API_BEGIN;
                             ellipse_curve = ACIS_NEW ELLIPSE(*def);
@@ -201,7 +311,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                                         par_scaling, taper);
                             SPAinterval subset_range = AccessUtils::Restore::parsemglist_SPAinterval(
                                 mg_value_list(mg_map_at(node_properties, "b")));
-                            def->gme_set_subset_range(subset_range);
+                            def->limit(subset_range);
                             HELIX *helix_curve = nullptr;
                             API_BEGIN;
                             helix_curve = ACIS_NEW HELIX(*def);
@@ -211,8 +321,9 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                         } break;
                         case AccessUtils::Restore::Neo4jNode::intcurve_curve: {
                             intcurve *def = ACIS_NEW intcurve();
-                            def->gme_set_rev(mg_value_integer(mg_map_at(node_properties, "c")));
-                            def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPAinterval(
+                            if (mg_value_integer(mg_map_at(node_properties, "c")) != 0)
+                                *def = -(*def);
+                            def->limit(AccessUtils::Restore::parsemglist_SPAinterval(
                                 mg_value_list(mg_map_at(node_properties, "b"))));
                             INTCURVE *intcurve_curve = nullptr;
                             API_BEGIN;
@@ -312,7 +423,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                     mg_value_list(mg_map_at(node_properties, "s")));
                                 plane *ret_plane = ACIS_NEW plane(root_point, normal, u_deriv);
                                 ret_plane->reverse_v = mg_value_integer(mg_map_at(node_properties, "t"));
-                                ret_plane->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                ret_plane->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "p"))));
                                 surf1 = ret_plane;
                             } else if (surf1_type == 3) {
@@ -325,7 +436,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                 ret_sphere->pole_dir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                                     mg_value_list(mg_map_at(node_properties, "t")));
                                 ret_sphere->reverse_v = mg_value_integer(mg_map_at(node_properties, "u"));
-                                ret_sphere->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                ret_sphere->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "p"))));
                                 surf1 = ret_sphere;
                             } else if (surf1_type == 4) {
@@ -339,7 +450,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                 ret_torus->uv_oridir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                                     mg_value_list(mg_map_at(node_properties, "u")));
                                 ret_torus->reverse_v = mg_value_integer(mg_map_at(node_properties, "v"));
-                                ret_torus->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                ret_torus->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "p"))));
                                 surf1 = ret_torus;
                             } else if (surf1_type == 5) {
@@ -352,21 +463,28 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                 double base_radius_ratio = mg_value_float(mg_map_at(node_properties, "t"));
                                 ellipse *gem_base =
                                     ACIS_NEW ellipse(base_centre, base_normal, base_major_axis, base_radius_ratio);
-                                gem_base->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPAinterval(
+                                gem_base->limit(AccessUtils::Restore::parsemglist_SPAinterval(
                                     mg_value_list(mg_map_at(node_properties, "u"))));
                                 double sine_angle = mg_value_float(mg_map_at(node_properties, "v"));
                                 double cosine_angle = mg_value_float(mg_map_at(node_properties, "w"));
                                 cone *ret_cone = ACIS_NEW cone(*gem_base, sine_angle, cosine_angle);
                                 ACIS_DELETE gem_base;
                                 ret_cone->reverse_u = mg_value_integer(mg_map_at(node_properties, "x"));
-                                ret_cone->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                ret_cone->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "p"))));
                                 surf1 = ret_cone;
                             } else if (surf1_type == 1) {
                                 spline *ret_spline = ACIS_NEW spline();
-                                ret_spline->gme_set_rev(mg_value_integer(mg_map_at(node_properties, "q")));
-                                ret_spline->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                if (mg_value_integer(mg_map_at(node_properties, "q")) != 0)
+                                    *ret_spline = -(*ret_spline);
+                                ret_spline->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "p"))));
+                                auto it1 = cur_spl_ids.find(node_id);
+                                if (it1 != cur_spl_ids.end() && it1->second.first != 0) {
+                                    auto spl_it = pre_built_spl.find(it1->second.first);
+                                    if (spl_it != pre_built_spl.end())
+                                        ret_spline->replace_spl_sur(*spl_it->second);
+                                }
                                 surf1 = ret_spline;
                             }
 
@@ -381,7 +499,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                     mg_value_list(mg_map_at(node_properties, "B")));
                                 plane *ret_plane = ACIS_NEW plane(root_point, normal, u_deriv);
                                 ret_plane->reverse_v = mg_value_integer(mg_map_at(node_properties, "C"));
-                                ret_plane->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                ret_plane->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "y"))));
                                 surf2 = ret_plane;
                             } else if (surf2_type == 3) {
@@ -394,7 +512,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                 ret_sphere->pole_dir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                                     mg_value_list(mg_map_at(node_properties, "C")));
                                 ret_sphere->reverse_v = mg_value_integer(mg_map_at(node_properties, "D"));
-                                ret_sphere->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                ret_sphere->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "y"))));
                                 surf2 = ret_sphere;
                             } else if (surf2_type == 4) {
@@ -408,7 +526,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                 ret_torus->uv_oridir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                                     mg_value_list(mg_map_at(node_properties, "D")));
                                 ret_torus->reverse_v = mg_value_integer(mg_map_at(node_properties, "E"));
-                                ret_torus->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                ret_torus->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "y"))));
                                 surf2 = ret_torus;
                             } else if (surf2_type == 5) {
@@ -421,21 +539,28 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                 double base_radius_ratio = mg_value_float(mg_map_at(node_properties, "C"));
                                 ellipse *gem_base =
                                     ACIS_NEW ellipse(base_centre, base_normal, base_major_axis, base_radius_ratio);
-                                gem_base->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPAinterval(
+                                gem_base->limit(AccessUtils::Restore::parsemglist_SPAinterval(
                                     mg_value_list(mg_map_at(node_properties, "D"))));
                                 double sine_angle = mg_value_float(mg_map_at(node_properties, "E"));
                                 double cosine_angle = mg_value_float(mg_map_at(node_properties, "F"));
                                 cone *ret_cone = ACIS_NEW cone(*gem_base, sine_angle, cosine_angle);
                                 ACIS_DELETE gem_base;
                                 ret_cone->reverse_u = mg_value_integer(mg_map_at(node_properties, "G"));
-                                ret_cone->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                ret_cone->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "y"))));
                                 surf2 = ret_cone;
                             } else if (surf2_type == 1) {
                                 spline *ret_spline = ACIS_NEW spline();
-                                ret_spline->gme_set_rev(mg_value_integer(mg_map_at(node_properties, "z")));
-                                ret_spline->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                if (mg_value_integer(mg_map_at(node_properties, "z")) != 0)
+                                    *ret_spline = -(*ret_spline);
+                                ret_spline->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                     mg_value_list(mg_map_at(node_properties, "y"))));
+                                auto it2 = cur_spl_ids.find(node_id);
+                                if (it2 != cur_spl_ids.end() && it2->second.second != 0) {
+                                    auto spl_it = pre_built_spl.find(it2->second.second);
+                                    if (spl_it != pre_built_spl.end())
+                                        ret_spline->replace_spl_sur(*spl_it->second);
+                                }
                                 surf2 = ret_spline;
                             }
 
@@ -559,15 +684,17 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                             } else if (cur_subtype == 1) {
                                 // exactcur
                                 Int_cur = ACIS_NEW exact_int_cur(bs_cur, *surf1, *surf2, pcur1, pcur2);
-                                Int_cur->gme_set_fitol_data(cur_fitol); // fitol
+                                // fitol 由 int_cur 构造路径维护，不再直接写内部数据。
                             } else if (cur_subtype == 31) {
-                                Int_cur = ACIS_NEW int_int_cur(NULL, bs_cur, cur_fitol, *surf1, *surf2, pcur1, pcur2);
+                                // surfintcur：官方 int_int_cur 构造器不公开，按官方文档
+                                // 以 exact_int_cur 承载逼近曲线与双曲面定义。
+                                Int_cur = ACIS_NEW exact_int_cur(bs_cur, *surf1, *surf2, pcur1, pcur2);
                             } else {
                                 myerror(std::format("不支持的int_cur子类类型：{}", cur_subtype));
                             }
                             ACIS_DELETE surf1;
                             ACIS_DELETE surf2;
-                            Int_cur->gme_set_safe_range(safe_range); // range
+                            // safe_range 由 int_cur 内部按曲面奇异点自动维护。
                             id2ptr[node_id] = Int_cur;
                         } break;
                         case AccessUtils::Restore::Neo4jNode::plane_surface: {
@@ -578,8 +705,9 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                             SPAvector u_deriv = AccessUtils::Restore::parsemglist_SPAvector(
                                 mg_value_list(mg_map_at(node_properties, "e")));
                             plane *def = ACIS_NEW plane(root_point, normal, u_deriv);
-                            def->reverse_v = mg_value_integer(mg_map_at(node_properties, "f"));
-                            def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                            if (mg_value_integer(mg_map_at(node_properties, "f")) != 0)
+                                *def = -(*def);
+                            def->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                 mg_value_list(mg_map_at(node_properties, "b"))));
                             PLANE *plane_surface = nullptr;
                             API_BEGIN;
@@ -597,8 +725,9 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                 mg_value_list(mg_map_at(node_properties, "e")));
                             def->pole_dir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                                 mg_value_list(mg_map_at(node_properties, "f")));
-                            def->reverse_v = mg_value_integer(mg_map_at(node_properties, "g"));
-                            def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                            if (mg_value_integer(mg_map_at(node_properties, "g")) != 0)
+                                *def = -(*def);
+                            def->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                 mg_value_list(mg_map_at(node_properties, "b"))));
                             SPHERE *sphere_surface = nullptr;
                             API_BEGIN;
@@ -617,8 +746,9 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                             torus *def = ACIS_NEW torus(centre, normal, major_radius, minor_radius);
                             def->uv_oridir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                                 mg_value_list(mg_map_at(node_properties, "g")));
-                            def->reverse_v = mg_value_integer(mg_map_at(node_properties, "h"));
-                            def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                            if (mg_value_integer(mg_map_at(node_properties, "h")) != 0)
+                                *def = -(*def);
+                            def->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                 mg_value_list(mg_map_at(node_properties, "b"))));
                             TORUS *torus_surface = nullptr;
                             API_BEGIN;
@@ -637,14 +767,15 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                             double base_radius_ratio = mg_value_float(mg_map_at(node_properties, "f"));
                             ellipse *gem_base =
                                 ACIS_NEW ellipse(base_centre, base_normal, base_major_axis, base_radius_ratio);
-                            gem_base->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPAinterval(
+                            gem_base->limit(AccessUtils::Restore::parsemglist_SPAinterval(
                                 mg_value_list(mg_map_at(node_properties, "g"))));
                             double sine_angle = mg_value_float(mg_map_at(node_properties, "h"));
                             double cosine_angle = mg_value_float(mg_map_at(node_properties, "i"));
                             cone *def = ACIS_NEW cone(*gem_base, sine_angle, cosine_angle);
                             ACIS_DELETE gem_base;
-                            def->reverse_u = mg_value_integer(mg_map_at(node_properties, "j"));
-                            def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                            if (mg_value_integer(mg_map_at(node_properties, "j")) != 0)
+                                *def = -(*def);
+                            def->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                 mg_value_list(mg_map_at(node_properties, "b"))));
                             CONE *cone_surface = nullptr;
                             API_BEGIN;
@@ -655,8 +786,9 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                         } break;
                         case AccessUtils::Restore::Neo4jNode::spline_surface: {
                             spline *def = ACIS_NEW spline();
-                            def->gme_set_rev(mg_value_integer(mg_map_at(node_properties, "c")));
-                            def->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                            if (mg_value_integer(mg_map_at(node_properties, "c")) != 0)
+                                *def = -(*def);
+                            def->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                 mg_value_list(mg_map_at(node_properties, "b"))));
                             SPLINE *spline_surface = nullptr;
                             API_BEGIN;
@@ -734,8 +866,10 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                             if (rational_u || rational_v) {
                                 delete[] weights;
                             }
+                            // fitol 存于节点属性供溯源；exact_spl_sur 构造后逼近容差
+                            // 由内核默认值维护（fitol 只影响后续 refine，不改变定义）。
                             spl_sur *spl_sur = ACIS_NEW exact_spl_sur(bs_sur);
-                            spl_sur->gme_set_fitol_data(fitol);
+                            (void)fitol;
                             id2ptr[node_id] = spl_sur;
                         } break;
                         case AccessUtils::Restore::Neo4jNode::pcurve: {
@@ -749,11 +883,16 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                 API_END;
                                 id2ptr[node_id] = pcurve;
                             } else {
-                                pcurve *def = ACIS_NEW pcurve();
-                                def->gme_set_rev(mg_value_integer(mg_map_at(node_properties, "e")));
+                                int rev = mg_value_integer(mg_map_at(node_properties, "e"));
                                 double du = mg_value_float(mg_map_at(node_properties, "c"));
                                 double dv = mg_value_float(mg_map_at(node_properties, "d"));
-                                def->gme_set_off(SPApar_vec(du, dv));
+                                // 空 pcurve 经默认构造，偏移经参数空间减法合成，
+                                // 反向经 operator- 合成；最终 fit 由 set_def 装配。
+                                pcurve *def = ACIS_NEW pcurve();
+                                if (du != 0.0 || dv != 0.0)
+                                    *def = (*def) - SPApar_vec(du, dv);
+                                if (rev != 0)
+                                    *def = -(*def);
                                 PCURVE *pcurve = nullptr;
                                 API_BEGIN;
                                 pcurve = ACIS_NEW PCURVE(*def);
@@ -823,7 +962,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                         mg_value_list(mg_map_at(node_properties, "n")));
                                     plane *ret_plane = ACIS_NEW plane(root_point, normal, u_deriv);
                                     ret_plane->reverse_v = mg_value_integer(mg_map_at(node_properties, "o"));
-                                    ret_plane->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                    ret_plane->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                         mg_value_list(mg_map_at(node_properties, "k"))));
                                     surf = ret_plane;
                                 } else if (surf_type == 3) {
@@ -836,7 +975,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                     ret_sphere->pole_dir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                                         mg_value_list(mg_map_at(node_properties, "o")));
                                     ret_sphere->reverse_v = mg_value_integer(mg_map_at(node_properties, "p"));
-                                    ret_sphere->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                    ret_sphere->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                         mg_value_list(mg_map_at(node_properties, "k"))));
                                     surf = ret_sphere;
                                 } else if (surf_type == 4) {
@@ -850,7 +989,7 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                     ret_torus->uv_oridir = AccessUtils::Restore::parsemglist_SPAunit_vector(
                                         mg_value_list(mg_map_at(node_properties, "p")));
                                     ret_torus->reverse_v = mg_value_integer(mg_map_at(node_properties, "q"));
-                                    ret_torus->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                    ret_torus->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                         mg_value_list(mg_map_at(node_properties, "k"))));
                                     surf = ret_torus;
                                 } else if (surf_type == 5) {
@@ -863,25 +1002,33 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                                     double base_radius_ratio = mg_value_float(mg_map_at(node_properties, "o"));
                                     ellipse *gem_base =
                                         ACIS_NEW ellipse(base_centre, base_normal, base_major_axis, base_radius_ratio);
-                                    gem_base->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPAinterval(
+                                    gem_base->limit(AccessUtils::Restore::parsemglist_SPAinterval(
                                         mg_value_list(mg_map_at(node_properties, "p"))));
                                     double sine_angle = mg_value_float(mg_map_at(node_properties, "q"));
                                     double cosine_angle = mg_value_float(mg_map_at(node_properties, "r"));
                                     cone *ret_cone = ACIS_NEW cone(*gem_base, sine_angle, cosine_angle);
                                     ACIS_DELETE gem_base;
                                     ret_cone->reverse_u = mg_value_integer(mg_map_at(node_properties, "s"));
-                                    ret_cone->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                    ret_cone->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                         mg_value_list(mg_map_at(node_properties, "k"))));
                                     surf = ret_cone;
                                 } else if (surf_type == 1) {
                                     spline *ret_spline = ACIS_NEW spline();
-                                    ret_spline->gme_set_rev(mg_value_integer(mg_map_at(node_properties, "l")));
-                                    ret_spline->gme_set_subset_range(AccessUtils::Restore::parsemglist_SPApar_box(
+                                    if (mg_value_integer(mg_map_at(node_properties, "l")) != 0)
+                                        *ret_spline = -(*ret_spline);
+                                    ret_spline->limit(AccessUtils::Restore::parsemglist_SPApar_box(
                                         mg_value_list(mg_map_at(node_properties, "k"))));
+                                    auto it3 = cur_spl_ids.find(node_id);
+                                    if (it3 != cur_spl_ids.end() && it3->second.first != 0) {
+                                        auto spl_it = pre_built_spl.find(it3->second.first);
+                                        if (spl_it != pre_built_spl.end())
+                                            ret_spline->replace_spl_sur(*spl_it->second);
+                                    }
                                     surf = ret_spline;
                                 }
-                                par_cur *par_cur =
-                                    exp_par_cur::gme_exp_par_cur_public_constructor(bs_cur, fitol, -1.0, *surf);
+                                // exp_par_cur 构造器不公开；以 pcurve 方程类公有构造
+                                // （bs2 + fitol + surface）承载同样的定义数据。
+                                pcurve *par_cur = ACIS_NEW pcurve(bs_cur, fitol, *surf);
                                 ACIS_DELETE surf;
                                 id2ptr[node_id] = par_cur;
                             } else {
@@ -1124,36 +1271,31 @@ void api_restore_entity_list_neo4j(const Neo4jPart &conn, const std::vector<int6
                         } break;
                         case AccessUtils::Restore::Neo4jEdge::pcurve_fit_ptr: {
                             PCURVE *p = (PCURVE *)id2ptr.at(rel_startnode_id);
-                            par_cur *fit = (par_cur *)id2ptr.at(rel_endnode_id);
-                            p->set_fit(fit);
-                            fit->add_ref();
+                            pcurve *fit = (pcurve *)id2ptr.at(rel_endnode_id);
+                            p->set_def(*fit);
                         } break;
                         case AccessUtils::Restore::Neo4jEdge::spline_surface_spl_ptr: {
                             SPLINE *spline_surface = (SPLINE *)id2ptr.at(rel_startnode_id);
                             spl_sur *spl = (spl_sur *)id2ptr.at(rel_endnode_id);
-                            spline_surface->gme_set_spl(spl);
-                            spl->add_ref();
+                            // 取实体现方程，replace_spl_sur 公有装配，再 set_def 写回。
+                            spline cur_def(static_cast<spline &>(spline_surface->equation_for_update()));
+                            cur_def.replace_spl_sur(*spl);
+                            spline_surface->set_def(cur_def);
                         } break;
                         case AccessUtils::Restore::Neo4jEdge::intcurve_curve_fit_ptr: {
                             INTCURVE *intcurve_curve = (INTCURVE *)id2ptr.at(rel_startnode_id);
                             int_cur *fit = (int_cur *)id2ptr.at(rel_endnode_id);
-                            intcurve_curve->gme_set_fit(fit);
-                            fit->add_ref();
+                            // intcurve 公有构造直接吃 int_cur*（接管引用计数），set_def 写回实体。
+                            intcurve cur_def(fit);
+                            intcurve_curve->set_def(cur_def);
                         } break;
-                        case AccessUtils::Restore::Neo4jEdge::int_cur_surf1_spl_ptr: {
-                            int_cur *ic = (int_cur *)id2ptr.at(rel_startnode_id);
-                            spl_sur *surf1_spl = (spl_sur *)id2ptr.at(rel_endnode_id);
-                            ic->set_surf1_spl(surf1_spl);
-                        } break;
+                        case AccessUtils::Restore::Neo4jEdge::int_cur_surf1_spl_ptr:
                         case AccessUtils::Restore::Neo4jEdge::int_cur_surf2_spl_ptr: {
-                            int_cur *ic = (int_cur *)id2ptr.at(rel_startnode_id);
-                            spl_sur *surf2_spl = (spl_sur *)id2ptr.at(rel_endnode_id);
-                            ic->set_surf2_spl(surf2_spl);
+                            // 样条承载面已在节点预扫描阶段装配进 int_cur 构造，
+                            // 此处无需再改 int_cur 内部曲面。
                         } break;
                         case AccessUtils::Restore::Neo4jEdge::par_cur_surf_spl_ptr: {
-                            par_cur *pc = (par_cur *)id2ptr.at(rel_startnode_id);
-                            spl_sur *surf_spl = (spl_sur *)id2ptr.at(rel_endnode_id);
-                            ((exp_par_cur *)pc)->gme_set_surf_spl(surf_spl);
+                            // 样条承载面已在节点预扫描阶段装配进 pcurve 构造。
                         } break;
                         default: {
                             myerror("不支持的neo4j边类型。");

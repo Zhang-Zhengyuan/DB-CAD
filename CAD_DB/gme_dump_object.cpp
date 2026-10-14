@@ -220,9 +220,24 @@ void dump_object(FILE* f, int indents, const curve* c)
             dump_object(f, indents + 1, i);
             fprintf_tabs(f, indents, "fitol: %f\n", i->fitol());
             fprintf_tabs(f, indents, "surf1:\n");
-            dump_object(f, indents + 1, &(i->surf1()));
+            // intcurve::surf1/surf2 为内部保护接口；经公有 pcur(index)->surf() 读取。
+            {
+                pcurve *pc1 = i->pcur(1, TRUE);
+                if (pc1 != nullptr) {
+                    dump_object(f, indents + 1, &pc1->surf());
+                    delete pc1;
+                } else
+                    fprintf_tabs(f, indents + 1, "nullptr\n");
+            }
             fprintf_tabs(f, indents, "surf2:\n");
-            dump_object(f, indents + 1, &(i->surf2()));
+            {
+                pcurve *pc2 = i->pcur(2, TRUE);
+                if (pc2 != nullptr) {
+                    dump_object(f, indents + 1, &pc2->surf());
+                    delete pc2;
+                } else
+                    fprintf_tabs(f, indents + 1, "nullptr\n");
+            }
         }
     }
     else if (f)

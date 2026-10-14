@@ -4,7 +4,7 @@ Qt/C++ CAD 桌面客户端，使用 ACIS 几何内核、FastAPI 服务与 Neo4j 
 
 ## 新成员上手
 
-完整步骤见 [复现与部署指南](docs/GETTING_STARTED.md)。客户端需要授权 ACIS SDK 与配套依赖；源码不包含 SDK。依赖布局见 [依赖说明](docs/DEPENDENCIES.md)。
+完整步骤见 [复现与部署指南](docs/GETTING_STARTED.md)。客户端需要授权 ACIS SDK 与配套依赖；源码不包含 SDK。依赖布局见 [依赖说明](docs/DEPENDENCIES.md)；SDK 已迁移到官方 ACIS 2026.1.0.1（纯公有 API，无定制头文件），编译契约与行为差异见 [ACIS 2026 迁移指南](docs/ACIS_2026_MIGRATION.md)。
 
 准备依赖和本机配置后，在仓库根目录执行：
 

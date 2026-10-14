@@ -317,24 +317,24 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                 ENTITY *geom = face->geometry();
                 QJsonObject gj;
                 gj["type"] = surfaceTypeName(geom);
-                SPApar_box uvrange = ((surface *)geom)->gme_get_subset_range();
+                SPApar_box uvrange = ((surface *)geom)->subset_box();
                 gj["uv_range"] = parBoxToJson(uvrange);
                 switch (geom->identity(2)) {
                 case PLANE_ID: {
-                    plane gem = ((PLANE *)geom)->gme_get_def();
+                    const plane &gem = static_cast<const plane &>(((PLANE *)geom)->equation());
                     gj["root_point"] = posToJson(gem.root_point);
                     gj["normal"] = unitVecToJson(gem.normal);
                     gj["u_deriv"] = vecToJson(gem.u_deriv);
                     break;
                 }
                 case SPHERE_ID: {
-                    sphere gem = ((SPHERE *)geom)->gme_get_def();
+                    const sphere &gem = static_cast<const sphere &>(((SPHERE *)geom)->equation());
                     gj["centre"] = posToJson(gem.centre);
                     gj["radius"] = gem.radius;
                     break;
                 }
                 case TORUS_ID: {
-                    torus gem = ((TORUS *)geom)->gme_get_def();
+                    const torus &gem = static_cast<const torus &>(((TORUS *)geom)->equation());
                     gj["centre"] = posToJson(gem.centre);
                     gj["normal"] = unitVecToJson(gem.normal);
                     gj["major_radius"] = gem.major_radius;
@@ -342,7 +342,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     break;
                 }
                 case CONE_ID: {
-                    cone gem = ((CONE *)geom)->gme_get_def();
+                    const cone &gem = static_cast<const cone &>(((CONE *)geom)->equation());
                     ellipse base = gem.base;
                     gj["base_centre"] = posToJson(base.centre);
                     gj["base_normal"] = unitVecToJson(base.normal);
@@ -428,19 +428,19 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                 gj["type"] = curveTypeName(geom);
                 switch (geom->identity(2)) {
                 case STRAIGHT_ID: {
-                    straight gem = ((STRAIGHT *)geom)->gme_get_def();
+                    const straight &gem = static_cast<const straight &>(((STRAIGHT *)geom)->equation());
                     gj["root_point"] = posToJson(gem.root_point);
                     gj["direction"] = unitVecToJson(gem.direction);
-                    gj["range"] = intervalToJson(gem.gme_get_subset_range());
+                    gj["range"] = intervalToJson(gem.param_range());
                     break;
                 }
                 case ELLIPSE_ID: {
-                    ellipse gem = ((ELLIPSE *)geom)->gme_get_def();
+                    const ellipse &gem = static_cast<const ellipse &>(((ELLIPSE *)geom)->equation());
                     gj["centre"] = posToJson(gem.centre);
                     gj["normal"] = unitVecToJson(gem.normal);
                     gj["major_axis"] = vecToJson(gem.major_axis);
                     gj["radius_ratio"] = gem.radius_ratio;
-                    gj["range"] = intervalToJson(gem.gme_get_subset_range());
+                    gj["range"] = intervalToJson(gem.param_range());
                     break;
                 }
                 default:
