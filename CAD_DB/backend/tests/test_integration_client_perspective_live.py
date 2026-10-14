@@ -19,7 +19,11 @@ def _bridge_url() -> str:
 
 
 def _headers() -> dict[str, str]:
-    password = os.getenv("CAD_DB_API_PASSWORD", "")
+    # 对活体服务联调时，用 CAD_DB_INTEGRATION_API_PASSWORD 传密码：
+    # tests/conftest.py 会把 CAD_DB_API_PASSWORD 置空，防止单元测试误 401。
+    password = os.getenv("CAD_DB_INTEGRATION_API_PASSWORD") or os.getenv(
+        "CAD_DB_API_PASSWORD", ""
+    )
     return {"X-API-Password": password} if password else {}
 
 

@@ -11,6 +11,8 @@ uv run --frozen pytest -q -m 'not integration'
 
 无数据库测试使用内存适配器。integration 检查需要真实服务；跳过集成测试不代表全栈验收。
 
+测试默认按"无 API 密码"运行：`tests/conftest.py` 会在加载任何 app 模块前把 `CAD_DB_API_PASSWORD` 置空（环境变量优先级高于 `.env`），避免本机 export 过密码或 `.env` 配了密码时全部请求误报 401。integration 测试对活体服务联调时，密码改用 `CAD_DB_INTEGRATION_API_PASSWORD` 传入。
+
 ## 独立启动
 
 复制 `.env.example` 为 `.env`，填写 Neo4j 地址、用户名、密码和 API 密码。先启动数据库：
