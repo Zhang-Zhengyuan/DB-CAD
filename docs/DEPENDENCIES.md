@@ -8,7 +8,7 @@
 
 自 2025-10 重构起，客户端使用**未经修改的官方 3D ACIS Modeler 2026.1.0.1**（`SPAAcisDs` 组件化发行），
 不再使用任何改头文件（`gme_` 扩展）的教学定制 SDK。所有几何读写均通过公有 API 完成。
-定制旧 SDK 保留在 `_deps/acis_legacy/` 仅供回溯对照，不参与编译。
+旧 2021 定制 SDK 已于迁移验收后移除，如需回溯请从迁移前的 git 提交（`4044a69` 之前）获取。
 
 默认布局：
 
@@ -19,7 +19,6 @@ _deps/
   acis/lib/SPAAcisDsd.lib       # Debug 导入库（安装包 win_b64_debug/code/lib）
   acis/bin/SPAAcisDs.dll        # Release 运行库（直接依赖仅系统 DLL 与 VC 运行时）
   acis/bin/SPAAcisDsd.dll       # Debug 运行库
-  acis_legacy/                  # 旧 2021 定制 SDK 备份（含 gme_ 扩展，仅存档）
   glaze-5.5.2/include/glaze/
   glfw/lib/glfw3_64.lib
   mgclient-1.4.2/mgclient.h
