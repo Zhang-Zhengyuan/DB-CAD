@@ -18,6 +18,9 @@
 #include <tensor.hxx>
 #include <heldef.hxx>
 #include <blendapi.hxx>
+#include <transfrm.hxx>
+#include <sps3crtn.hxx>
+#include <curve.hxx>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -481,6 +484,46 @@ int main(int argc, char **argv) {
             snprintf(buf, sizeof(buf), "G8 restored edges %d/1", el.count());
             check(el.count() == 1, buf);
         }
+
+        // G8b：intcurve 载荷冒烟——api_mk_ed_bs3_curve 直接产生 NURBS 支撑的 INTCURVE 边
+        printf("  -- G8b intcurve（bs3 载荷往返）--\n");
+        {
+            SPAposition cps[4] = {SPAposition(0, 0, 0), SPAposition(3, 0, 2), SPAposition(6, 0, -2),
+                                  SPAposition(9, 0, 0)};
+            double knotArr[8] = {0, 0, 0, 0, 1, 1, 1, 1};
+            EDGE *ned = nullptr;
+            check(api_mk_ed_bs3_curve(bs3_curve_from_ctrlpts(3, 0, 0, 0, 4, cps, nullptr, SPAresabs.value(), 8,
+                                                             knotArr, SPAresnor.value()),
+                                      ned)
+                      .ok(),
+                  "G8b api_mk_ed_bs3_curve");
+            COEDGE *nce = new COEDGE(ned, FALSE, nullptr, nullptr);
+            ned->set_coedge(nce);
+            WIRE *nw = new WIRE(nce, nullptr);
+            BODY *nwb = new BODY(nw);
+
+            ENTITY_LIST top2(nwb);
+            GraphRT rt2;
+            graph_rt(top2, 1, rt2);
+            QJsonObject icg = find_geometry(rt2.json, "intcurve");
+            snprintf(buf, sizeof(buf), "G8b json intcurve payload ctrlpts=%d knots=%d",
+                     icg.value("ctrlpts").toArray().size(), icg.value("knots").toArray().size());
+            check(geometry_has_payload(icg) && icg.value("ctrlpts").toArray().size() >= 12, buf);
+            check(rt2.deserOk, "G8b deserialize ok");
+            if (rt2.body) {
+                ENTITY_LIST el2;
+                api_get_edges(rt2.body, el2);
+                snprintf(buf, sizeof(buf), "G8b restored edges %d/1", el2.count());
+                check(el2.count() == 1, buf);
+                if (el2.count() == 1) {
+                    EDGE *re = (EDGE *)el2[0];
+                    bool isInt = re->geometry() && re->geometry()->identity(2) == INTCURVE_ID;
+                    check(isInt, "G8b restored edge geometry is INTCURVE");
+                }
+            }
+            free_rt(rt2, rt2.body != nullptr);
+            api_del_entity(nwb);
+        }
         free_rt(rt, rt.body != nullptr);
         api_del_entity(wb);
     }
@@ -488,10 +531,50 @@ int main(int argc, char **argv) {
     if (++g_id > run_upto) goto finish;
     printf("== G9 变换体（transform 节点 + 体积缩放）==\n");
     {
+        // 探针：SPAtransf(aff, trans, scaling) 的实际语义
+        {
+            SPAmatrix I3;
+            SPAtransf probe(I3, SPAvector(10, 20, 30), 2.0, 0, 0, 0);
+            SPAposition o(0, 0, 0), p10(10, 10, 10);
+            SPAposition ro = o * probe, rp = p10 * probe;
+            printf("    [probe] SPAtransf(I, t10, s2): (0,0,0)→(%.1f %.1f %.1f)  (10,10,10)→(%.1f %.1f %.1f)\n",
+                   ro.x(), ro.y(), ro.z(), rp.x(), rp.y(), rp.z());
+            SPAtransf ref = translate_transf(SPAvector(10, 20, 30)) * scale_transf(2.0);
+            SPAposition ro2 = o * ref, rp2 = p10 * ref;
+            printf("    [probe] translate*scale   : (0,0,0)→(%.1f %.1f %.1f)  (10,10,10)→(%.1f %.1f %.1f)\n",
+                   ro2.x(), ro2.y(), ro2.z(), rp2.x(), rp2.y(), rp2.z());
+        }
         BODY *box = nullptr;
         api_solid_block(SPAposition(0, 0, 0), SPAposition(10, 10, 10), box);
         SPAtransf tf = translate_transf(SPAvector(10, 20, 30)) * scale_transf(2.0);
+        {
+            SPAmatrix a = tf.affine();
+            SPAvector tv = tf.translation();
+            printf("    [probe] tf.affine=%4.1f %4.1f %4.1f / %4.1f %4.1f %4.1f / %4.1f %4.1f %4.1f  "
+                   "translation=%.1f %.1f %.1f  scaling=%.2f\n",
+                   a.element(0, 0), a.element(0, 1), a.element(0, 2), a.element(1, 0), a.element(1, 1),
+                   a.element(1, 2), a.element(2, 0), a.element(2, 1), a.element(2, 2), tv.x(), tv.y(), tv.z(),
+                   tf.scaling());
+        }
         check(api_transform_entity(box, tf).ok(), "G9 api_transform_entity");
+        if (box->transform() != nullptr) {
+            SPAtransf bt = box->transform()->transform();
+            SPAmatrix ba = bt.affine();
+            SPAvector btt = bt.translation();
+            SPAposition bo(0, 0, 0), bp(10, 10, 10);
+            SPAposition bo2 = bo * bt, bp2 = bp * bt;
+            printf("    [probe] body transform: aff=%4.1f %4.1f %4.1f/%4.1f %4.1f %4.1f/%4.1f %4.1f %4.1f "
+                   "t=%.1f %.1f %.1f s=%.2f  action:(0,0,0)→(%.1f %.1f %.1f) (10,10,10)→(%.1f %.1f %.1f)\n",
+                   ba.element(0, 0), ba.element(0, 1), ba.element(0, 2), ba.element(1, 0), ba.element(1, 1),
+                   ba.element(1, 2), ba.element(2, 0), ba.element(2, 1), ba.element(2, 2), btt.x(), btt.y(),
+                   btt.z(), bt.scaling(), bo2.x(), bo2.y(), bo2.z(), bp2.x(), bp2.y(), bp2.z());
+        }
+        {
+            double omn[3], omx[3];
+            if (body_box(box, omn, omx))
+                printf("    [probe] orig box [%.1f %.1f %.1f]-[%.1f %.1f %.1f]\n", omn[0], omn[1], omn[2], omx[0],
+                       omx[1], omx[2]);
+        }
         ENTITY_LIST top(box);
         GraphRT rt;
         graph_rt(top, 1, rt);
@@ -510,8 +593,25 @@ int main(int argc, char **argv) {
             }
         }
         check(tfPayload, "G9 transform payload affine/translation/scaling");
+        {
+            for (const QJsonValue &v : nodesOf(rt.json)) {
+                QJsonObject o = v.toObject();
+                if (o.value("labels").toArray().at(0).toString() == "transform") {
+                    QByteArray s = QJsonDocument(o.value("props").toObject()).toJson(QJsonDocument::Compact);
+                    printf("    [probe] json transform props = %s\n", s.constData());
+                }
+            }
+        }
         check(rt.deserOk, "G9 deserialize ok");
         if (rt.body) {
+            if (rt.body->transform() != nullptr) {
+                SPAtransf rt_tf = rt.body->transform()->transform();
+                SPAvector rtt = rt_tf.translation();
+                printf("    [probe] restored transform: translation=%.1f %.1f %.1f scaling=%.2f\n", rtt.x(), rtt.y(),
+                       rtt.z(), rt_tf.scaling());
+            } else {
+                printf("    [probe] restored transform: (null)\n");
+            }
             double v = 0;
             if (body_volume(rt.body, v)) {
                 snprintf(buf, sizeof(buf), "G9 restored volume %.3f vs 8000", v);
@@ -541,6 +641,14 @@ int main(int argc, char **argv) {
         ENTITY_LIST top(blk);
         GraphRT rt;
         graph_rt(top, 1, rt);
+        {
+            FILE *jf = fopen("G10_graph.json", "wb");
+            if (jf) {
+                QByteArray js = QJsonDocument(rt.json).toJson(QJsonDocument::Indented);
+                fwrite(js.constData(), 1, js.size(), jf);
+                fclose(jf);
+            }
+        }
         QJsonObject coneG = find_geometry(rt.json, "cone");
         QJsonObject sphG = find_geometry(rt.json, "sphere");
         check(!coneG.isEmpty() && has_keys(coneG, "base_centre", "sine_angle"), "G10 blend cone face payload");

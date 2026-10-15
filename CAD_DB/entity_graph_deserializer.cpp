@@ -7,6 +7,8 @@
 #include <acis/include/fct_utl.hxx>
 #include <acis/include/rnd_api.hxx>
 #include <acis/include/allcurve.hxx>
+#include <acis/include/sps3crtn.hxx>
+#include <acis/include/sp3crtn.hxx>
 #include <acis/include/allsurf.hxx>
 #include <acis/include/alltop.hxx>
 #include <acis/include/body.hxx>
@@ -26,6 +28,8 @@
 #include <QDebug>
 #include <unordered_set>
 #include <cmath>
+#include <deque>
+#include <vector>
 
 // ============================================================================
 // 反序列化：JSON → ACIS
@@ -194,6 +198,92 @@ static curve *parseCurve(const QJsonObject &gj, QString *error) {
         ELLIPSE *el = ACIS_NEW ELLIPSE(*def);
         ACIS_DELETE def;
         return (curve *)el;
+    } else if (type == "helix") {
+        if (!gj.contains("axis_root") || !gj.contains("helix_range")) {
+            // 旧图仅有类型名，无载荷（缺口3 历史数据），维持原拒绝行为
+            if (error)
+                *error = QString::fromUtf8("helix payload missing (legacy graph)");
+            return nullptr;
+        }
+        SPAposition axis_root = parsePosition(gj.value("axis_root").toArray());
+        SPAunit_vector axis_dir = parseUnitVector(gj.value("axis_dir").toArray());
+        SPAvector start_disp = parseVector(gj.value("start_disp").toArray());
+        double pitch = gj.value("pitch").toDouble(1.0);
+        int handedness = gj.value("handedness").toInt(1);
+        double par_scaling = gj.value("par_scaling").toDouble(1.0);
+        double taper = gj.value("taper").toDouble(0.0);
+        bool hrUnbounded = true;
+        SPAinterval helix_range = parseInterval(gj.value("helix_range").toArray(), &hrUnbounded);
+        if (hrUnbounded)
+            helix_range = SPAinterval(0.0, 1.0);
+        helix *def = ACIS_NEW helix(axis_root, axis_dir, start_disp, pitch, (logical)handedness, helix_range,
+                                    par_scaling, taper);
+        bool unbounded = true;
+        SPAinterval range = parseInterval(gj.value("range").toArray(), &unbounded);
+        if (!unbounded && !range.empty()) {
+            def->limit(range);
+        }
+        HELIX *hx = ACIS_NEW HELIX(*def);
+        ACIS_DELETE def;
+        return (curve *)hx;
+    } else if (type == "intcurve") {
+        QJsonArray knotArr = gj.value("knots").toArray();
+        QJsonArray ctrlArr = gj.value("ctrlpts").toArray();
+        if (knotArr.size() < 4 || ctrlArr.size() < 3) {
+            // 旧图仅有类型名（缺口2 历史数据），维持原拒绝行为
+            if (error)
+                *error = QString::fromUtf8("intcurve payload missing (legacy graph)");
+            return nullptr;
+        }
+        int degree = gj.value("degree").toInt(3);
+        bool rational = gj.value("rational").toInt(0) != 0;
+        int form = gj.value("form").toInt(0);
+        // 展开 RLE 并补端点多重性（与 Bolt 栈恢复逻辑一致）
+        std::deque<double> knots;
+        for (int i = 0; i * 2 + 1 < knotArr.size(); ++i) {
+            double k = knotArr[i * 2].toDouble();
+            int cnt = (int)knotArr[i * 2 + 1].toDouble();
+            for (int j = 0; j < cnt; ++j)
+                knots.push_back(k);
+        }
+        knots.push_front(knots.front());
+        knots.push_back(knots.back());
+        int stride = rational ? 4 : 3;
+        int numCtrl = (int)ctrlArr.size() / stride;
+        std::vector<SPAposition> ctrl(numCtrl);
+        std::vector<double> weights;
+        if (rational)
+            weights.resize(numCtrl, 1.0);
+        for (int i = 0; i < numCtrl; ++i) {
+            ctrl[i] = SPAposition(ctrlArr[i * stride].toDouble(), ctrlArr[i * stride + 1].toDouble(),
+                                  ctrlArr[i * stride + 2].toDouble());
+            if (rational)
+                weights[i] = ctrlArr[i * stride + 3].toDouble();
+        }
+        std::vector<double> knotsVec(knots.begin(), knots.end());
+        bs3_curve bs = bs3_curve_from_ctrlpts(degree, (logical)(rational ? 1 : 0), (logical)(form >= 1 ? 1 : 0),
+                                              (logical)(form == 2 ? 1 : 0), numCtrl, ctrl.data(),
+                                              rational ? weights.data() : nullptr, SPAresabs.value(),
+                                              (int)knotsVec.size(), knotsVec.data(), SPAresnor.value());
+        if (form == 0)
+            bs3_curve_set_open(bs);
+        else if (form == 1)
+            bs3_curve_set_closed(bs);
+        else
+            bs3_curve_set_periodic(bs);
+        double fitol = gj.value("fitol").toDouble(1e-6);
+        // 文档化路径："exact B-spline from bs3_curve"——bs3 为唯一主表示，
+        // 双端曲面留空（精确交线重建是后续增强）
+        intcurve *def =
+            ACIS_NEW intcurve(bs, fitol, SpaAcis::NullObj::get_surface(), SpaAcis::NullObj::get_surface());
+        bool unbounded = true;
+        SPAinterval range = parseInterval(gj.value("range").toArray(), &unbounded);
+        if (!unbounded && !range.empty()) {
+            def->limit(range);
+        }
+        INTCURVE *ic = ACIS_NEW INTCURVE(*def);
+        ACIS_DELETE def;
+        return (curve *)ic;
     }
     if (error)
         *error = QString::fromUtf8("unsupported curve type: %1").arg(type);
@@ -341,6 +431,11 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 int rotate = node.value("props").toObject().value("rotate").toInt(0);
                 int reflect = node.value("props").toObject().value("reflect").toInt(0);
                 int shear = node.value("props").toObject().value("shear").toInt(0);
+                // SPAtransf(A, t, s) 语义为 p → s·(A·p + t)：平移会被 scaling
+                // 再乘一次，须除以 scaling 抵消，否则变换体位置双重偏移（G9）
+                if (std::fabs(scaling) > 1e-12 && std::fabs(scaling - 1.0) > 1e-12) {
+                    trans = trans / scaling;
+                }
                 SPAtransf tf_data(aff, trans, scaling, rotate, reflect, shear);
                 TRANSFORM *tf = nullptr;
                 API_BEGIN;
@@ -462,6 +557,9 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 }
                 API_BEGIN;
                 edge->set_sense(props.value("sense").toInt(1));
+                if (props.contains("convexity")) {
+                    edge->set_convexity((EDGE_cvty)props.value("convexity").toInt(9));
+                }
                 if (crv) {
                     edge->set_geometry((CURVE *)crv);
                 }

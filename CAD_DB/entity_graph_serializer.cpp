@@ -23,6 +23,8 @@
 #include <acis/include/rnd_api.hxx>
 #include <acis/include/allcurve.hxx>
 #include <acis/include/allsurf.hxx>
+#include <acis/include/sps3crtn.hxx>
+#include <acis/include/sp3crtn.hxx>
 #include <acis/include/alltop.hxx>
 #include <acis/include/body.hxx>
 #include <acis/include/curve.hxx>
@@ -444,6 +446,9 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
             QJsonObject props;
             props["entity_type"] = "edge";
             props["sense"] = edge->sense();
+            // 凸性（tangent/convex/concave/...）：圆角边为 tangent；丢失会导致
+            // SAT 落盘 @7 unknown 且影响下游评估
+            props["convexity"] = (int)edge->get_convexity();
             if (haveSp)
                 props["start_point"] = posToJson(sp);
             if (haveEp)
@@ -466,6 +471,70 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     gj["normal"] = unitVecToJson(gem.normal);
                     gj["major_axis"] = vecToJson(gem.major_axis);
                     gj["radius_ratio"] = gem.radius_ratio;
+                    gj["range"] = edgeParamRangeToJson(edge);
+                    break;
+                }
+                case HELIX_ID: {
+                    // 8 字段完整载荷（缺口3）：与 Bolt 栈 access_history_save 一致
+                    const helix &gem = static_cast<const helix &>(((HELIX *)geom)->equation());
+                    gj["axis_root"] = posToJson(gem.axis_root());
+                    gj["axis_dir"] = unitVecToJson(gem.axis_dir());
+                    gj["start_disp"] = vecToJson(gem.start_disp());
+                    gj["pitch"] = gem.pitch();
+                    gj["handedness"] = (int)gem.handedness();
+                    gj["par_scaling"] = gem.par_scaling();
+                    gj["taper"] = gem.taper();
+                    gj["helix_range"] = intervalToJson(gem.helix_range());
+                    gj["range"] = edgeParamRangeToJson(edge);
+                    break;
+                }
+                case INTCURVE_ID: {
+                    // 缺口2：逼近 NURBS 载荷（bs3）。端曲面/参数曲线留待后续
+                    // 精确重建阶段；bs3 为主表示已足够评估（体积/渲染/布尔）。
+                    const intcurve &icv = static_cast<const intcurve &>(((INTCURVE *)geom)->equation());
+                    bs3_curve bs = icv.cur();
+                    if (bs != nullptr) {
+                        int dim = 0, deg = 0, numCtrl = 0, numKnots = 0;
+                        logical rat = 0;
+                        SPAposition *ctrl = nullptr;
+                        double *weights = nullptr, *knots = nullptr;
+                        bs3_curve_to_array(bs, dim, deg, rat, numCtrl, ctrl, weights, numKnots, knots);
+                        int form = 0;
+                        if (bs3_curve_closed(bs))
+                            form = bs3_curve_periodic(bs) ? 2 : 1;
+                        gj["rational"] = (int)rat;
+                        gj["degree"] = deg;
+                        gj["form"] = form;
+                        // 节点向量 RLE [knot, mult, ...]，端点多重性 -1（与 Bolt 栈一致）
+                        std::vector<double> ks;
+                        for (int i = 0; i < numKnots; ++i) {
+                            double v = knots[i];
+                            if (ks.empty() || v != ks[ks.size() - 2]) {
+                                ks.push_back(v);
+                                ks.push_back(1);
+                            } else {
+                                ks.back()++;
+                            }
+                        }
+                        if (ks.size() >= 4) {
+                            ks[1]--;
+                            ks.back()--;
+                        }
+                        QJsonArray knotArr;
+                        for (double v : ks)
+                            knotArr.append(v);
+                        gj["knots"] = knotArr;
+                        QJsonArray ctrlArr;
+                        for (int i = 0; i < numCtrl; ++i) {
+                            ctrlArr.append(ctrl[i].x());
+                            ctrlArr.append(ctrl[i].y());
+                            ctrlArr.append(ctrl[i].z());
+                            if (rat)
+                                ctrlArr.append(weights[i]);
+                        }
+                        gj["ctrlpts"] = ctrlArr;
+                        gj["fitol"] = icv.fitol();
+                    }
                     gj["range"] = edgeParamRangeToJson(edge);
                     break;
                 }
