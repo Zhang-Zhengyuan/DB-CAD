@@ -639,7 +639,7 @@ int main(int argc, char **argv) {
     }
 
     if (++g_id > run_upto) goto finish;
-    printf("== G11 subshell 探测（大模型才产生，可 SKIP）==\n");
+    printf("== G11 subshell（自然探测 + 合成接线回归）==\n");
     {
         BODY *blk = nullptr, *cyl = nullptr;
         api_solid_block(SPAposition(-5, -5, -5), SPAposition(5, 5, 5), blk);
@@ -654,18 +654,85 @@ int main(int argc, char **argv) {
         for (ENTITY *e : all)
             if (is_SUBSHELL(e))
                 ++nSub;
+
         if (nSub == 0) {
-            printf("  SKIP：本组模型未产生 subshell（ACIS 仅在特定条件下分层），存储语义由 L2/L3 覆盖\n");
-        } else {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "G11 model subshells=%d", nSub);
-            printf("  %s\n", buf);
+            // 合成接线：常规建模不触发 ACIS 分层，手工构造 subshell 树接入 shell，
+            // 使序列化/反序列化的 subshell 编解码路径获得真实往返覆盖。
+            SHELL *shell = blk->lump()->shell();
+            ENTITY_LIST fl;
+            api_get_faces(blk, fl);
+            if (shell != nullptr && fl.count() >= 2) {
+                API_BEGIN;
+                SUBSHELL *ss1 = ACIS_NEW SUBSHELL();
+                SUBSHELL *ss2 = ACIS_NEW SUBSHELL();
+                shell->set_subshell(ss1);
+                ss1->set_child(ss2);
+                ss2->set_parent(ss1);
+                ss1->set_face((FACE *)fl[0]);
+                ((FACE *)fl[0])->set_subshell(ss1);
+                ss2->set_face((FACE *)fl[1]);
+                ((FACE *)fl[1])->set_subshell(ss2);
+                API_END;
+                nSub = 2;
+                printf("  (ACIS 未自然分层，已合成接线 2 个 subshell 验证编解码)\n");
+            }
+        }
+
+        char buf[160];
+        snprintf(buf, sizeof(buf), "G11 model subshells=%d", nSub);
+        check(nSub >= 1, buf);
+        if (nSub >= 1) {
             ENTITY_LIST top(blk);
             GraphRT rt;
             graph_rt(top, 1, rt);
-            snprintf(buf, sizeof(buf), "G11 json subshell node=%d/%d 【缺口4】", count_label(rt.json, "subshell"),
-                     nSub);
+            snprintf(buf, sizeof(buf), "G11 json subshell node=%d/%d", count_label(rt.json, "subshell"), nSub);
             check(count_label(rt.json, "subshell") == nSub, buf);
+            int nShellSub = 0, nParent = 0, nChild = 0, nSsFace = 0;
+            for (const QJsonValue &rv : rt.json.value("rels").toArray()) {
+                QJsonObject r = rv.toObject();
+                QString t = r.value("type").toString();
+                if (t == "shell_subshell")
+                    nShellSub++;
+                else if (t == "subshell_parent")
+                    nParent++;
+                else if (t == "subshell_child")
+                    nChild++;
+                else if (t == "subshell_face" || t == "face_subshell")
+                    nSsFace++;
+            }
+            snprintf(buf, sizeof(buf), "G11 json rels shell_subshell=%d parent=%d child=%d face=%d", nShellSub,
+                     nParent, nChild, nSsFace);
+            check(nShellSub >= 1 && nParent >= 1 && nChild >= 1 && nSsFace >= 2, buf);
+            check(rt.deserOk, "G11 deserialize ok");
+            if (rt.body) {
+                // 手动受控遍历统计 subshell：全级 api_get_entities 在
+                // face↔subshell 互指的合成结构上不终止（实测），带步数上限替代。
+                int nSubR = 0, guard = 0;
+                for (LUMP *lp = rt.body->lump(); lp && guard++ < 100; lp = lp->next()) {
+                    for (SHELL *sh = lp->shell(); sh && guard++ < 100; sh = sh->next()) {
+                        for (SUBSHELL *ss = sh->subshell(); ss && guard++ < 100; ss = ss->sibling()) {
+                            ++nSubR;
+                            for (SUBSHELL *c = ss->child(); c && guard++ < 100; c = c->sibling())
+                                ++nSubR;
+                        }
+                    }
+                }
+                snprintf(buf, sizeof(buf), "G11 restored subshells=%d/%d", nSubR, nSub);
+                check(nSubR == nSub, buf);
+                if (nSubR == 2) {
+                    // 链路完整性：shell→subshell 父子树 + subshell→face 直属
+                    SHELL *rshell = rt.body->lump()->shell();
+                    SUBSHELL *rs1 = rshell ? rshell->subshell() : nullptr;
+                    check(rs1 != nullptr && rs1->child() != nullptr && rs1->child()->parent() == rs1,
+                          "G11 restored subshell tree links");
+                    check(rs1 != nullptr && rs1->face() != nullptr && rs1->face()->subshell() == rs1,
+                          "G11 restored subshell-face links");
+                }
+                // 不对合成体做 mass_pr/几何比对：手工接线的 subshell 双亲归属
+                //（face 同时挂 shell 与 subshell）会使质量积分遍历不终止；
+                // 几何一致性由 G1-G10/G13 覆盖，本组只验 subshell 编解码。
+                (void)0;
+            }
             free_rt(rt, true);
         }
         api_del_entity(blk);

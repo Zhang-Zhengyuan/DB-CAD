@@ -87,7 +87,7 @@ Bolt 栈（栈 D）按规范覆盖完整，但存在实测 bug：
 | G8/G8b | 螺旋线 + NURBS 边 | **helix / intcurve（bs3）** | **PASS**（含边长精确比对） |
 | G9 | 变换体 | transform | **PASS**（分量逐字往返；教训：任何"补偿"都会破坏作用） |
 | G10 | 圆角 | blend：cone/sphere 面 + tangent 边 + **凸性** | **PASS**（关键修复：边区间取曲线自身参数空间 + 周期整圆不设限 + convexity 序列化） |
-| G11 | subshell 探测 | **subshell** | SKIP（建模未触发；序列化/反序列化已实现，语义由 L2 锁定） |
+| G11 | subshell | **subshell（三向树 + face/wire 直属）** | **PASS（合成接线回归）**：常规建模不触发 ACIS 分层，测试手工构造 subshell 树接入拓扑，验证节点/关系/恢复树链接/face 双向链接全往返；全级 api_get_entities 在 face↔subshell 互指结构上不终止（内核行为，测试用受控遍历规避） |
 | G12 | 直线线框 | wire + straight（**param_scale 入方向模长**） | **PASS** |
 | G13 | 扭转六边形放样 | **spline 面（spl_sur NURBS）+ pcurve** | **全 PASS（含体积 505.070416 精确一致）**。原 KNOWN-LIMIT 经隔离实验证伪：rulesur 子类不背锅，真因是 pcurve 装配把 SURFACE 实体当方程对象解引用（类型混淆 → mass_pr 求值 AV）；隔离实验（原体仅换 exactsur 面）mass_pr 通过 + 错误码 #110007 实锤 spline 面积分需要 pcurve |
 

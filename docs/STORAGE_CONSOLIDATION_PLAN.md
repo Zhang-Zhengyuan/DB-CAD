@@ -29,7 +29,7 @@
 | **C. Neo4jEntityStore** | 休眠 legacy，无客户端调用，全局 local_id 缺陷 | **废弃** | 已被 B 取代，留着只会维持混乱 |
 | C++ Storage Bridge（:8100） | 服务端跑 ACIS 转存 | **废弃** | 服务器不再需要内核，bridge 失去存在理由 |
 | 客户端直连 Neo4j（Bolt） | access.cpp 性能对比 + 直连 UI 入口 | **入口退役，性能脚本保留** | 同 D；论文性能数据复现脚本保留 |
-| access_delta_push/pull.cpp | Bolt 版增量实验，无调用方 | **废弃** | 已被 HTTP JSON delta（ui/mainwindow_json.cpp）取代 |
+| access_delta_push/pull.cpp | Bolt 版增量（实现 access.hxx 的 handle_save/get_delta_to_neo4j，被 storage_bridge_delta 调用） | **随 Bridge 退役（Phase C）** | 修正早前"零调用方"误判：它是 bridge Mode1 增量端点的实现体，删除需与 bridge 同步 |
 | PostgreSQL 实验直存 | ui/ 实验功能 | **冻结** | 与实体存储主链路无关 |
 | SAT 本地文件 | access.cpp / entity_tests | **保留** | 交换格式 + 测试正确性基准（L1 失败诊断靠 SAT diff） |
 
