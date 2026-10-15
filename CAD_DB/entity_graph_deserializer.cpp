@@ -9,6 +9,11 @@
 #include <acis/include/allcurve.hxx>
 #include <acis/include/sps3crtn.hxx>
 #include <acis/include/sp3crtn.hxx>
+#include <acis/include/sps3srtn.hxx>
+#include <acis/include/exct_spl.hxx>
+#include <acis/include/pcudef.hxx>
+#include <acis/include/pcurve.hxx>
+#include <acis/include/sps2crtn.hxx>
 #include <acis/include/allsurf.hxx>
 #include <acis/include/alltop.hxx>
 #include <acis/include/body.hxx>
@@ -129,6 +134,11 @@ static surface *parseSurface(const QJsonObject &gj, QString *error) {
         SPAposition centre = parsePosition(gj.value("centre").toArray());
         double radius = gj.value("radius").toDouble(1.0);
         sphere *def = ACIS_NEW sphere(centre, radius);
+        // 补丁面（如圆角球角片）依赖 subset 范围；全曲面时 uv_range 为空跳过
+        SPApar_box uvrange = parseParBox(gj.value("uv_range").toArray());
+        if (!uvrange.u_range().empty() && !uvrange.v_range().empty()) {
+            def->limit(uvrange);
+        }
         SPHERE *sp = ACIS_NEW SPHERE(*def);
         ACIS_DELETE def;
         return (surface *)sp;
@@ -138,6 +148,10 @@ static surface *parseSurface(const QJsonObject &gj, QString *error) {
         double major = gj.value("major_radius").toDouble(1.0);
         double minor = gj.value("minor_radius").toDouble(0.1);
         torus *def = ACIS_NEW torus(centre, normal, major, minor);
+        SPApar_box uvrange2 = parseParBox(gj.value("uv_range").toArray());
+        if (!uvrange2.u_range().empty() && !uvrange2.v_range().empty()) {
+            def->limit(uvrange2);
+        }
         TORUS *tr = ACIS_NEW TORUS(*def);
         ACIS_DELETE def;
         return (surface *)tr;
@@ -162,6 +176,71 @@ static surface *parseSurface(const QJsonObject &gj, QString *error) {
         CONE *cn = ACIS_NEW CONE(*def);
         ACIS_DELETE def;
         return (surface *)cn;
+    } else if (type == "spline") {
+        QJsonArray ctrlArr = gj.value("ctrlpts").toArray();
+        if (ctrlArr.size() < 12) {
+            if (error)
+                *error = QString::fromUtf8("spline payload missing (legacy graph)");
+            return nullptr;
+        }
+        int num_u = gj.value("num_u").toInt(0);
+        int num_v = gj.value("num_v").toInt(0);
+        if (num_u <= 0 || num_v <= 0) {
+            if (error)
+                *error = QString::fromUtf8("spline num_u/num_v invalid");
+            return nullptr;
+        }
+        bool rational_u = gj.value("rational_u").toInt(0) != 0;
+        bool rational_v = gj.value("rational_v").toInt(0) != 0;
+        bool rational = rational_u || rational_v;
+        auto expandKnots = [](const QJsonArray &arr, std::deque<double> &out) {
+            for (int i = 0; i * 2 + 1 < arr.size(); ++i) {
+                double k = arr[i * 2].toDouble();
+                int cnt = (int)arr[i * 2 + 1].toDouble();
+                for (int j = 0; j < cnt; ++j)
+                    out.push_back(k);
+            }
+            out.push_front(out.front());
+            out.push_back(out.back());
+        };
+        std::deque<double> uq, vq;
+        expandKnots(gj.value("uknots").toArray(), uq);
+        expandKnots(gj.value("vknots").toArray(), vq);
+        std::vector<double> ku(uq.begin(), uq.end()), kv(vq.begin(), vq.end());
+        int stride = rational ? 4 : 3;
+        std::vector<SPAposition> ctrl(num_u * num_v);
+        std::vector<double> weights;
+        if (rational)
+            weights.resize(num_u * num_v, 1.0);
+        for (int i = 0; i < num_v; ++i) {
+            for (int j = 0; j < num_u; ++j) {
+                int flat = (i * num_u + j) * stride;
+                ctrl[j * num_v + i] = SPAposition(ctrlArr[flat].toDouble(), ctrlArr[flat + 1].toDouble(),
+                                                  ctrlArr[flat + 2].toDouble());
+                if (rational)
+                    weights[j * num_v + i] = ctrlArr[flat + 3].toDouble();
+            }
+        }
+        int pole_u = gj.value("u_singularity").toInt(0);
+        int pole_v = gj.value("v_singularity").toInt(0);
+        bs3_surface bs = bs3_surface_from_ctrlpts(
+            gj.value("degree_u").toInt(3), (logical)(rational_u ? 1 : 0), gj.value("form_u").toInt(0), pole_u, num_u,
+            gj.value("degree_v").toInt(3), (logical)(rational_v ? 1 : 0), gj.value("form_v").toInt(0), pole_v, num_v,
+            ctrl.data(), rational ? weights.data() : nullptr, SPAresabs.value(), (int)ku.size(), ku.data(),
+            (int)kv.size(), kv.data(), SPAresnor.value());
+        // exact_spl_sur 承载 NURBS 定义；fitol 由内核默认维护
+        spl_sur *ss = ACIS_NEW exact_spl_sur(bs);
+        spline *def = ACIS_NEW spline(ss);
+        if (gj.value("reversed").toInt(0) != 0) {
+            *def = -(*def);
+        }
+        SPApar_box uvrange3 = parseParBox(gj.value("uv_range").toArray());
+        if (!uvrange3.u_range().empty() && !uvrange3.v_range().empty()) {
+            def->limit(uvrange3);
+        }
+        SPLINE *sp = ACIS_NEW SPLINE(*def);
+        ACIS_DELETE def;
+        return (surface *)sp;
     }
     if (error)
         *error = QString::fromUtf8("unsupported surface type: %1").arg(type);
@@ -340,7 +419,7 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
 
     // 统计
     int createdBody = 0, createdLump = 0, createdShell = 0, createdWire = 0, createdFace = 0, createdLoop = 0,
-        createdCoedge = 0, createdEdge = 0, createdVertex = 0, createdTransform = 0, skippedUnknown = 0;
+        createdCoedge = 0, createdSubshell = 0, createdEdge = 0, createdVertex = 0, createdTransform = 0, skippedUnknown = 0;
 
     // =========================================================================
     // Pass 1: 创建所有实体骨架（参考 access.cpp，全部包裹在 API_BEGIN/API_END）
@@ -382,6 +461,13 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 API_END;
                 ent = (ENTITY *)shell;
                 createdShell++;
+            } else if (label == "subshell") {
+                SUBSHELL *ss = nullptr;
+                API_BEGIN;
+                ss = ACIS_NEW SUBSHELL();
+                API_END;
+                ent = (ENTITY *)ss;
+                createdSubshell++;
             } else if (label == "wire") {
                 WIRE *wire = nullptr;
                 API_BEGIN;
@@ -431,11 +517,9 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 int rotate = node.value("props").toObject().value("rotate").toInt(0);
                 int reflect = node.value("props").toObject().value("reflect").toInt(0);
                 int shear = node.value("props").toObject().value("shear").toInt(0);
-                // SPAtransf(A, t, s) 语义为 p → s·(A·p + t)：平移会被 scaling
-                // 再乘一次，须除以 scaling 抵消，否则变换体位置双重偏移（G9）
-                if (std::fabs(scaling) > 1e-12 && std::fabs(scaling - 1.0) > 1e-12) {
-                    trans = trans / scaling;
-                }
+                // 平移/缩放按实体存储值原样重建。api_transform_entity 会把几何
+                // 重定位并把剩余变换存入 TRANSFORM 实体——分量必须逐字往返，
+                // 任何"补偿"都会破坏作用（G9 教训：曾误加 /scaling 导致偏移）。
                 SPAtransf tf_data(aff, trans, scaling, rotate, reflect, shear);
                 TRANSFORM *tf = nullptr;
                 API_BEGIN;
@@ -499,6 +583,19 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                        << "idToEntity.size=" << idToEntity.size();
     fprintf(stderr, "[Collab] deserialize: PASS 2 (geometry attrs)\n");
 
+    // pcurve 装配所需的拓扑反查：coedge → owner loop → face（宿主曲面）
+    QHash<QString, QString> loopToFace, coedgeToOwnerLoop;
+    for (const QJsonValue &rv : rels) {
+        const QJsonObject r = rv.toObject();
+        const QString rt = r.value("type").toString();
+        if (rt == "face_loop")
+            loopToFace.insert(r.value("end").toString(), r.value("start").toString());
+        else if (rt == "coedge_owner")
+            coedgeToOwnerLoop.insert(r.value("start").toString(), r.value("end").toString());
+    }
+    QHash<QString, surface *> faceSurfaces;
+    QSet<QString> splineFaces;
+
     // =========================================================================
     // Pass 2: 设置几何属性（包裹在 API_BEGIN/API_END 内）
     // 参考 access.cpp geometry 设置方式
@@ -536,6 +633,9 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                     face->set_cont(props.value("cont").toInt(0));
                 if (surf) {
                     face->set_geometry((SURFACE *)surf);
+                    faceSurfaces.insert(id, surf);
+                    if (!geom.isEmpty() && geom.value("type").toString() == "spline")
+                        splineFaces.insert(id);
                 }
                 API_END;
                 if (surf == nullptr && !geom.isEmpty()) {
@@ -585,6 +685,98 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
     }
 
     fprintf(stderr, "[Collab] deserialize: PASS 2 done\n");
+    // Pass 2.5：pcurve 装配。惰性 pcurve 在序列化端常未物化（cur()==null），
+    // 统一处理：有 bs2 载荷用载荷；否则 pcurve(3D 曲线, 曲面, 容差) 由 ACIS
+    // 重新拟合——与原版语义等价（原 pcurve 即同一对曲线/曲面的拟合）。
+    {
+        int fittedPcurve = 0, payloadPcurve = 0;
+        for (const QJsonValue &nv : nodes) {
+            const QJsonObject node25 = nv.toObject();
+            const QJsonArray labels25 = node25.value("labels").toArray();
+            if (labels25.isEmpty() || labels25[0].toString() != "coedge")
+                continue;
+            const QString cid = node25.value("id").toString();
+            COEDGE *co = (COEDGE *)idToEntity.value(cid, nullptr);
+            if (co == nullptr)
+                continue;
+            surface *hostSurf = nullptr;
+            const QString ownerLoop = coedgeToOwnerLoop.value(cid);
+            if (!ownerLoop.isEmpty()) {
+                const QString faceId = loopToFace.value(ownerLoop);
+                if (!faceId.isEmpty() && splineFaces.contains(faceId))
+                    hostSurf = faceSurfaces.value(faceId, nullptr);
+            }
+            if (hostSurf == nullptr)
+                continue;
+            CURVE *edgeCurve = nullptr;
+            for (const QJsonValue &rv : rels) {
+                const QJsonObject r = rv.toObject();
+                if (r.value("type").toString() == "coedge_edge" && r.value("start").toString() == cid) {
+                    ENTITY *ed = idToEntity.value(r.value("end").toString(), nullptr);
+                    if (ed != nullptr && is_EDGE(ed))
+                        edgeCurve = ((EDGE *)ed)->geometry();
+                    break;
+                }
+            }
+            const QJsonObject pgeo = node25.value("props").toObject().value("geometry").toObject();
+            bool done = false;
+            if (pgeo.value("type").toString() == "pcurve" && pgeo.contains("ctrlpts")) {
+                const int deg = pgeo.value("degree").toInt(3);
+                const bool rat = pgeo.value("rational").toInt(0) != 0;
+                const int form = pgeo.value("form").toInt(0);
+                std::deque<double> ks;
+                const QJsonArray kn = pgeo.value("knots").toArray();
+                for (int i = 0; i * 2 + 1 < kn.size(); ++i) {
+                    double k = kn[i * 2].toDouble();
+                    int cnt = (int)kn[i * 2 + 1].toDouble();
+                    for (int j = 0; j < cnt; ++j)
+                        ks.push_back(k);
+                }
+                if (!ks.empty()) {
+                    ks.push_front(ks.front());
+                    ks.push_back(ks.back());
+                    std::vector<double> kv(ks.begin(), ks.end());
+                    const int stride = rat ? 3 : 2;
+                    const int numCtrl = pgeo.value("num_ctrlpts").toInt(0);
+                    const QJsonArray ct = pgeo.value("ctrlpts").toArray();
+                    if (numCtrl > 0 && (int)ct.size() >= numCtrl * stride) {
+                        std::vector<SPAposition> c2(numCtrl, SPAposition(0, 0, 0));
+                        std::vector<double> w2;
+                        if (rat)
+                            w2.resize(numCtrl, 1.0);
+                        for (int i = 0; i < numCtrl; ++i) {
+                            c2[i] = SPAposition(ct[i * stride].toDouble(), ct[i * stride + 1].toDouble(), 0);
+                            if (rat)
+                                w2[i] = ct[i * stride + 2].toDouble();
+                        }
+                        API_BEGIN;
+                        bs2_curve bs2 = bs2_curve_from_ctrlpts(
+                            deg, (logical)(rat ? 1 : 0), (logical)(form >= 1 ? 1 : 0),
+                            (logical)(form == 2 ? 1 : 0), numCtrl, c2.data(), rat ? w2.data() : nullptr, DBL_MIN,
+                            (int)kv.size(), kv.data(), DBL_MIN);
+                        pcurve *pdef = ACIS_NEW pcurve(bs2, 1.0, *hostSurf);
+                        PCURVE *pent = ACIS_NEW PCURVE(*pdef);
+                        ACIS_DELETE pdef;
+                        co->set_geometry(pent);
+                        API_END;
+                        payloadPcurve++;
+                        done = true;
+                    }
+                }
+            }
+            if (!done && edgeCurve != nullptr) {
+                API_BEGIN;
+                pcurve *pdef = ACIS_NEW pcurve(edgeCurve->equation(), *hostSurf, SPAresabs);
+                PCURVE *pent = ACIS_NEW PCURVE(*pdef);
+                ACIS_DELETE pdef;
+                co->set_geometry(pent);
+                API_END;
+                fittedPcurve++;
+            }
+        }
+        fprintf(stderr, "[Collab] deserialize: pcurve assembly payload=%d fitted=%d' + BSN + '", payloadPcurve,
+                fittedPcurve);
+    }
     fprintf(stderr, "[Collab] deserializeACISEntityGraph: PASS 3 (topology links)\n");
     // =========================================================================
     // Pass 3: 处理拓扑链接（参考 access.cpp api_restore_entity_list_neo4j）
@@ -684,6 +876,30 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
             linkSuccess++;
         } else if (type == "lump_body") {
             ((LUMP *)startEnt)->set_body((BODY *)endEnt);
+            linkSuccess++;
+        } else if (type == "shell_subshell") {
+            ((SHELL *)startEnt)->set_subshell((SUBSHELL *)endEnt);
+            linkSuccess++;
+        } else if (type == "subshell_parent") {
+            ((SUBSHELL *)startEnt)->set_parent((SUBSHELL *)endEnt);
+            linkSuccess++;
+        } else if (type == "subshell_sibling") {
+            ((SUBSHELL *)startEnt)->set_sibling((SUBSHELL *)endEnt);
+            linkSuccess++;
+        } else if (type == "subshell_child") {
+            ((SUBSHELL *)startEnt)->set_child((SUBSHELL *)endEnt);
+            linkSuccess++;
+        } else if (type == "subshell_face") {
+            ((SUBSHELL *)startEnt)->set_face((FACE *)endEnt);
+            linkSuccess++;
+        } else if (type == "subshell_wire") {
+            ((SUBSHELL *)startEnt)->set_wire((WIRE *)endEnt);
+            linkSuccess++;
+        } else if (type == "face_subshell") {
+            ((FACE *)startEnt)->set_subshell((SUBSHELL *)endEnt);
+            linkSuccess++;
+        } else if (type == "wire_subshell") {
+            ((WIRE *)startEnt)->set_subshell((SUBSHELL *)endEnt);
             linkSuccess++;
         } else if (type == "wire_owner") {
             ((WIRE *)startEnt)->set_owner((ENTITY *)endEnt);

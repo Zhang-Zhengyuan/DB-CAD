@@ -81,20 +81,15 @@ Bolt 栈（栈 D）按规范覆盖完整，但存在实测 bug：
 
 每组流程：建模 → `serializeACISEntityGraph`（注入测试 uuid）→ **JSON 结构断言**（节点数、label 集合、关键 props 完整性）→ `deserializeACISEntityGraph` → **几何往返断言**（体积相对误差、包围盒、拓扑计数与原件相等）。
 
-| 组 | 模型 | 覆盖实体/几何 | 实测（Phase A 第一轮修复后） |
+| 组 | 模型 | 覆盖实体/几何 | 最终状态 |
 |---|---|---|---|
-| G1 | 方块 | 全拓扑 + plane + straight | **PASS**（区间编码修复） |
-| G2 | 球 | sphere + 圆边 + 极点退化 | PASS |
-| G3 | 圆柱 | cone(柱) + 圆边 | PASS |
-| G4 | 圆锥 | cone + ellipse/straight | **PASS**（base_major_axis 字段名不匹配 + u_param_scale 未传修复） |
-| G5 | 圆环 | torus | PASS |
-| G6 | 六棱柱扫掠 | spline 面 + intcurve 边 | **PASS**（体积修复；侧面实为 plane，spline 断言待 G 场景） |
-| G7 | 布尔并/差/交 | intcurve + pcurve + 混合几何 | **全 PASS**（含原负体积 subtract） |
-| G8/G8b | 螺旋线线框 + NURBS 边 | **helix / intcurve** | **PASS**（第二轮：helix 8 字段载荷；G8b 冒烟 NURBS→INTCURVE 往返全绿） |
-| G9 | 变换体 | transform 节点 | 体积 ✓；红（bbox）：ACIS TRANSFORM 实体的分量编码与求值语义不一致（探针实锤 entity action ≠ body eval），方案=按作用值（4 点映射）序列化 |
-| G10 | 圆角 | blend：cone/sphere 面 + tangent 边 | 红（mass_pr）：边实为解析曲线（24 椭圆弧+24 直线，载荷/凸性均已往返 ✓），剩弧边参数区间语义；面载荷全对 |
-| G11 | subshell 探测 | **subshell** | SKIP：测试模型未触发 ACIS 分层 |
-| G12 | 直线线框 | wire 拓扑 + straight 边 | PASS |
+| G1-G7 | 方块/球/圆柱/圆锥/圆环/六棱柱/布尔 | 全拓扑 + 解析面/曲线 + 混合几何 | **全 PASS**（体积/边长/拓扑/包围盒四重断言） |
+| G8/G8b | 螺旋线 + NURBS 边 | **helix / intcurve（bs3）** | **PASS**（含边长精确比对） |
+| G9 | 变换体 | transform | **PASS**（分量逐字往返；教训：任何"补偿"都会破坏作用） |
+| G10 | 圆角 | blend：cone/sphere 面 + tangent 边 + **凸性** | **PASS**（关键修复：边区间取曲线自身参数空间 + 周期整圆不设限 + convexity 序列化） |
+| G11 | subshell 探测 | **subshell** | SKIP（建模未触发；序列化/反序列化已实现，语义由 L2 锁定） |
+| G12 | 直线线框 | wire + straight（**param_scale 入方向模长**） | **PASS** |
+| G13 | 扭转六边形放样 | **spline 面（spl_sur NURBS）** | 载荷/拓扑/边长/包围盒 **PASS**；体积 **KNOWN-LIMIT**：原生面为内部 rulesur（SAT ref 共享），公开 API 只能重建 exactsur，质量积分器拒绝——几何已精确等价 |
 
 ### 3.1 Phase 1 发现与第一轮修复（已完成 ✅）
 

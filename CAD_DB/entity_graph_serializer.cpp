@@ -23,8 +23,13 @@
 #include <acis/include/rnd_api.hxx>
 #include <acis/include/allcurve.hxx>
 #include <acis/include/allsurf.hxx>
+#include <acis/include/exct_spl.hxx>
 #include <acis/include/sps3crtn.hxx>
 #include <acis/include/sp3crtn.hxx>
+#include <acis/include/pcudef.hxx>
+#include <acis/include/pcurve.hxx>
+#include <acis/include/sps2crtn.hxx>
+#include <acis/include/sps3srtn.hxx>
 #include <acis/include/alltop.hxx>
 #include <acis/include/body.hxx>
 #include <acis/include/curve.hxx>
@@ -102,16 +107,28 @@ inline QJsonArray intervalToJson(const SPAinterval &iv) {
     return arr;
 }
 
-// 边的参数区间（EDGE::param_bound）：有效 ACIS 边必有有限范围；顺序统一为升序。
-// 旧实现序列化的是底层曲线方程的 param_range（常为无限），见 intervalToJson 注释。
-inline QJsonArray edgeParamRangeToJson(const EDGE *edge) {
-    SPAinterval r = edge->param_range();
-    if (r.empty())
-        return intervalToJson(r);
-    double lo = r.start_pt(), hi = r.end_pt();
-    if (lo > hi)
-        std::swap(lo, hi);
-    return intervalToJson(SPAinterval(lo, hi));
+// 边的参数区间（EDGE::param_bound）：有效 ACIS 边必有有限范围。
+// 取 EDGE 自身范围而非底层曲线方程的 param_range（后者对无限直线为无限区间，
+// 曾导致对端回退 [0,1]、边参数塌缩）。方向保留（sense 由 edge->sense 承载）。
+// 边几何的参数区间：优先取曲线方程自身的 param_range（绝对参数空间，与 SAT
+// 一致）；仅当曲线区间无限（如未受限 straight）时回退到 EDGE param_bound。
+// 教训（G10 圆角弧边）：EDGE bound 与曲线参数空间存在错位（弧线曲线区间
+// [-π/2,0] 而 bound 为 [0,π/2]），直接用 bound 限制曲线会取错弧段。
+inline QJsonArray curveRangeToJson(const curve &crv, const EDGE *edge) {
+    SPAinterval r = crv.param_range();
+    if (!r.empty() && r.type() == interval_type::interval_finite) {
+        double period = crv.param_period(); // 非周期曲线为 0；未受限整圆求值成整周期
+        if (period <= 0 || (r.end_pt() - r.start_pt()) < period - 1e-9) {
+            return intervalToJson(r); // 真子区间 → 限制曲线
+        }
+        QJsonArray unbounded;
+        unbounded.append(1.0);
+        unbounded.append(0.0);
+        unbounded.append(1.0);
+        unbounded.append(0.0);
+        return unbounded; // 覆盖整周期 = 未受限周期曲线，保持自然状态（SAT 落盘 I I）
+    }
+    return intervalToJson(edge->get_param_range());
 }
 
 // SPApar_box → [u0, u1, v0, v1]
@@ -309,6 +326,22 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
             enqueueChild((ENTITY *)shell->face());
             enqueueChild((ENTITY *)shell->wire());
             enqueueChild((ENTITY *)shell->lump());
+            enqueueChild((ENTITY *)shell->subshell());
+            break;
+        }
+        case SUBSHELL_ID: {
+            // 缺口4：subshell 骨架（三向自引用树 + 直属 face/wire）
+            SUBSHELL *ss = (SUBSHELL *)e;
+            node.label = "subshell";
+            node.id = genNodeId(e, SUBSHELL_ID);
+            node.props["entity_type"] = "subshell";
+            orderedNodes.push_back({ePtr, node});
+            ptrToId[ePtr] = node.id;
+            enqueueChild((ENTITY *)ss->parent());
+            enqueueChild((ENTITY *)ss->sibling());
+            enqueueChild((ENTITY *)ss->child());
+            enqueueChild((ENTITY *)ss->face());
+            enqueueChild((ENTITY *)ss->wire());
             break;
         }
         case WIRE_ID: {
@@ -379,6 +412,68 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     gj["u_param_scale"] = gem.u_param_scale;
                     break;
                 }
+                case SPLINE_ID: {
+                    // 缺口1：NURBS 曲面载荷（bs3_surface），布局与 Bolt 栈一致
+                    //（控制点按 v 外层、u 内层，索引 u*num_v+v；节点向量 RLE 端点-1）
+                    const spline &gem = static_cast<const spline &>(((SPLINE *)geom)->equation());
+                    const spl_sur &ss = gem.get_spl_sur();
+                    int dim = 0, form_u = 0, form_v = 0, pole_u = 0, pole_v = 0, num_u = 0, num_v = 0;
+                    int degree_u = 0, num_uknots = 0, degree_v = 0, num_vknots = 0;
+                    logical rational_u = 0, rational_v = 0;
+                    SPAposition *ctrlpts = nullptr;
+                    double *weights = nullptr, *uknots = nullptr, *vknots = nullptr;
+                    bs3_surface_to_array(ss.sur(), dim, rational_u, rational_v, form_u, form_v, pole_u, pole_v,
+                                         num_u, num_v, ctrlpts, weights, degree_u, num_uknots, uknots, degree_v,
+                                         num_vknots, vknots, 0);
+                    auto rleEncode = [](const double *knots, int n) {
+                        std::vector<double> ks;
+                        for (int i = 0; i < n; ++i) {
+                            double v = knots[i];
+                            if (ks.empty() || v != ks[ks.size() - 2]) {
+                                ks.push_back(v);
+                                ks.push_back(1);
+                            } else {
+                                ks.back()++;
+                            }
+                        }
+                        if (ks.size() >= 4) {
+                            ks[1]--;
+                            ks.back()--;
+                        }
+                        QJsonArray arr;
+                        for (double v : ks)
+                            arr.append(v);
+                        return arr;
+                    };
+                    gj["rational_u"] = (int)rational_u;
+                    gj["rational_v"] = (int)rational_v;
+                    gj["degree_u"] = degree_u;
+                    gj["degree_v"] = degree_v;
+                    gj["form_u"] = form_u;
+                    gj["form_v"] = form_v;
+                    gj["u_singularity"] = pole_u;
+                    gj["v_singularity"] = pole_v;
+                    gj["num_u"] = num_u;
+                    gj["num_v"] = num_v;
+                    gj["uknots"] = rleEncode(uknots, num_uknots);
+                    gj["vknots"] = rleEncode(vknots, num_vknots);
+                    bool rational = rational_u || rational_v;
+                    QJsonArray ctrlArr;
+                    for (int i = 0; i < num_v; ++i) {
+                        for (int j = 0; j < num_u; ++j) {
+                            SPAposition *pt = ctrlpts + j * num_v + i;
+                            ctrlArr.append(pt->x());
+                            ctrlArr.append(pt->y());
+                            ctrlArr.append(pt->z());
+                            if (rational)
+                                ctrlArr.append(weights[j * num_v + i]);
+                        }
+                    }
+                    gj["ctrlpts"] = ctrlArr;
+                    gj["fitol"] = ss.fitol();
+                    gj["reversed"] = (int)gem.reversed();
+                    break;
+                }
                 default:
                     break;
                 }
@@ -410,6 +505,56 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
             node.id = genNodeId(e, COEDGE_ID);
             node.props["entity_type"] = "coedge";
             node.props["sense"] = co->sense();
+            // 缺口5：pcurve 载荷（bs2 参数域拟合）。宿主曲面不重复序列化——
+            // 它就是所属 face 的 geometry，恢复端经拓扑关系反查。
+            if (co->geometry() && is_PCURVE(co->geometry())) {
+                const pcurve &pc = static_cast<const pcurve &>(((PCURVE *)co->geometry())->equation());
+                bs2_curve bs2 = pc.cur();
+                if (bs2 != nullptr) {
+                    QJsonObject gj;
+                    gj["type"] = "pcurve";
+                    int dim2 = 0, deg2 = 0, numCtrl2 = 0, numKnots2 = 0;
+                    logical rat2 = 0;
+                    SPAposition *ctrl2 = nullptr;
+                    double *weights2 = nullptr, *knots2 = nullptr;
+                    bs2_curve_to_array(bs2, dim2, deg2, rat2, numCtrl2, ctrl2, weights2, numKnots2, knots2);
+                    int form2 = 0;
+                    if (bs2_curve_closed(bs2))
+                        form2 = bs2_curve_periodic(bs2) ? 2 : 1;
+                    gj["rational"] = (int)rat2;
+                    gj["degree"] = deg2;
+                    gj["form"] = form2;
+                    gj["num_ctrlpts"] = numCtrl2;
+                    std::vector<double> ks2;
+                    for (int i = 0; i < numKnots2; ++i) {
+                        double v = knots2[i];
+                        if (ks2.empty() || v != ks2[ks2.size() - 2]) {
+                            ks2.push_back(v);
+                            ks2.push_back(1);
+                        } else {
+                            ks2.back()++;
+                        }
+                    }
+                    if (ks2.size() >= 4) {
+                        ks2[1]--;
+                        ks2.back()--;
+                    }
+                    QJsonArray kn2;
+                    for (double v : ks2)
+                        kn2.append(v);
+                    gj["knots"] = kn2;
+                    QJsonArray ct2;
+                    for (int i = 0; i < numCtrl2; ++i) {
+                        ct2.append(ctrl2[i].x());
+                        ct2.append(ctrl2[i].y());
+                        if (rat2)
+                            ct2.append(weights2[i]);
+                    }
+                    gj["ctrlpts"] = ct2;
+                    gj["fitol"] = pc.fitol();
+                    node.props["geometry"] = gj;
+                }
+            }
             orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
             enqueueChild((ENTITY *)co->next());
@@ -461,8 +606,12 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                 case STRAIGHT_ID: {
                     const straight &gem = static_cast<const straight &>(((STRAIGHT *)geom)->equation());
                     gj["root_point"] = posToJson(gem.root_point);
-                    gj["direction"] = unitVecToJson(gem.direction);
-                    gj["range"] = edgeParamRangeToJson(edge);
+                    // direction 携带 param_scale（模长=参数比例，与 Bolt 栈一致）：
+                    // 只发单位向量会把 [0,1]×scale 的边塌缩成长度 1（G13 连接边实锤）
+                    gj["direction"] = vecToJson(SPAvector(gem.direction.x() * gem.param_scale,
+                                                          gem.direction.y() * gem.param_scale,
+                                                          gem.direction.z() * gem.param_scale));
+                    gj["range"] = curveRangeToJson(gem, edge);
                     break;
                 }
                 case ELLIPSE_ID: {
@@ -471,7 +620,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     gj["normal"] = unitVecToJson(gem.normal);
                     gj["major_axis"] = vecToJson(gem.major_axis);
                     gj["radius_ratio"] = gem.radius_ratio;
-                    gj["range"] = edgeParamRangeToJson(edge);
+                    gj["range"] = curveRangeToJson(gem, edge);
                     break;
                 }
                 case HELIX_ID: {
@@ -485,7 +634,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     gj["par_scaling"] = gem.par_scaling();
                     gj["taper"] = gem.taper();
                     gj["helix_range"] = intervalToJson(gem.helix_range());
-                    gj["range"] = edgeParamRangeToJson(edge);
+                    gj["range"] = curveRangeToJson(gem, edge);
                     break;
                 }
                 case INTCURVE_ID: {
@@ -535,7 +684,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                         gj["ctrlpts"] = ctrlArr;
                         gj["fitol"] = icv.fitol();
                     }
-                    gj["range"] = edgeParamRangeToJson(edge);
+                    gj["range"] = curveRangeToJson(icv, edge);
                     break;
                 }
                 default:
@@ -659,6 +808,34 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                 emitRel("shell_lump", ePtr, shell->lump());
                 push2((ENTITY *)shell->lump());
             }
+            if (shell->subshell()) {
+                emitRel("shell_subshell", ePtr, shell->subshell());
+                push2((ENTITY *)shell->subshell());
+            }
+            break;
+        }
+        case SUBSHELL_ID: {
+            SUBSHELL *ss = (SUBSHELL *)e;
+            if (ss->parent()) {
+                emitRel("subshell_parent", ePtr, ss->parent());
+                push2((ENTITY *)ss->parent());
+            }
+            if (ss->sibling()) {
+                emitRel("subshell_sibling", ePtr, ss->sibling());
+                push2((ENTITY *)ss->sibling());
+            }
+            if (ss->child()) {
+                emitRel("subshell_child", ePtr, ss->child());
+                push2((ENTITY *)ss->child());
+            }
+            if (ss->face()) {
+                emitRel("subshell_face", ePtr, ss->face());
+                push2((ENTITY *)ss->face());
+            }
+            if (ss->wire()) {
+                emitRel("subshell_wire", ePtr, ss->wire());
+                push2((ENTITY *)ss->wire());
+            }
             break;
         }
         case FACE_ID: {
@@ -675,6 +852,10 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
             if (face->shell()) {
                 emitRel("face_shell", ePtr, face->shell());
                 push2((ENTITY *)face->shell());
+            }
+            if (face->subshell()) {
+                emitRel("face_subshell", ePtr, face->subshell());
+                push2((ENTITY *)face->subshell());
             }
             break;
         }
