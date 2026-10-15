@@ -81,31 +81,36 @@ Bolt 栈（栈 D）按规范覆盖完整，但存在实测 bug：
 
 每组流程：建模 → `serializeACISEntityGraph`（注入测试 uuid）→ **JSON 结构断言**（节点数、label 集合、关键 props 完整性）→ `deserializeACISEntityGraph` → **几何往返断言**（体积相对误差、包围盒、拓扑计数与原件相等）。
 
-| 组 | 模型 | 覆盖实体/几何 | Phase 1 实测 |
+| 组 | 模型 | 覆盖实体/几何 | 实测（Phase A 第一轮修复后） |
 |---|---|---|---|
-| G1 | 方块 | 全拓扑 + plane + straight | **体积 100/1000**（区间编码缺陷，见下） |
+| G1 | 方块 | 全拓扑 + plane + straight | **PASS**（区间编码修复） |
 | G2 | 球 | sphere + 圆边 + 极点退化 | PASS |
 | G3 | 圆柱 | cone(柱) + 圆边 | PASS |
-| G4 | 圆锥 | cone + ellipse/straight | **mass_pr 失败 + bbox 偏 4**（cone uv_range 解析缺陷） |
+| G4 | 圆锥 | cone + ellipse/straight | **PASS**（base_major_axis 字段名不匹配 + u_param_scale 未传修复） |
 | G5 | 圆环 | torus | PASS |
-| G6 | 六棱柱扫掠 | spline 面 + intcurve 边 | 侧面实为 plane（未产生 spline）；**体积恰 1/4**（同区间缺陷） |
-| G7 | 布尔并/差/交 | intcurve + pcurve + 混合几何 | intersect PASS；**unite 体积 147.5/1875、subtract 体积为负** |
-| G8 | 螺旋线线框 | **helix** | 缺口 3 红灯确认：`{"type":"helix"}` 仅类型名；结构恢复正常 |
-| G9 | 变换体 | transform 节点 | **体积 800/8000、bbox 双倍平移**（变换叠加语义错误，叠加 G1 缺陷） |
-| G10 | 圆角 | blend 产生 cone/sphere 面 | 载荷完整；**体积偏差 31%**（同区间缺陷） |
+| G6 | 六棱柱扫掠 | spline 面 + intcurve 边 | **PASS**（体积修复；侧面实为 plane，spline 断言待 G 场景） |
+| G7 | 布尔并/差/交 | intcurve + pcurve + 混合几何 | **全 PASS**（含原负体积 subtract） |
+| G8 | 螺旋线线框 | **helix** | 红：缺口 3（仅类型名，结构恢复正常） |
+| G9 | 变换体 | transform 节点 | 红：变换叠加语义错误（几何与 transform 节点双重应用） |
+| G10 | 圆角 | blend 产生 cone/sphere 面 + **tangent 边** | 红：**缺口 2 实锤**——圆角 48 条边为 `@7 tangent`（intcurve），面载荷已全对 |
 | G11 | subshell 探测 | **subshell** | SKIP：测试模型未触发 ACIS 分层 |
 | G12 | 直线线框 | wire 拓扑 + straight 边 | PASS |
 
-### 3.1 Phase 1 实测新发现（按修复优先级）
+### 3.1 Phase 1 发现与第一轮修复（已完成 ✅）
 
-测试暴露的问题比"缺实体类型"更根本——**即使已支持的实体类型，恢复路径也存在几何损坏**：
+**已修复**（serializer/deserializer，均已由 L1 测试验证）：
 
-0. **区间编码缺陷（最高优先级，G1/G6/G7/G10 共同根因）**：`intervalToJson`（serializer.cpp:67）把无限/半无限区间编码为 2–3 元素数组，而 `parseInterval`（deserializer.cpp:87）要求 ≥4 元素、否则回退为固定 `[0,1]`。方块边的底层直线是无限区间（SAT diff 实锤：原始边区间 `-5..5` → 恢复后 `0..1`），导致所有平面体的边在参数空间塌缩、体积错误（10×10×10 方块恢复成 100）。修复：编码恒定 4 元素 + 解码兼容 2/3/4 元素；同时应序列化 EDGE 自身的参数区间（当前只发了底层曲线的 param_range）。
-1. **cone 面 uv_range 双格式混用**：序列化端发裸值 `[u0,u1,v0,v1]`，cone 分支（deserializer.cpp:145）却按 typed interval `[type,val,...]` 解析 → 底圆 ellipse 被 limit 成 `[0,1]` → G4 全坏。
-2. **transform 恢复语义错误**（G9）：几何与 transform 节点的叠加关系错位（疑似几何已带变换、恢复时又附加 transform 节点），待 G0 修复后复查。
-3. **subtract 负体积**（G7）：面 sense/环方向在布尔差结果上恢复错误，待查。
-4. **后端 topology_types 缺 subshell/pcurve 边**（已在本分支修复 ✅）：`json_collab._component_ids` 的拓扑边集合缺 `shell_subshell`、`subshell_parent/sibling/child/face/wire`、`face_subshell`、`wire_subshell`、`coedge_geometry`，导致这些节点会被拆进 `__orphan__` 组件。
-5. 观察项：含球+锥面的体在 `api_body_mass_pr` 时 ACIS 向 stdout 打印分面积分数值（非本项目代码），不影响判定。
+0. ✅ **区间编码**：`intervalToJson` 恒定 4 元素；`parseInterval` 无限区间跳过 limit；边的 `range` 改为序列化 EDGE 自身参数区间（`edge->param_range()`）。修复 G1/G6/G7（含负体积）。
+1. ✅ **cone 双缺陷**：`base_major_axis` 字段名不匹配（发 `base_major_axis` 读 `major_axis`）+ `u_param_scale` 未传（构造器默认 0 导致锥面损坏）+ uv_range 双格式混用。修复 G4。
+2. ✅ `parseVector/parsePosition` 空数组默认值未置零（SAT 出现 1e-310 垃圾值）。
+3. ✅ 后端 `topology_types` 补齐 subshell/pcurve 边。
+
+**待修**（按优先级）：
+
+1. **intcurve + int_cur 载荷**（缺口 2）——G10 圆角被此阻塞：48 条 `@7 tangent` 边无几何。
+2. **transform 叠加语义**（G9）：几何与 transform 节点双重应用。
+3. **helix 载荷**（缺口 3，G8）、spline/spl_sur（缺口 1）、subshell（缺口 4）、pcurve/par_cur（缺口 5）。
+4. 观察项：SAT 文本含 `-0` vs `0` 的负零伪差异（数值等价，SHA 字本比对需归一化）；mass_pr 对混合面时向 stdout 打印分面积分（ACIS 行为）。
 
 ### L2：后端契约与图逻辑（无 DB，pytest，进 CI）
 
