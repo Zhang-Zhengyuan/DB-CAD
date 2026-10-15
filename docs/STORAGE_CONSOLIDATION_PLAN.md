@@ -60,11 +60,34 @@
 | 版次链 generation_prev_ptr（3.3.4） | JsonGraphVersion PREVIOUS_JSON_VERSION 链 |
 | generation_new_ptr/old_ptr 不可变引用 | 不可变实体节点 + 内容寻址（同内容跨版本共享） |
 | spl_sur/int_cur/par_cur 分离存储 | geometry_* 前缀属性（大数组独立属性，等效分离） |
-| 属性级增量更新（第 5 章） | 暂不做：改动=新组件新节点，靠去重控制膨胀；列为后续优化 |
+| 实体级增量存储（第 5 章） | D 栈 `generation_new_ptr/old_ptr` 已实现（见第 4 节），Phase D 移植到 B 协议 |
 
 **未知实体策略**（吸取 D 的教训——未知类型写成无标签裸节点、静默丢参数）：任何 codec 不认识的实体，显式写 `:Unknown` 节点 + 原始载荷属性 + 序列化统计上报，**绝不静默丢弃**。
 
-## 4. 分阶段计划
+## 4. 增量更新的现状与演进（论文第 5 章对应物）
+
+历史遗留确认：D 栈的原始版本**已实现实体级增量更新**，且 UI 菜单至今在调用：
+
+| 组件 | 位置 | 机制 | 现状 |
+|---|---|---|---|
+| 公告板扫描 | `storage/access_history_state.cpp:12`（`api_compute_delta_since`，干净版） | 遍历 [lastsave_ds, 当前] 的差状态/公告板/公告，`new_entity_ptr`→新增集、`old_entity_ptr`→删除集，对冲先建后删 | 干净版零调用；`api_advance_delta_since`（基线推进）仍在 4 处 UI 调用 |
+| 实体级增量写入 | `storage/access_history_save.cpp`（`api_save_neo4j`，菜单"增量保存"调用） | 每次保存建 `(:generation)` 节点；修改=新节点+`generation_old_ptr`(旧)+`generation_new_ptr`(新)；删除=仅 `generation_old_ptr`；`generation_prev_ptr` 版次链；旧节点入边复制重定向到新节点 | 活代码，但走 Bolt 直连（Phase C 退役其传输层） |
+| 增量恢复 | `storage/access_history_restore.cpp`（`api_restore_neo4j`） | 沿三种 ptr 子图遍历 → new 端点 − 仍被 old 引用者 → `apoc.algo.cover` 取边重建 | 同上 |
+
+与 B 的关系：B 的增量是**组件级**（变更 body 整组件替换 + 内容寻址去重）；D 是**实体级**（只写公告板中真正变化的实体）——后者是论文第 5 章的核心贡献，B 未继承。D 增量版的三个固有缺陷（移植时必须修复）：
+
+1. 类型白名单排除 spline/intcurve/pcurve（与全量路径同源缺口，Phase A 解决）；
+2. `ptr2nodeid` 内存态、跨会话丢失；各客户端基线与服务端版本链无 base_version 对齐（B 已有，需并入）；
+3. 入边复制重定向使边数随版本线性增长，无压实机制。
+
+**演进路线（列为 Phase D，Phase B 之后做）**：协议不动（`changes` 已是 uuid 级）——
+
+1. 客户端：编辑记账复用 `pendingEntityChanges`；公告板扫描作为兜底/自动发布触发器保留；
+2. 服务端：JsonGraphStore 写入从"变更组件整体替换"细化为"组件内实体级 diff"（内容寻址天然只写新实体节点）；
+3. 版本回放：`JsonGraphVersion` 组件链语义升级为 generation 式实体级回放（等价于 `generation_new_ptr/old_ptr` 的不可变节点集合语义）；
+4. 压实：定期后台合并连续微改版本，控制节点/边膨胀。
+
+## 5. 分阶段计划
 
 ### Phase A：客户端 codec 补全（当前分支 storage/entity-unit-tests 已开始）
 
@@ -99,11 +122,15 @@
 
 **验收**：全测试绿；启动脚本不再拉起 bridge；文档与实际一致。
 
-## 5. 风险与兼容
+### Phase D：实体级增量更新（论文第 5 章的完整恢复）
+
+Phase B 稳定后启动，协议不变，详见第 4 节演进路线。**验收**：仅改一个 face 半径的二次 push，库内新增实体节点数 ≈ 变更实体数（而非整个组件）；版本回放与全量图等价（L3 断言）。
+
+## 6. 风险与兼容
 
 - **wire 兼容**：Phase B 不动协议字段，旧客户端照常工作（风险最低的收敛方式）。
 - **数据迁移**：一次性脚本 + 旧节点保留，可回退；迁移前后 graph() 重组结果必须逐字节等价（用 L3 断言兜住）。
 - **Neo4j 上限**：list 属性上限远大于样条控制点数组（数百 KB）；超阈值（如 1MB）告警并记录，不阻断。
-- **去重膨胀**：字段级不可变节点下，频繁微改会产生新组件；靠内容寻址共享未变部分，暂时够用；真正的属性级增量留作论文第 5 章的后续工作。
+- **去重膨胀**：字段级不可变节点下，频繁微改会产生新组件；Phase B 阶段靠内容寻址共享未变部分，Phase D 落地实体级增量 + 压实后彻底解决。
 - **并行协作**：Phase C 删除前逐项公告；在此之前所有删除目标先标 `// DEPRECATED:` 冻结。
 - **决策检查点**：Phase B 开工前用半天做一个写读 PoC（单 face 原生标签往返），确认兜底方案不需要启用。
