@@ -24,12 +24,16 @@ def rel(rtype, start, end, props=None):
 
 
 def solid_graph(face_geometry, edge_geometry=None):
-    """最小实心体链：body→lump→shell→face(+几何)→loop→coedge→edge(+几何)→vertex。"""
+    """最小实心体链：body→lump→shell→face(+几何)→loop→coedge→edge(+几何)→vertex。
+
+    geometry 参数在边界 deepcopy，避免用例修改节点 props 时污染模块级夹具
+    （SURFACE_CASES/CURVE_CASES 被多个测试文件共享引用）。
+    """
     nodes = [
         node("b1", "body", {"uuid": "b1", "entity_type": "body"}),
         node("l1", "lump", {"entity_type": "lump"}),
         node("s1", "shell", {"entity_type": "shell"}),
-        node("f1", "face", {"sense": 1, "sides": 1, "cont": 0, "geometry": face_geometry}),
+        node("f1", "face", {"sense": 1, "sides": 1, "cont": 0, "geometry": copy.deepcopy(face_geometry)}),
         node("lo1", "loop", {"entity_type": "loop"}),
         node("c1", "coedge", {"sense": 0, "entity_type": "coedge"}),
         node(
@@ -39,8 +43,10 @@ def solid_graph(face_geometry, edge_geometry=None):
                 "sense": 0,
                 "start_point": [0, 0, 0],
                 "end_point": [1, 0, 0],
-                "geometry": edge_geometry
-                or {"type": "straight", "root_point": [0, 0, 0], "direction": [1, 0, 0], "range": [2, 0, 2, 1]},
+                "geometry": copy.deepcopy(
+                    edge_geometry
+                    or {"type": "straight", "root_point": [0, 0, 0], "direction": [1, 0, 0], "range": [2, 0, 2, 1]}
+                ),
             },
         ),
         node("v1", "vertex", {"position": [0, 0, 0]}),
