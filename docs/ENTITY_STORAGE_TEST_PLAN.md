@@ -107,22 +107,31 @@ Bolt 栈（栈 D）按规范覆盖完整，但存在实测 bug：
 3. **helix 载荷**（缺口 3，G8）、spline/spl_sur（缺口 1）、subshell（缺口 4）、pcurve/par_cur（缺口 5）。
 4. 观察项：SAT 文本含 `-0` vs `0` 的负零伪差异（数值等价，SHA 字本比对需归一化）；mass_pr 对混合面时向 stdout 打印分面积分（ACIS 行为）。
 
-## 3.2 复杂工图探针（2026-10-15，Q1/Q2 实测取证）
+## 3.2 复杂工图探针（2026-10-15，Q1/Q2 实测取证；3.3 修复后全绿）
 
-`scripts/tests/acis/probe_complex.cpp`（`build_probe_complex.bat` 构建）：布尔挖孔 + 12 边圆角 + 顶开抽壳（A）、圆截面沿螺旋扫掠薄壁管（B）、扭转六边形放样（C）三部件场景，全实体普查 + JSON 往返四重比对 + SAT 双向比对。结论：
+`scripts/tests/acis/probe_complex.cpp`（`build_probe_complex.bat` 构建）：布尔挖孔 + 12 边圆角 + 顶开抽壳（A）、圆截面沿螺旋扫掠薄壁管（B）、扭转六边形放样（C）三部件场景，全实体普查 + JSON 往返四重比对 + SAT 双向比对。**Q2（SAT 粗粒度）基线**：三部件体积全部精确一致，save→restore→save 仅 32 个实体的内核 history 指针字段规范化为 -1，几何字节相同——任意复杂图经 SAT 可完整正确储存。**Q1（JSON 细粒度）修复后探针全绿**（`PROBE ALL CHECKS PASSED`）：A/C 纯细粒度四重精确，B 片段回退后 mass_pr/包围盒精确。探针曾暴露、随后被修复的缺口：
 
-| 路径 | 结果 |
-|---|---|
-| **SAT（粗粒度）** | 三部件体积全部精确一致；save→restore→save 仅 32 个实体的第 2 字段（内核 history 指针 id）规范化为 -1，几何字节相同。**任意复杂图可完整正确储存** |
-| **JSON（细粒度）** | 拓扑计数 100% 一致（254 coedge/127 edge/68 face 全同）；A、C 体积/边长/包围盒全精确。**未知类型静默丢失 = 0** |
-
-JSON 路径在复杂图上暴露的三个真实缺口（均已被探针固化，SAT 普查为证）：
-
-1. **过程曲面再拟合**：B 管的 sweepsur（spl_sur::type()=67）带轨道律（SAT `SIMPLE_RAIL(VEC,DCUR)`）；JSON 重建为 exact NURBS 后边长精确、但恢复体 mass_pr 报 #111001——接缝 intcurve 用空支撑面重建（SAT `nullbs`/`null_surface` 记录为证）。rulesur（放样/直纹）NURBS 分母精确（C 体积 9.3e-16）。
-2. **ATTRIB 属性实体丢失**：圆角留下 `integer_attrib-name_attrib-gen-attrib … make_tangent`；拓扑 BFS 遍历结构性看不到属性链（`api_get_entities(-1,-1)` 普查亦无 attrib 行）。
-3. **边长微差**：A（圆角+抽壳）边总长 rel 4.3e-3（体积/包围盒精确）——某条边参数化往返偏差，复现件在 `probe_complex.cpp`。
+| 缺口 | 根因（实证） | 修复 |
+|---|---|---|
+| B 管恢复体 mass_pr #111001 | sweepsur（`spl_sur::type()=67`）为过程曲面，NURBS 仅拟合；接缝 intcurve 空支撑面重建（SAT `nullbs`/`null_surface` 记录为证） | 组件级 SAT 片段回退（§3.3），G14 锁定 |
+| A 边总长 rel 4.3e-3（体积精确） | 抽壳连接边真实参数区间 **[-0.8,0]**（端顶点在参数 -0.8 处），`get_param_range()` 归一化成 [0,0.8] 丢方向；恢复端按区间 limit 后端顶点投影不进曲线 → 长度退化 0 | straight 恢复为**无界**（SAT 惯例 `I I`），区间由顶点推导 |
+| ATTRIB 属性实体丢失 | 拓扑 BFS 结构性看不到属性链（`integer_attrib-name_attrib-gen-attrib … make_tangent`，扫掠体产物） | 片段回退触发条件之一；纯图路径暂不支持属性载荷 |
 
 另证：该内核布尔/构造结果体为"原点居中几何 + TRANSFORM"结构（原始顶点坐标与世界系差一个平移），探针用 `body_coord_offset` 校正后选边/选面。
+
+## 3.3 组件级 SAT 片段回退（fail-safe，2026-10-15 实现）
+
+策略（用户确认）：**能细粒度就细粒度，实在不行回退到粗粒度，以 100% 一致为目标；达成后再把粗粒度逐步细粒度化**。落地机制：
+
+- **序列化端**（`entity_graph_serializer.cpp`）：组件（body 连通闭包，与后端 `split_graph_components` 语义一致）风险检测，任一命中即把该组件完整实体表存为 SAT 文本挂到 body 节点 `props.sat_fragment`（内核权威格式，含 ATTRIB/过程曲面定义）：
+  1. face 出现 `unknown_surface` 或缺 geometry（edge 无 geometry 是合法退化结构如锥顶边，不触发）
+  2. 已访问实体挂有 ATTRIB 属性链（不能静默丢）
+  3. 样条面子类 ∉ {37,60 exactsur, 63 rulesur}（63 经 G13/探针实证 NURBS 精确；67 sweepsur/44 rot 为过程曲面）
+  4. pcurve/intcurve 无 bs2/bs3（nobs2/nobs3 标记）
+- **恢复端**（`entity_graph_deserializer.cpp`）：body 节点带 sat_fragment 的组件整体 `api_restore_entity_list` 读回（100% 一致），该组件节点跳过 pass1/2/3（避免二次 set_* 损坏）；片段恢复失败回退普通图重建（不劣于现状）。
+- **协议兼容**：实体节点照常发射（查询/合并粒度不变）；后端 props 透明传输（L2 `test_sat_fragment_fallback_field` 锁定：validate/组件归属/内容寻址敏感）；旧客户端忽略新字段。
+- **细化路线**：每攻掉一类触发条件（intcurve 定义载荷、sweepsur 轨道、ATTRIB 载荷）即从触发集中移除，粗粒度集合单调收缩；G14 锁定机制（正例 sweepsur 触发 + 负例干净方块不触发）。
+
 
 ### L2：后端契约与图逻辑（无 DB，pytest，进 CI）
 

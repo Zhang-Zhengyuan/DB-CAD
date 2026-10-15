@@ -45,6 +45,7 @@
 #include <QJsonObject>
 #include <QStack>
 #include <QQueue>
+#include <QSet>
 #include <QDebug>
 #include <unordered_set>
 #include <cmath>
@@ -115,6 +116,14 @@ inline QJsonArray intervalToJson(const SPAinterval &iv) {
 // 教训（G10 圆角弧边）：EDGE bound 与曲线参数空间存在错位（弧线曲线区间
 // [-π/2,0] 而 bound 为 [0,π/2]），直接用 bound 限制曲线会取错弧段。
 inline QJsonArray curveRangeToJson(const curve &crv, const EDGE *edge) {
+    // 退化边（起终点重合、几何长度为 0，如抽壳/锥顶产生的接缝边）：曲线自身
+    // 参数区间可能是完整跨度（恢复后长度会凭空变大），必须原样使用 EDGE 自身
+    // 的参数区间（空跨度），恢复端长度才会保持 0。
+    if (edge && edge->length() < SPAresabs) {
+        SPAinterval er = edge->get_param_range();
+        if (er.type() == interval_type::interval_finite)
+            return intervalToJson(er);
+    }
     SPAinterval r = crv.param_range();
     if (!r.empty() && r.type() == interval_type::interval_finite) {
         double period = crv.param_period(); // 非周期曲线为 0；未受限整圆求值成整周期
@@ -472,6 +481,9 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     gj["ctrlpts"] = ctrlArr;
                     gj["fitol"] = ss.fitol();
                     gj["reversed"] = (int)gem.reversed();
+                    // 子类码：37/60=exactsur、63=rulesur 为 NURBS 精确型；67=sweepsur、
+                    // 44=rot_spl_sur 等为过程曲面（NURBS 仅拟合）→ 组件回退判据
+                    gj["spl_subtype"] = ss.type();
                     break;
                 }
                 default:
@@ -553,6 +565,12 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     gj["ctrlpts"] = ct2;
                     gj["fitol"] = pc.fitol();
                     node.props["geometry"] = gj;
+                } else {
+                    // 无 bs2（纯拟合式 pcurve）：载荷仅类型名 → 标记触发组件回退
+                    QJsonObject gjF;
+                    gjF["type"] = "pcurve";
+                    gjF["nobs2"] = 1;
+                    node.props["geometry"] = gjF;
                 }
             }
             orderedNodes.push_back({ePtr, node});
@@ -681,10 +699,13 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                             if (rat)
                                 ctrlArr.append(weights[i]);
                         }
-                        gj["ctrlpts"] = ctrlArr;
-                        gj["fitol"] = icv.fitol();
-                    }
-                    gj["range"] = curveRangeToJson(icv, edge);
+                    gj["ctrlpts"] = ctrlArr;
+                    gj["fitol"] = icv.fitol();
+                } else {
+                    // 无 bs3（纯定义式交线）：载荷仅类型名 → 标记触发组件回退
+                    gj["nobs3"] = 1;
+                }
+                gj["range"] = curveRangeToJson(icv, edge);
                     break;
                 }
                 default:
@@ -942,6 +963,145 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
         default:
             break;
         }
+    }
+
+    // =====================================================================
+    // 保真回退（fail-safe）：组件级 SAT 片段。
+    // 触发条件（任一命中即把该 body 连通闭包的完整实体表存为 SAT 文本，
+    // 挂到 body 节点 props.sat_fragment，由内核序列化，含 ATTRIB/过程曲面定义）：
+    //   1) face/edge 出现 unknown_surface/unknown_curve 或缺 geometry（类型级缺口）
+    //   2) 已访问实体挂有 ATTRIB 属性链（拓扑 BFS 结构性不可见 → 否则静默丢失）
+    //   3) 样条面子类 ∉ {37,60 exactsur, 63 rulesur}（过程曲面，NURBS 仅拟合）
+    //   4) pcurve/intcurve 无 bs2/bs3（nobs2/nobs3 标记）
+    // 恢复端见片段即整组件走内核 SAT 读回（100% 一致）；实体节点照常发射，
+    // 查询/合并粒度不受影响。旧客户端忽略该字段，协议向后兼容。
+    // 细化路线：每攻掉一类触发条件即从此处移除，粗粒度集合单调收缩。
+    // =========================================================================
+    {
+        QHash<QString, ENTITY *> idToEnt;
+        QHash<QString, const IntNode *> nodeById;
+        for (const auto &pr : orderedNodes) {
+            idToEnt.insert(pr.second.id, (ENTITY *)pr.first);
+            nodeById.insert(pr.second.id, &pr.second);
+        }
+        // rels 无向邻接 → 组件归属（与后端 split_graph_components 的组件语义一致）
+        QHash<QString, QVector<QString>> adj;
+        for (const QJsonValue &rv : relsJson) {
+            const QJsonObject r = rv.toObject();
+            const QString s = r.value("start").toString(), t = r.value("end").toString();
+            adj[s].push_back(t);
+            adj[t].push_back(s);
+        }
+        auto nodeRisky = [&](const IntNode &n) -> bool {
+            const QJsonObject g = n.props.value("geometry").toObject();
+            if (n.label == "face") {
+                if (g.isEmpty()) {
+                    fprintf(stderr, "[Collab] serialize: fallback-trigger face-no-geometry id=%s\n",
+                            n.id.toUtf8().constData());
+                    return true;
+                }
+                const QString t = g.value("type").toString();
+                if (t == "unknown_surface") {
+                    fprintf(stderr, "[Collab] serialize: fallback-trigger unknown-surface id=%s\n",
+                            n.id.toUtf8().constData());
+                    return true;
+                }
+                if (t == "spline") {
+                    const int sub = g.value("spl_subtype").toInt(-1);
+                    if (sub != 37 && sub != 60 && sub != 63) {
+                        fprintf(stderr, "[Collab] serialize: fallback-trigger procedural-spline subtype=%d id=%s\n", sub,
+                                n.id.toUtf8().constData());
+                        return true;
+                    }
+                }
+            } else if (n.label == "edge") {
+                // 注：无 geometry 的边是合法退化结构（如圆锥锥顶边），不算风险
+                const QString t = g.value("type").toString();
+                if (t == "unknown_curve" || g.contains("nobs3")) {
+                    fprintf(stderr, "[Collab] serialize: fallback-trigger edge-curve-risk(%s%s) id=%s\n",
+                            t.toUtf8().constData(), g.contains("nobs3") ? "+nobs3" : "", n.id.toUtf8().constData());
+                    return true;
+                }
+            } else if (n.label == "coedge") {
+                if (g.contains("nobs2")) {
+                    fprintf(stderr, "[Collab] serialize: fallback-trigger pcurve-nobs2 id=%s\n",
+                            n.id.toUtf8().constData());
+                    return true;
+                }
+            }
+            // ATTRIB 属性链存在性（即使载荷层不支持也要保真，不能静默丢）
+            ENTITY *en = idToEnt.value(n.id, nullptr);
+            if (en && en->attrib() != nullptr) {
+                fprintf(stderr, "[Collab] serialize: fallback-trigger attrib-chain id=%s label=%s\n",
+                        n.id.toUtf8().constData(), n.label.toUtf8().constData());
+                return true;
+            }
+            return false;
+        };
+        int fragCount = 0;
+        for (const auto &pr : orderedNodes) {
+            if (pr.second.label != "body")
+                continue;
+            const QString bodyId = pr.second.id;
+            // body 连通闭包
+            QVector<QString> closure;
+            QSet<QString> seen{bodyId};
+            QQueue<QString> q;
+            q.enqueue(bodyId);
+            while (!q.isEmpty()) {
+                const QString cur = q.dequeue();
+                closure.push_back(cur);
+                for (const QString &nb : adj.value(cur))
+                    if (!seen.contains(nb)) {
+                        seen.insert(nb);
+                        q.enqueue(nb);
+                    }
+            }
+            bool risky = false;
+            for (const QString &cid : closure)
+                if (const IntNode *cn = nodeById.value(cid, nullptr); cn && nodeRisky(*cn)) {
+                    risky = true;
+                    break;
+                }
+            if (!risky)
+                continue;
+            // 闭包实体表 → SAT 文本片段（内核权威格式）
+            ENTITY_LIST lst;
+            for (const QString &cid : closure)
+                if (ENTITY *en = idToEnt.value(cid, nullptr))
+                    lst.add(en);
+            QString frag;
+            FILE *tf = tmpfile();
+            if (tf && api_save_entity_list(tf, TRUE, lst).ok()) {
+                fseek(tf, 0, SEEK_END);
+                long sz = ftell(tf);
+                rewind(tf);
+                if (sz > 0) {
+                    std::string buf((size_t)sz, '\0');
+                    if (fread(&buf[0], 1, (size_t)sz, tf) == (size_t)sz)
+                        frag = QString::fromLatin1(buf.data(), (int)buf.size());
+                }
+            }
+            if (tf)
+                fclose(tf);
+            if (frag.isEmpty()) {
+                fprintf(stderr, "[Collab] serialize: sat_fragment WRITE FAILED body=%s (component stays fine-grained)\n",
+                        bodyId.toUtf8().constData());
+                continue;
+            }
+            fragCount++;
+            for (auto &pr2 : orderedNodes) {
+                if (pr2.second.id == bodyId) {
+                    pr2.second.props["sat_fragment"] = frag;
+                    pr2.second.props["fallback"] = QStringLiteral("sat_fragment");
+                    break;
+                }
+            }
+            fprintf(stderr, "[Collab] serialize: sat_fragment fallback body=%s nodes=%zu bytes=%zu\n",
+                    bodyId.toUtf8().constData(), closure.size(), (size_t)frag.size());
+        }
+        if (fragCount == 0)
+            fprintf(stderr, "[Collab] serialize: no fallback needed (all components fine-grained)\n");
     }
 
     // 构建最终 JSON

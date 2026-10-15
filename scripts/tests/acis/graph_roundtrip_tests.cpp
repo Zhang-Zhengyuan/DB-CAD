@@ -14,6 +14,8 @@
 #include <alltop.hxx>
 #include <allsurf.hxx>
 #include <sweepapi.hxx>
+#include <swp_opts.hxx>
+#include <ellipse.hxx>
 #include <deprecated_masspr.hxx>
 #include <tensor.hxx>
 #include <heldef.hxx>
@@ -304,7 +306,7 @@ static void run_solid_group(BODY *orig, const char *tag, double volRelTol) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
-    int run_upto = (argc > 1) ? atoi(argv[1]) : 13;
+    int run_upto = (argc > 1) ? atoi(argv[1]) : 14;
     if (!initialize_base()) { printf("FAIL base\n"); return 1; }
     outcome r = api_start_modeller(0);
     if (!r.ok()) { printf("FAIL modeller\n"); return 1; }
@@ -824,6 +826,64 @@ int main(int argc, char **argv) {
             free_rt(rt, true);
             api_del_entity(skinned);
         }
+    }
+
+    if (++g_id > run_upto) goto finish;
+    printf("== G14 保真回退（sweepsur 组件 → SAT 片段；干净体保持细粒度）==\n");
+    {
+        // 正例：圆截面沿螺旋扫掠 → sweepsur（spl_sur::type()=67，过程曲面），
+        // NURBS 仅拟合（探针实证恢复体 mass_pr #111001）→ 必须触发组件级
+        // SAT 片段回退，恢复端整组件走内核读回。
+        helix *hg = new helix(SPAposition(0, 0, 0), SPAunit_vector(0, 0, 1), SPAvector(3, 0, 0), 1.5, TRUE,
+                              SPAinterval(0.0, 6 * 3.14159265358979));
+        EDGE *pathEd = nullptr;
+        check(api_make_edge_from_curve(hg, pathEd).ok(), "G14 helix path edge");
+        delete hg;
+        ellipse *circ = new ellipse(SPAposition(0, 0, 0), SPAunit_vector(1, 0, 0), SPAvector(0, 0.4, 0), 1.0);
+        EDGE *profEd = nullptr;
+        check(api_make_edge_from_curve(circ, profEd).ok(), "G14 circle profile edge");
+        delete circ;
+        sweep_options so;
+        BODY *tube = nullptr;
+        check(api_sweep_with_options(profEd, pathEd, &so, tube).ok(), "G14 api_sweep(circle→helix)");
+        ENTITY_LIST top(tube);
+        GraphRT rt;
+        graph_rt(top, 1, rt);
+        bool hasFrag = false;
+        for (const QJsonValue &v : nodesOf(rt.json)) {
+            QJsonObject n = v.toObject();
+            if (n.value("labels").toArray()[0].toString() == "body" &&
+                n.value("props").toObject().contains("sat_fragment"))
+                hasFrag = true;
+        }
+        check(hasFrag, "G14 sweepsur body carries sat_fragment");
+        check(rt.deserOk, "G14 deserialize ok (fragment path)");
+        if (rt.body) {
+            double vo = 0, vr = 0;
+            bool okO = body_volume(tube, vo), okR = body_volume(rt.body, vr);
+            check(okO && okR, "G14 tube mass_pr both succeed (fragment fixes #111001)");
+            compare_bodies(tube, rt.body, "G14 tube(fallback)", 1e-9);
+        }
+        free_rt(rt, true);
+        // 负例：干净方块不触发回退（保持实体级细粒度——回退是逐组件的）
+        BODY *blk = nullptr;
+        check(api_solid_block(SPAposition(0, 0, 0), SPAposition(5, 5, 5), blk).ok(), "G14 api_solid_block");
+        ENTITY_LIST top2(blk);
+        GraphRT rt2;
+        graph_rt(top2, 1, rt2);
+        bool frag2 = false;
+        for (const QJsonValue &v : nodesOf(rt2.json)) {
+            QJsonObject n = v.toObject();
+            if (n.value("labels").toArray()[0].toString() == "body" &&
+                n.value("props").toObject().contains("sat_fragment"))
+                frag2 = true;
+        }
+        check(!frag2, "G14 clean block has NO sat_fragment (stays fine-grained)");
+        check(rt2.deserOk, "G14 block deserialize ok (graph path)");
+        if (rt2.body)
+            compare_bodies(blk, rt2.body, "G14 block(fine-grained)", 1e-9);
+        free_rt(rt2, true);
+        api_del_entity(blk);
     }
 
 finish:

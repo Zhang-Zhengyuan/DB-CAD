@@ -113,6 +113,18 @@ static double total_edge_len(BODY *b) {
     return sum;
 }
 
+// 排序后的逐边长度多重集（定位往返中哪条边参数化偏了）
+static std::vector<double> sorted_edge_lens(BODY *b) {
+    std::vector<double> v;
+    ENTITY_LIST el;
+    api_get_edges(b, el);
+    for (ENTITY *e : el)
+        if (is_EDGE(e))
+            v.push_back(((EDGE *)e)->length());
+    std::sort(v.begin(), v.end());
+    return v;
+}
+
 // ---- 普查：api_get_entities 全量 + JSON 节点 label ----
 
 static void census_model(BODY *b, const char *tag, std::map<std::string, int> &all) {
@@ -216,6 +228,26 @@ int main() {
             const plane &pl = static_cast<const plane &>(((PLANE *)s)->equation());
             if (fabs(pl.root_point.z() + off.z() - WB[2]) < 1e-6 && fabs(pl.normal.z()) > 0.9) { topFace = (FACE *)f; break; }
         }
+        // 诊断：抽壳连接边（长≈壁厚 0.8）的参数状态
+        {
+            ENTITY_LIST el2;
+            api_get_edges(partA, el2);
+            for (ENTITY *e : el2) {
+                if (!is_EDGE(e)) continue;
+                EDGE *ed = (EDGE *)e;
+                if (ed->length() < 0.7 || ed->length() > 0.9) continue;
+                CURVE *g = ed->geometry();
+                SPAinterval eb = ed->get_param_range();
+                printf("    [dbg] connector edge len=%.3f geom=%s bound=[%g,%g]", ed->length(),
+                       g ? g->type_name() : "(null)", eb.start_pt(), eb.end_pt());
+                if (g) {
+                    const curve &eq = g->equation();
+                    SPAinterval cr = eq.param_range();
+                    printf(" curve-range=[%g,%g]", cr.start_pt(), cr.end_pt());
+                }
+                printf("\n");
+            }
+        }
         printf("  [A] hollow open face found = %d\n", topFace ? 1 : 0);
         outcome hr = api_hollow_body(partA, topFace ? 1 : 0, &topFace, 0.8);
         printf("  [A] api_hollow_body(thickness=0.8) %s\n", hr.ok() ? "OK" : "FAILED (continuing without shell)");
@@ -291,6 +323,23 @@ int main() {
     const char *tags[3] = {"A", "B", "C"};
     for (int i = 0; i < 3; ++i)
         if (parts[i]) census_model(parts[i], tags[i], kernel);
+    // 样条面子类普查（spl_sur::type()，决定回退白名单）
+    {
+        std::map<int, int> subAll;
+        for (int i = 0; i < 3; ++i) {
+            if (!parts[i]) continue;
+            ENTITY_LIST fl;
+            api_get_faces(parts[i], fl);
+            for (ENTITY *f : fl) {
+                if (!is_FACE(f)) continue;
+                SURFACE *s = ((FACE *)f)->geometry();
+                if (s && s->identity(2) == SPLINE_ID)
+                    subAll[(int)static_cast<const spline &>(((SPLINE *)s)->equation()).get_spl_sur().type()]++;
+            }
+        }
+        for (auto &kv : subAll)
+            printf("  [ALL] spline face subtype(type()=%d) x%d\n", kv.first, kv.second);
+    }
     printf("  == kernel entity census (type_name -> count) ==\n");
     for (auto &kv : kernel)
         printf("     %-24s %d\n", kv.first.c_str(), kv.second);
@@ -298,9 +347,74 @@ int main() {
     ENTITY_LIST top;
     for (int i = 0; i < 3; ++i)
         if (parts[i]) top.add(parts[i]);
+    // 诊断：A 与 C 的 straight 边方程原始数据（方向模长 = param_scale）
+    for (int pi : {0, 2}) {
+        if (!parts[pi]) continue;
+        ENTITY_LIST elA;
+        api_get_edges(parts[pi], elA);
+        int shown = 0;
+        for (ENTITY *e : elA) {
+            if (!is_EDGE(e) || shown >= 3) continue;
+            EDGE *ed = (EDGE *)e;
+            CURVE *g = ed->geometry();
+            if (!g || g->identity(2) != STRAIGHT_ID) continue;
+            const straight &se = static_cast<const straight &>(((STRAIGHT *)g)->equation());
+            SPAinterval cr = se.param_range(), eb = ed->get_param_range();
+            printf("    [dbg] %s straight: len=%.4f dir-mag=%.6f crange=[%g,%g](%s) ebound=[%g,%g]\n", tags[pi],
+                   ed->length(), se.direction.len(), cr.start_pt(), cr.end_pt(),
+                   cr.type() == interval_type::interval_finite ? "finite" : "inf", eb.start_pt(), eb.end_pt());
+            shown++;
+        }
+    }
+    // 诊断：A 的短边（<1.0）在序列化时刻的真实参数状态
+    if (partA) {
+        ENTITY_LIST elA;
+        api_get_edges(partA, elA);
+        for (ENTITY *e : elA) {
+            if (!is_EDGE(e)) continue;
+            EDGE *ed = (EDGE *)e;
+            double L = ed->length();
+            if (L > 1.0) continue;
+            CURVE *g = ed->geometry();
+            SPAinterval eb = ed->get_param_range();
+            printf("    [dbg] short edge len=%.6f geom=%s bound=[%g,%g]", L, g ? g->type_name() : "(null)",
+                   eb.start_pt(), eb.end_pt());
+                if (g) {
+                    const straight *st = nullptr;
+                    if (g->identity(2) == STRAIGHT_ID)
+                        st = (const straight *)&static_cast<const straight &>(((STRAIGHT *)g)->equation());
+                    if (st) {
+                        SPAposition s0 = ed->start() && ed->start()->geometry() ? ed->start()->geometry()->coords()
+                                                                               : SPAposition(9e9, 9e9, 9e9);
+                        SPAposition e0 = ed->end() && ed->end()->geometry() ? ed->end()->geometry()->coords()
+                                                                           : SPAposition(9e9, 9e9, 9e9);
+                        printf(" dir=(%g,%g,%g) root=(%g,%g,%g) start=(%.3f,%.3f,%.3f) end=(%.3f,%.3f,%.3f)",
+                               st->direction.x(), st->direction.y(), st->direction.z(), st->root_point.x(),
+                               st->root_point.y(), st->root_point.z(), s0.x(), s0.y(), s0.z(), e0.x(), e0.y(),
+                               e0.z());
+                    }
+                }
+            printf("\n");
+        }
+    }
     QHash<int, QString> uuids;
     for (int i = 0; i < 3; ++i) uuids.insert(i, QString("probe-uuid-%1").arg(i));
     QJsonObject json = serializeACISEntityGraph(uuids, top);
+    // 诊断：JSON 里 A 连接边（straight）的 range 字段
+    for (const QJsonValue &v : json.value("nodes").toArray()) {
+        QJsonObject n = v.toObject();
+        if (n.value("labels").toArray()[0].toString() != "edge")
+            continue;
+        QJsonObject g = n.value("props").toObject().value("geometry").toObject();
+        if (g.value("type").toString() != "straight")
+            continue;
+        QJsonArray r = g.value("range").toArray();
+        QJsonArray d = g.value("direction").toArray();
+        if (d.size() == 3 && d[2].toDouble() < -0.5) // 竖直向下 = 抽壳连接边
+            printf("    [dbg] json connector range=[%s] dir=[%s]\n",
+                   QString::fromUtf8(QJsonDocument(r).toJson(QJsonDocument::Compact)).toUtf8().constData(),
+                   QString::fromUtf8(QJsonDocument(d).toJson(QJsonDocument::Compact)).toUtf8().constData());
+    }
     std::map<std::string, int> jc = census_json(json);
     printf("  == JSON node label census ==\n");
     for (auto &kv : jc)
@@ -316,16 +430,30 @@ int main() {
     check(unkCurve == 0, "Q1 no unknown_curve in JSON (silent curve loss)");
 
     // ===================== Q1：JSON 细粒度往返保真 =====================
+    // 回退机制生效后：风险组件（A 属性 / B sweepsur）带 sat_fragment 走内核
+    // 读回，干净组件（C rulesur）保持纯实体级图重建。
+    int fragBodies = 0;
+    for (const QJsonValue &v : json.value("nodes").toArray()) {
+        QJsonObject n = v.toObject();
+        if (n.value("labels").toArray()[0].toString() == "body" &&
+            n.value("props").toObject().contains("sat_fragment"))
+            fragBodies++;
+    }
+    printf("  [Q1] bodies with sat_fragment = %d\n", fragBodies);
+    check(fragBodies == 1, "Q1 exactly B (sweepsur) got fallback; A/C stay fine-grained");
     DeserializedEntityGraph d;
     QString err;
     bool okD = deserializeACISEntityGraph(json, &d, &err);
     check(okD, "Q1 deserializeACISEntityGraph ok");
     if (okD && d.entities) {
-        std::vector<BODY *> rest;
-        for (ENTITY *e = d.entities->first(); e; e = d.entities->next())
-            if (is_BODY(e)) rest.push_back((BODY *)e);
-        printf("  [Q1] restored bodies = %d (expect 3)\n", (int)rest.size());
-        check(rest.size() == 3, "Q1 restored 3 bodies");
+        std::vector<BODY *> rest(3, nullptr);
+        for (int i = 0; i < 3; ++i) {
+            auto it = d.uuidToEntity.find(QString("probe-uuid-%1").arg(i));
+            if (it != d.uuidToEntity.end())
+                rest[i] = (BODY *)it.value();
+        }
+        printf("  [Q1] restored bodies by uuid = %d/3\n", (int)std::count_if(rest.begin(), rest.end(),
+                                                                             [](BODY *b) { return b != nullptr; }));
         for (int i = 0; i < 3 && i < (int)rest.size(); ++i) {
             BODY *o = parts[i], *r = rest[i];
             if (!o) continue;
@@ -348,6 +476,34 @@ int main() {
                 double vd;
                 int en = body_volume_err(r, vd);
                 printf("  [Q1-%s] restored mass_pr error #%d: %s\n", tags[i], en, find_err_mess(en));
+            }
+            // 逐边长度多重集：第一条不匹配的边就是参数化缺陷所在
+            if (o && r) {
+                std::vector<double> lvo = sorted_edge_lens(o), lvr = sorted_edge_lens(r);
+                for (size_t k = 0; k < lvo.size() && k < lvr.size(); ++k)
+                    if (fabs(lvo[k] - lvr[k]) > 1e-9) {
+                        printf("  [Q1-%s] first edge-length mismatch #%zu: %.9f vs %.9f (diff %.6f)\n", tags[i], k,
+                               lvr[k], lvo[k], lvr[k] - lvo[k]);
+                        break;
+                    }
+                if (i == 0) {
+                    // 恢复侧零长度 straight 边：顶点是否恢复正确（长度按顶点推导）
+                    ENTITY_LIST elr;
+                    api_get_edges(r, elr);
+                    for (ENTITY *e : elr) {
+                        if (!is_EDGE(e)) continue;
+                        EDGE *ed = (EDGE *)e;
+                        if (ed->length() > 1e-9) continue;
+                        CURVE *g = ed->geometry();
+                        SPAposition s = ed->start() && ed->start()->geometry() ? ed->start()->geometry()->coords()
+                                                                              : SPAposition(9e9, 9e9, 9e9);
+                        SPAposition en = ed->end() && ed->end()->geometry() ? ed->end()->geometry()->coords()
+                                                                          : SPAposition(9e9, 9e9, 9e9);
+                        printf("    [dbg] restored zero straight: start=(%.3f,%.3f,%.3f) end=(%.3f,%.3f,%.3f) "
+                               "geom=%s\n",
+                               s.x(), s.y(), s.z(), en.x(), en.y(), en.z(), g ? g->type_name() : "(null)");
+                    }
+                }
             }
             double mo[3], Mo[3], mr[3], Mr[3];
             body_box(o, mo, Mo); body_box(r, mr, Mr);

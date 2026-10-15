@@ -169,6 +169,32 @@ def test_subshell_matrix():
     assert {"subshell"} <= labels
 
 
+def test_sat_fragment_fallback_field():
+    """组件级 SAT 片段回退字段（保真 fail-safe）的后端契约。
+
+    序列化端对风险组件（过程曲面/ATTRIB/未知类型）在 body 节点挂
+    props.sat_fragment（内核 SAT 文本）+ props.fallback 标记。后端只做
+    透明传输：validate 通过、组件划分随 body 归属、hash 稳定、merge 整
+    组件替换语义不变。
+    """
+    graph = solid_graph(SURFACE_CASES["spline"])
+    frag = "Standard ACIS DB (sat) text ...\nbody $-1 ...\n"
+    for n in graph["nodes"]:
+        if n["labels"] == ["body"]:
+            n["props"]["sat_fragment"] = frag
+            n["props"]["fallback"] = "sat_fragment"
+    validate_graph(graph)
+    component = assert_single_component(graph)
+    body = next(n for n in component["nodes"] if n["labels"] == ["body"])
+    assert body["props"]["sat_fragment"] == frag
+    # 片段内容参与内容寻址：不同片段必须得到不同的组件哈希
+    graph2 = copy.deepcopy(graph)
+    next(n for n in graph2["nodes"] if n["labels"] == ["body"])["props"]["sat_fragment"] = frag + "changed"
+    h1 = graph_hash(graph)
+    h2 = graph_hash(graph2)
+    assert h1 != h2
+
+
 def test_pcurve_matrix():
     """pcurve（缺口5）：作为 coedge 几何挂载时的存储语义。"""
     graph = solid_graph(SURFACE_CASES["plane"])

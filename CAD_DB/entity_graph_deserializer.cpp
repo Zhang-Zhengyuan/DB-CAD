@@ -30,6 +30,7 @@
 #include <QJsonObject>
 #include <QStack>
 #include <QQueue>
+#include <QSet>
 #include <QDebug>
 #include <unordered_set>
 #include <cmath>
@@ -254,12 +255,11 @@ static curve *parseCurve(const QJsonObject &gj, QString *error) {
     if (type == "straight") {
         SPAposition root = parsePosition(gj.value("root_point").toArray());
         SPAvector direction = parseVector(gj.value("direction").toArray());
+        // SAT 惯例：直线恢复为无界（SAT 落盘 I I），边的参数区间由起终顶点推导。
+        // 不能按序列化区间 limit：get_param_range() 是归一化值（真实区间可能是
+        // [-0.8,0] 而序列化成 [0,0.8]），limit 后端顶点投影不进曲线 → 长度退化 0
+        //（探针实证：抽壳连接边 0.8 → 0）。
         straight *def = ACIS_NEW straight(root, normalise(direction), direction.len());
-        bool unbounded = true;
-        SPAinterval range = parseInterval(gj.value("range").toArray(), &unbounded);
-        if (!unbounded && !range.empty()) {
-            def->limit(range);
-        }
         STRAIGHT *st = ACIS_NEW STRAIGHT(*def);
         ACIS_DELETE def;
         return (curve *)st;
@@ -417,6 +417,80 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
     // id → ENTITY* 映射（用于后续阶段）
     QHash<QString, ENTITY *> idToEntity;
 
+    // =====================================================================
+    // SAT 片段回退（fail-safe 的恢复端）：body 节点带 props.sat_fragment 的
+    // 组件整体走内核 SAT 读回（100% 一致，含 ATTRIB/过程曲面定义/边参数化），
+    // 该组件全部节点跳过 pass1/2/3（内核已完整重建，避免二次 set_* 损坏）。
+    // 片段恢复失败则该组件回退普通图重建（不劣于现状）。
+    // =========================================================================
+    QSet<QString> fragmentIds;
+    int fragmentBodies = 0;
+    {
+        QHash<QString, QSet<QString>> adj;
+        for (const QJsonValue &rv : rels) {
+            const QJsonObject r = rv.toObject();
+            const QString s = r.value("start").toString(), t = r.value("end").toString();
+            adj[s].insert(t);
+            adj[t].insert(s);
+        }
+        for (const QJsonValue &nv : nodes) {
+            const QJsonObject node = nv.toObject();
+            const QJsonArray labels = node.value("labels").toArray();
+            if (labels.isEmpty() || labels[0].toString() != "body")
+                continue;
+            const QString id = node.value("id").toString();
+            const QString frag = node.value("props").toObject().value("sat_fragment").toString();
+            if (frag.isEmpty())
+                continue;
+            bool ok = false;
+            FILE *tf = tmpfile();
+            if (tf) {
+                const QByteArray bytes = frag.toLatin1();
+                if (fwrite(bytes.constData(), 1, (size_t)bytes.size(), tf) == (size_t)bytes.size()) {
+                    rewind(tf);
+                    ENTITY_LIST lst;
+                    if (api_restore_entity_list(tf, TRUE, lst).ok()) {
+                        BODY *rb = nullptr;
+                        for (ENTITY *en = lst.first(); en; en = lst.next())
+                            if (!rb && is_BODY(en))
+                                rb = (BODY *)en;
+                        if (rb) {
+                            for (ENTITY *en = lst.first(); en; en = lst.next())
+                                outResult->entities->add(en);
+                            outResult->uuidToEntity[id] = (void *)rb;
+                            fragmentBodies++;
+                            // 组件闭包全部跳过图重建
+                            QSet<QString> seen{id};
+                            QQueue<QString> q;
+                            q.enqueue(id);
+                            while (!q.isEmpty()) {
+                                const QString cur = q.dequeue();
+                                fragmentIds.insert(cur);
+                                for (const QString &nb : adj.value(cur))
+                                    if (!seen.contains(nb)) {
+                                        seen.insert(nb);
+                                        q.enqueue(nb);
+                                    }
+                            }
+                            fprintf(stderr,
+                                    "[Collab] deserialize: sat_fragment restored body=%s entities=%d (skips graph rebuild)\n",
+                                    id.toUtf8().constData(), lst.count());
+                            ok = true;
+                        } else {
+                            // 无 BODY（异常片段）：清掉已恢复实体，回退图重建
+                            for (ENTITY *en = lst.first(); en; en = lst.next())
+                                api_del_entity(en);
+                        }
+                    }
+                }
+                fclose(tf);
+            }
+            if (!ok)
+                qWarning() << "[Collab] deserialize: sat_fragment restore FAILED for body" << id
+                           << "- falling back to graph rebuild";
+        }
+    }
+
     // 统计
     int createdBody = 0, createdLump = 0, createdShell = 0, createdWire = 0, createdFace = 0, createdLoop = 0,
         createdCoedge = 0, createdSubshell = 0, createdEdge = 0, createdVertex = 0, createdTransform = 0, skippedUnknown = 0;
@@ -435,6 +509,9 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 continue;
             }
             const QString label = labels[0].toString();
+
+            if (fragmentIds.contains(id))
+                continue; // SAT 片段组件：内核已整组件重建，pass1/2/3 全跳过
 
             ENTITY *ent = nullptr;
 
@@ -580,7 +657,7 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                        << "shell=" << createdShell << "wire=" << createdWire << "face=" << createdFace
                        << "loop=" << createdLoop << "coedge=" << createdCoedge << "edge=" << createdEdge
                        << "vertex=" << createdVertex << "transform=" << createdTransform << "skipped=" << skippedUnknown
-                       << "idToEntity.size=" << idToEntity.size();
+                       << "satFragments=" << fragmentBodies << "idToEntity.size=" << idToEntity.size();
     fprintf(stderr, "[Collab] deserialize: PASS 2 (geometry attrs)\n");
 
     // pcurve 装配所需的拓扑反查：coedge → owner loop → face（宿主曲面）
