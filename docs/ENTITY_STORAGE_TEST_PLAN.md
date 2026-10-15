@@ -90,9 +90,9 @@ Bolt 栈（栈 D）按规范覆盖完整，但存在实测 bug：
 | G5 | 圆环 | torus | PASS |
 | G6 | 六棱柱扫掠 | spline 面 + intcurve 边 | **PASS**（体积修复；侧面实为 plane，spline 断言待 G 场景） |
 | G7 | 布尔并/差/交 | intcurve + pcurve + 混合几何 | **全 PASS**（含原负体积 subtract） |
-| G8 | 螺旋线线框 | **helix** | 红：缺口 3（仅类型名，结构恢复正常） |
-| G9 | 变换体 | transform 节点 | 红：变换叠加语义错误（几何与 transform 节点双重应用） |
-| G10 | 圆角 | blend 产生 cone/sphere 面 + **tangent 边** | 红：**缺口 2 实锤**——圆角 48 条边为 `@7 tangent`（intcurve），面载荷已全对 |
+| G8/G8b | 螺旋线线框 + NURBS 边 | **helix / intcurve** | **PASS**（第二轮：helix 8 字段载荷；G8b 冒烟 NURBS→INTCURVE 往返全绿） |
+| G9 | 变换体 | transform 节点 | 体积 ✓；红（bbox）：ACIS TRANSFORM 实体的分量编码与求值语义不一致（探针实锤 entity action ≠ body eval），方案=按作用值（4 点映射）序列化 |
+| G10 | 圆角 | blend：cone/sphere 面 + tangent 边 | 红（mass_pr）：边实为解析曲线（24 椭圆弧+24 直线，载荷/凸性均已往返 ✓），剩弧边参数区间语义；面载荷全对 |
 | G11 | subshell 探测 | **subshell** | SKIP：测试模型未触发 ACIS 分层 |
 | G12 | 直线线框 | wire 拓扑 + straight 边 | PASS |
 
@@ -107,7 +107,7 @@ Bolt 栈（栈 D）按规范覆盖完整，但存在实测 bug：
 
 **待修**（按优先级）：
 
-1. **intcurve + int_cur 载荷**（缺口 2）——G10 圆角被此阻塞：48 条 `@7 tangent` 边无几何。
+1. ~~intcurve 载荷~~（缺口 2 已实现，G8b 验证）；剩余：G10 圆角弧边参数区间语义与 G9 变换按作用值序列化。
 2. **transform 叠加语义**（G9）：几何与 transform 节点双重应用。
 3. **helix 载荷**（缺口 3，G8）、spline/spl_sur（缺口 1）、subshell（缺口 4）、pcurve/par_cur（缺口 5）。
 4. 观察项：SAT 文本含 `-0` vs `0` 的负零伪差异（数值等价，SHA 字本比对需归一化）；mass_pr 对混合面时向 stdout 打印分面积分（ACIS 行为）。
