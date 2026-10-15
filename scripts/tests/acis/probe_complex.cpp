@@ -37,6 +37,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QFile>
 
 #include "entity_graph_serializer.h"
 
@@ -400,6 +401,16 @@ int main() {
     QHash<int, QString> uuids;
     for (int i = 0; i < 3; ++i) uuids.insert(i, QString("probe-uuid-%1").arg(i));
     QJsonObject json = serializeACISEntityGraph(uuids, top);
+    // E2E 夹具导出：真实 C++ 序列化输出（含 sat_fragment 回退字段），供后端
+    // 集成测试直连 Neo4j 往返（test_collab_e2e_cpp_graph.py）
+    if (getenv("PROBE_DUMP_JSON")) {
+        QFile jf("probe_graph.json");
+        if (jf.open(QIODevice::WriteOnly)) {
+            jf.write(QJsonDocument(json).toJson(QJsonDocument::Compact));
+            jf.close();
+            printf("  [dump] probe_graph.json written (%lld bytes)\n", (long long)jf.size());
+        }
+    }
     // 诊断：JSON 里 A 连接边（straight）的 range 字段
     for (const QJsonValue &v : json.value("nodes").toArray()) {
         QJsonObject n = v.toObject();

@@ -30,25 +30,35 @@ ACIS ENTITY (C++)
 | C. Neo4jEntityStore（legacy） | `backend/app/neo4j_entity_store.py` | 全局 local_id 实体节点 | 直接实体图接口 |
 | D. C++ Bolt 直写栈 | `CAD_DB/storage/access_graph_save/restore.cpp` | 实体级节点（apoc） | Bridge / 直连 Neo4j |
 
-### 1.2 实体覆盖矩阵（现状）
+### 1.2 实体覆盖矩阵（终态，2026-10-15 全绿）
 
-对照存储模型设计规范（参考文献·张家荣论文第 3 章：10 类拓扑实体 + 5 类几何实体 + 3 类样条数据节点 + part/generation 版次链），Mode1 JSON 栈现状：
+对照存储模型设计规范（参考文献·张家荣论文第 3 章：10 类拓扑实体 + 5 类几何实体
++ 3 类样条数据节点 + part/generation 版次链）+ 本期全部验收测试映射：
 
-| 实体 | 规范要点 | 序列化 | 反序列化 | 状态 |
-|---|---|---|---|---|
-| body/lump/shell/wire/face/loop/coedge/edge/vertex | 40 类边 + 6 属性 | ✅ | ✅ | 完整 |
-| transform | affine/translation/scaling 等 | ✅ | ✅ | 完整 |
-| plane / sphere / torus / cone 面 | 定长属性，内嵌 face.props.geometry | ✅ | ✅ | 完整 |
-| straight / ellipse 曲线 | 定长属性，内嵌 edge.props.geometry | ✅ | ✅ | 完整 |
-| point (APOINT) | vertex 内嵌 position | —（嵌入） | ✅ 兼容 | 可接受 |
-| **spline 面 + spl_sur 数据** | 15 字段 NURBS | ⚠️ 仅类型名（serializer.cpp:167） | ❌ parseSurface 拒绝（deserializer.cpp:156） | **缺口 1** |
-| **intcurve + int_cur 数据** | 30+ 字段交线 | ⚠️ 仅类型名（:147） | ❌（:190） | **缺口 2** |
-| **helix 曲线** | 8 字段 | ⚠️ 仅类型名（:145） | ❌（:190） | **缺口 3** |
-| **subshell** | 5 边三向自引用树 | ❌ 完全跳过（:485 默认分支） | ❌ 未知 label 跳过 | **缺口 4** |
-| **pcurve + par_cur 数据** | 4 属性 + 2 出边 | ❌ 完全跳过 | ❌ | **缺口 5** |
+| 实体/组件 | 论文要求 | 实现 | 验收测试 |
+|---|---|---|---|
+| body/lump/shell/wire/face/loop/coedge/edge/vertex | 10 类拓扑 | ✅ 独立节点 + 40 类边 + 6 属性 | L1 G1–G17 四重比对；L2 矩阵；L3 SHA；E2E |
+| subshell | 三向树 | ✅ 5 边 + 面直挂 | G11 合成接线；L2 subshell_matrix |
+| transform | — | ✅ 分量逐字往返 | G9 |
+| APOINT | — | ✅ vertex 内嵌 position | 各组 bbox/topo |
+| plane/sphere/torus/cone | 5 类曲面(4 解析) | ✅ 定长属性内嵌 | G1–G5/G10/G15；L2/L3 逐面 SHA |
+| spline 面 + spl_sur | NURBS 数据节点 | ✅ 15 字段 + 子类码 | G13/G16；L1.5 控制点逐行比对 |
+| ├ exactsur(37/60) | — | ✅ NURBS 精确 | G8b/G13 |
+| ├ rulesur(63) | — | ✅ NURBS 精确（无公开构造器，DLL 内部） | G13 四重精确 + L1.5 折叠 |
+| ├ rot_spl_sur(44) | — | ✅ **过程真重建**（母线+轴） | G16 采样零偏差 |
+| └ sweepsur(67) 等 | — | ⚠️ NURBS 仅拟合 → 组件 SAT 片段兜底 | G14 负结果存证（3.1e-4） |
+| straight/ellipse/helix | 曲线 | ✅ 定长/8 字段载荷 | G1/G3/G8/G12/G17；L1.5 区间语义 |
+| intcurve + int_cur | 交线数据节点 | ✅ bs3 NURBS + **定义曲面 surf1/surf2** + safe_range | G8b/G15（SAT 逐记录一致） |
+| pcurve + par_cur | 参数曲线 | ✅ bs2 载荷内嵌 coedge | G13（质量积分依赖）；L2 |
+| edge convexity/区间 | — | ✅ | G10；L1.5 straight 区间根因修复 |
+| loop classification | — | ✅ 往返保真 | L1.5 |
+| ATTRIB 属性链 | — | ⚠️ 检测（含几何实体盲区）→ 片段兜底 | G17 普查（无独立人群） |
+| 组件级 SAT 片段回退 | —（超越论文） | ✅ fail-safe | G14 正负例；E2E 字段无损 |
+| 版次链（generation） | part/generation | ✅ JsonGraphVersion/PREVIOUS_JSON_VERSION | L3 版本链断言 |
 
-**后果**：任何含圆角、扫掠、自由曲面或布尔交线的完整工程图，几何数据在客户端序列化阶段就丢失；反序列化对 spline/helix/intcurve 直接拒绝。"打开不了"的首要原因在这里，而不是 Neo4j。
-
+**全链路闭环（超越论文）**：C++ 序列化（L1/L1.5 四重+SAT 判据）→ 后端协议
+（L2）→ 真 Neo4j（L3 SHA）→ 读回 C++ 重建（L1）；E2E 测试用真实 C++ 输出
+夹具（452KB 三部件复杂工图）直连 Neo4j 往返，投影 SHA 逐字节一致。
 Bolt 栈（栈 D）按规范覆盖完整，但存在实测 bug：
 
 1. `rot_spl_sur` 缺 `break` 穿透到 exactcur 默认分支 → 数据静默损坏（`access_save_surfaces.cpp:9-19`）
