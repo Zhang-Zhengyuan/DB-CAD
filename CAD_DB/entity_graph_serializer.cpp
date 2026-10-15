@@ -24,6 +24,7 @@
 #include <acis/include/allcurve.hxx>
 #include <acis/include/allsurf.hxx>
 #include <acis/include/exct_spl.hxx>
+#include <acis/include/rot_spl.hxx>
 #include <acis/include/sps3crtn.hxx>
 #include <acis/include/sp3crtn.hxx>
 #include <acis/include/pcudef.hxx>
@@ -303,6 +304,80 @@ inline QJsonObject splSurToJson(const spl_sur &ss) {    QJsonObject o;
     return o;
 }
 
+// 曲线方程载荷（R2b：rot_spl_sur 旋转面母线）。schema 与 edge.geometry 一致；
+// straight 方向携带 param_scale（模长），样条母线走 bs3 NURBS。
+inline QJsonObject curveEquationToJson(const curve *c) {
+    QJsonObject o;
+    if (!c)
+        return o;
+    switch (c->type()) {
+    case straight_type: {
+        const straight *s = (const straight *)c;
+        o["type"] = "straight";
+        o["root_point"] = posToJson(s->root_point);
+        o["direction"] = vecToJson(SPAvector(s->direction.x() * s->param_scale, s->direction.y() * s->param_scale,
+                                             s->direction.z() * s->param_scale));
+        break;
+    }
+    case ellipse_type: {
+        const ellipse *e = (const ellipse *)c;
+        o["type"] = "ellipse";
+        o["centre"] = posToJson(e->centre);
+        o["normal"] = unitVecToJson(e->normal);
+        o["major_axis"] = vecToJson(e->major_axis);
+        o["radius_ratio"] = e->radius_ratio;
+        break;
+    }
+    case intcurve_type: {
+        const intcurve *ic = (const intcurve *)c;
+        bs3_curve bs = ic->cur();
+        if (bs) {
+            o["type"] = "intcurve";
+            int dim = 0, deg = 0, numCtrl = 0, numKnots = 0;
+            logical rat = 0;
+            SPAposition *ctrl = nullptr;
+            double *weights = nullptr, *knots = nullptr;
+            bs3_curve_to_array(bs, dim, deg, rat, numCtrl, ctrl, weights, numKnots, knots);
+            o["rational"] = (int)rat;
+            o["degree"] = deg;
+            o["form"] = bs3_curve_periodic(bs) ? 2 : (bs3_curve_closed(bs) ? 1 : 0);
+            std::vector<double> ks;
+            for (int i = 0; i < numKnots; ++i) {
+                double v = knots[i];
+                if (ks.empty() || v != ks[ks.size() - 2]) {
+                    ks.push_back(v);
+                    ks.push_back(1);
+                } else {
+                    ks.back()++;
+                }
+            }
+            if (ks.size() >= 4) {
+                ks[1]--;
+                ks.back()--;
+            }
+            QJsonArray kn;
+            for (double v : ks)
+                kn.append(v);
+            o["knots"] = kn;
+            QJsonArray ct;
+            for (int i = 0; i < numCtrl; ++i) {
+                ct.append(ctrl[i].x());
+                ct.append(ctrl[i].y());
+                ct.append(ctrl[i].z());
+                if (rat)
+                    ct.append(weights[i]);
+            }
+            o["ctrlpts"] = ct;
+            o["fitol"] = ic->fitol();
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    return o;
+}
+
 // 方程级曲面载荷（R1：intcurve 定义曲面 surf1/surf2）。
 // schema 与 face.geometry 一致（无 uv_range/subtype）；未知类型返回空对象。
 inline QJsonObject surfaceEquationToJson(const surface *s) {
@@ -571,6 +646,24 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     // 44=rot_spl_sur 等为过程曲面（NURBS 仅拟合）→ 组件回退判据
                     gj["reversed"] = (int)gem.reversed();
                     gj["spl_subtype"] = ss.type();
+                    // R2b：旋转面过程载荷（rot_spl_sur 无 law、数据成员公开）——
+                    // 母线 + 轴 + u/v 参数区间，恢复端按 rot_spl_sur 精确重建（非 NURBS 拟合）
+                    if (ss.type() == 44 && ((const rot_spl_sur &)ss).cur) {
+                        const rot_spl_sur *rs = (const rot_spl_sur *)&ss;
+                        QJsonObject rp = curveEquationToJson(rs->cur);
+                        if (!rp.isEmpty()) {
+                            gj["rot_profile"] = rp;
+                            gj["rot_axis_root"] = posToJson(rs->axis_root);
+                            gj["rot_axis_dir"] = unitVecToJson(rs->axis_dir);
+                            SPApar_box pr = ss.param_range();
+                            QJsonArray uv;
+                            uv.append(pr.u_range().start_pt());
+                            uv.append(pr.u_range().end_pt());
+                            uv.append(pr.v_range().start_pt());
+                            uv.append(pr.v_range().end_pt());
+                            gj["rot_uv"] = uv;
+                        }
+                    }
                     break;
                 }
                 default:
@@ -1130,7 +1223,9 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                 }
                 if (t == "spline") {
                     const int sub = g.value("spl_subtype").toInt(-1);
-                    if (sub != 37 && sub != 60 && sub != 63) {
+                    // 44=rot_spl_sur 已支持过程载荷精确重建（R2b）；67=sweepsur
+                    // 实测 NURBS 偏差 3.1e-4 且三律非空无公共构造 API → 片段为终态
+                    if (sub != 37 && sub != 60 && sub != 63 && sub != 44) {
                         fprintf(stderr, "[Collab] serialize: fallback-trigger procedural-spline subtype=%d id=%s\n", sub,
                                 n.id.toUtf8().constData());
                         return true;

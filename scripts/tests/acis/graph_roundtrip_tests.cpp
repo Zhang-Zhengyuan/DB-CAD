@@ -15,6 +15,8 @@
 #include <allsurf.hxx>
 #include <sweepapi.hxx>
 #include <swp_opts.hxx>
+#include <swp_spl.hxx>
+#include <rot_spl.hxx>
 #include <ellipse.hxx>
 #include <deprecated_masspr.hxx>
 #include <tensor.hxx>
@@ -307,7 +309,7 @@ static void run_solid_group(BODY *orig, const char *tag, double volRelTol) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
-    int run_upto = (argc > 1) ? atoi(argv[1]) : 15;
+    int run_upto = (argc > 1) ? atoi(argv[1]) : 16;
     if (!initialize_base()) { printf("FAIL base\n"); return 1; }
     outcome r = api_start_modeller(0);
     if (!r.ok()) { printf("FAIL modeller\n"); return 1; }
@@ -866,6 +868,102 @@ int main(int argc, char **argv) {
             compare_bodies(tube, rt.body, "G14 tube(fallback)", 1e-9);
         }
         free_rt(rt, true);
+        // [R2] 纯图路径保真实验：剥离 sat_fragment 后重建，隔离测 sweepsur 的
+        // NURBS 残余偏差（该体当前因 ATTRIB(make_tangent) 触发片段）。
+        {
+            QJsonObject jf = rt.json;
+            QJsonArray na = jf["nodes"].toArray();
+            for (int k = 0; k < na.size(); ++k) {
+                QJsonObject nn = na[k].toObject();
+                if (nn["labels"].toArray()[0].toString() == "body") {
+                    QJsonObject pp = nn["props"].toObject();
+                    pp.remove("sat_fragment");
+                    pp.remove("fallback");
+                    nn["props"] = pp;
+                    na.replace(k, nn);
+                }
+            }
+            jf["nodes"] = na;
+            DeserializedEntityGraph dg;
+            QString eg;
+            bool okG = deserializeACISEntityGraph(jf, &dg, &eg);
+            check(okG, "G14 [R2] graph-path deserialize ok");
+            BODY *tube2 = nullptr;
+            if (okG && dg.entities)
+                for (ENTITY *e = dg.entities->first(); e; e = dg.entities->next())
+                    if (is_BODY(e)) {
+                        tube2 = (BODY *)e;
+                        break;
+                    }
+            if (tube2) {
+                double vo2 = 0, vr2 = 0;
+                bool o2 = body_volume(tube, vo2), r2v = body_volume(tube2, vr2);
+                // 负结果存证（R2 实验 2026-10-15）：sweepsur 的 NURBS 仅为粗逼近
+                // （采样偏差 3.1e-4），且 rail/draft/scale 三律非空、law 家族无公共
+                // 构造 API → 片段回退是 67 的正确终态，不得无真重建而白名单化。
+                printf("    [R2] graph-path mass_pr orig=%d rest=%d (negative result: NURBS not authoritative)\n",
+                       (int)o2, (int)r2v);
+                double lo2 = 0, lr2 = 0;
+                {
+                    ENTITY_LIST e1, e2;
+                    api_get_edges(tube, e1);
+                    api_get_edges(tube2, e2);
+                    for (ENTITY *e : e1)
+                        if (is_EDGE(e))
+                            lo2 += ((EDGE *)e)->length();
+                    for (ENTITY *e : e2)
+                        if (is_EDGE(e))
+                            lr2 += ((EDGE *)e)->length();
+                }
+                check(fabs(lo2 - lr2) / (fabs(lo2) > 1 ? fabs(lo2) : 1) < 1e-6, "G14 [R2] graph-path edge length");
+                // 曲面采样偏差（10x10 参数网格）：过程面 vs NURBS 重建面
+                auto sweepEq = [](BODY *b) -> const spl_sur * {
+                    ENTITY_LIST fl;
+                    api_get_faces(b, fl);
+                    for (ENTITY *f : fl) {
+                        if (!is_FACE(f))
+                            continue;
+                        SURFACE *g = ((FACE *)f)->geometry();
+                        if (g && g->identity(2) == SPLINE_ID)
+                            return &static_cast<const spline &>(((SPLINE *)g)->equation()).get_spl_sur();
+                    }
+                    return nullptr;
+                };
+                const spl_sur *so = sweepEq(tube), *sr2 = sweepEq(tube2);
+                char buf2[128];
+                if (so && sr2) {
+                    // [R2 探测] 原件 sweepsur 的律状态（rail/draft/scale 是否为空）
+                    if (so->type() == 67) {
+                        const sweep_spl_sur *sw = (const sweep_spl_sur *)so;
+                        law *rl = sw->get_rail(), *df = sw->get_draft(), *sc = sw->get_scale();
+                        printf("    [R2-probe] orig sweepsur rail=%d draft=%d scale=%d path-type=%d planar=%d\n",
+                               rl ? 1 : 0, df ? 1 : 0, sc ? 1 : 0, (int)sw->get_path_type(),
+                               (int)sw->planar_profile());
+                    }
+                    SPApar_box pb = so->param_range();
+                    SPAinterval ur = pb.u_range(), vrr = pb.v_range();
+                    double maxDev = 0;
+                    for (int i = 0; i <= 10; ++i)
+                        for (int j = 0; j <= 10; ++j) {
+                            double u = ur.start_pt() + (ur.end_pt() - ur.start_pt()) * i / 10;
+                            double v = vrr.start_pt() + (vrr.end_pt() - vrr.start_pt()) * j / 10;
+                            SPAposition p1 = so->eval_position(SPApar_pos(u, v));
+                            SPAposition p2 = sr2->eval_position(SPApar_pos(u, v));
+                            maxDev = fmax(maxDev, (p1 - p2).len());
+                        }
+                    snprintf(buf2, sizeof(buf2), "G14 [R2] surface sampling max dev=%.3e in (1e-6, 1e-3) "
+                                                 "(NURBS is approximation; fragment is terminal for 67)",
+                             maxDev);
+                    check(maxDev > 1e-6 && maxDev < 1e-3, buf2);
+                } else {
+                    check(false, "G14 [R2] spline face equations found");
+                }
+                for (ENTITY *e = dg.entities->first(); e; e = dg.entities->next())
+                    if (is_BODY(e))
+                        api_del_entity((BODY *)e);
+                delete dg.entities;
+            }
+        }
         // 负例：干净方块不触发回退（保持实体级细粒度——回退是逐组件的）
         BODY *blk = nullptr;
         check(api_solid_block(SPAposition(0, 0, 0), SPAposition(5, 5, 5), blk).ok(), "G14 api_solid_block");
@@ -965,6 +1063,107 @@ int main(int argc, char **argv) {
         }
         free_rt(rt, true);
         api_del_entity(res);
+    }
+
+    if (++g_id > run_upto) goto finish;
+    printf("== G16 旋转面过程载荷（rot_spl_sur 合成面：母线+轴精确重建，R2b）==\n");
+    {
+        // 两例母线：straight（载荷定长）/ ellipse（非平凡曲线载荷）。
+        // 旋转 v 区间取 (0, π/2)，轴 z。rot_spl_sur 数据成员公开（axis_root/
+        // axis_dir/cur），无 law → 过程重建在公开 API 下完全可达（与 sweepsur 对比）。
+        const char *profTags[2] = {"straight", "ellipse"};
+        for (int pi = 0; pi < 2; ++pi) {
+            curve *prof = nullptr;
+            if (pi == 0) {
+                straight *st = ACIS_NEW straight(SPAposition(3, 0, 0), SPAunit_vector(0, 0, 1));
+                st->limit(SPAinterval(0, 4));
+                prof = st;
+            } else {
+                ellipse *el = ACIS_NEW ellipse(SPAposition(4, 0, 2), SPAunit_vector(0, 1, 0), SPAvector(0, 0, 1), 0.5);
+                prof = el;
+            }
+            rot_spl_sur *rs = ACIS_NEW rot_spl_sur(*prof, SPAposition(0, 0, 0), SPAunit_vector(0, 0, 1),
+                                              prof->param_range(), SPAinterval(0, 1.5707963267948966));
+            ACIS_DELETE prof;
+            // 参考副本（供采样比对）：SPLINE(*spEq) 深拷贝后 spEq/rs 生命周期独立
+            rot_spl_sur *rsRef = ACIS_NEW rot_spl_sur(*rs);
+            spline *spEq = ACIS_NEW spline(rs);
+            SPLINE *spEnt = ACIS_NEW SPLINE(*spEq);
+            ACIS_DELETE spEq;
+            FACE *f = ACIS_NEW FACE(nullptr, nullptr, spEnt, 0);
+            // 最小体链接线（反序列化以 body 计数判成功；loopless face 合法）
+            BODY *fb = nullptr;
+            api_body(fb);
+            LUMP *lp = ACIS_NEW LUMP();
+            SHELL *sh = ACIS_NEW SHELL();
+            fb->set_lump(lp);
+            lp->set_body(fb);
+            lp->set_shell(sh);
+            sh->set_lump(lp);
+            sh->set_face(f);
+            f->set_shell(sh);
+            ENTITY_LIST top(fb);
+            GraphRT rt;
+            graph_rt(top, 1, rt);
+            char buf[128];
+            QJsonObject sj = find_geometry(rt.json, "spline");
+            bool hasRot = !sj.isEmpty() && sj.contains("rot_profile") && sj.contains("rot_axis_root") &&
+                          sj.contains("rot_uv") && sj.value("spl_subtype").toInt(-1) == 44;
+            snprintf(buf, sizeof(buf), "G16(%s) json rot payload (subtype 44)", profTags[pi]);
+            check(hasRot, buf);
+            bool frag = false;
+            for (const QJsonValue &v : nodesOf(rt.json)) {
+                QJsonObject n = v.toObject();
+                if (n.value("props").toObject().contains("sat_fragment"))
+                    frag = true;
+            }
+            snprintf(buf, sizeof(buf), "G16(%s) no sat_fragment (44 fine-grained)", profTags[pi]);
+            check(!frag, buf);
+            check(rt.deserOk, "G16 deserialize ok");
+            // 恢复面：子类保持 rot_spl_sur（44，非 exactsur NURBS）
+            if (rt.body) {
+                FACE *rf = nullptr;
+                {
+                    ENTITY_LIST flr;
+                    api_get_faces(rt.body, flr);
+                    if (flr.count() > 0)
+                        rf = (FACE *)flr[0];
+                }
+                if (rf && rf->geometry() && rf->geometry()->identity(2) == SPLINE_ID) {
+                    const spl_sur &ss =
+                        static_cast<const spline &>(((SPLINE *)rf->geometry())->equation()).get_spl_sur();
+                    snprintf(buf, sizeof(buf), "G16(%s) restored subtype=44 (got %d)", profTags[pi], ss.type());
+                    check(ss.type() == 44, buf);
+                    // 逐点采样（10x10 参数网格，域取自原件）：过程重建应零偏差
+                    const rot_spl_sur *r1 = (const rot_spl_sur *)&ss;
+                    SPApar_box prr = rsRef->param_range();
+                    double u0 = prr.u_range().start_pt(), u1 = prr.u_range().end_pt();
+                    double v0 = prr.v_range().start_pt(), v1 = prr.v_range().end_pt();
+                    double maxDev = 0;
+                    for (int i = 0; i <= 10; ++i)
+                        for (int j = 0; j <= 10; ++j) {
+                            double u = u0 + (u1 - u0) * i / 10;
+                            double v = v0 + (v1 - v0) * j / 10;
+                            SPAposition p1 = rsRef->eval_position(SPApar_pos(u, v));
+                            SPAposition p2 = r1->eval_position(SPApar_pos(u, v));
+                            maxDev = fmax(maxDev, (p1 - p2).len());
+                        }
+                    snprintf(buf, sizeof(buf), "G16(%s) sampling max dev=%.3e (exact rebuild)", profTags[pi],
+                             maxDev);
+                    check(maxDev < 1e-9, buf);
+                    // 轴往返
+                    snprintf(buf, sizeof(buf), "G16(%s) axis_root/axis_dir roundtrip", profTags[pi]);
+                    check((r1->axis_root - rsRef->axis_root).len() < 1e-12 &&
+                              (r1->axis_dir - rsRef->axis_dir).len() < 1e-12,
+                          buf);
+                    // rsRef 由 use-count 管理（析构私有），测试作用域内不释放
+                } else {
+                    check(false, "G16 restored face has spline surface");
+                }
+            }
+            free_rt(rt, true);
+            api_del_entity(fb);
+        }
     }
 
 finish:

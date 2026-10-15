@@ -11,6 +11,7 @@
 #include <acis/include/sp3crtn.hxx>
 #include <acis/include/sps3srtn.hxx>
 #include <acis/include/exct_spl.hxx>
+#include <acis/include/rot_spl.hxx>
 #include <acis/include/pcudef.hxx>
 #include <acis/include/pcurve.hxx>
 #include <acis/include/sps2crtn.hxx>
@@ -113,6 +114,8 @@ static SPAinterval parseInterval(const QJsonArray &arr, bool *unbounded = nullpt
 
 // 辅助：从 JSON 对象解析 surface，返回 APISESSION 分配的指针
 // 注意：此函数应始终在 API_BEGIN/API_END 事务块内调用
+static curve *parseCurve(const QJsonObject &gj, QString *error);
+
 static surface *parseSurface(const QJsonObject &gj, QString *error) {
     const QString type = gj.value("type").toString();
     if (type == "plane") {
@@ -178,6 +181,42 @@ static surface *parseSurface(const QJsonObject &gj, QString *error) {
         ACIS_DELETE def;
         return (surface *)cn;
     } else if (type == "spline") {
+        // R2b：旋转面过程载荷优先——精确重建 rot_spl_sur（非 NURBS 拟合）。
+        // 载荷同时含 NURBS 字段（序列化端总是发射），rot 字段存在即走过程路径；
+        // 母线重建失败落回 NURBS 路径（不劣于现状）。
+        {
+            QJsonObject rp = gj.value("rot_profile").toObject();
+            if (!rp.isEmpty() && gj.contains("rot_axis_root")) {
+                QString perr;
+                // parseCurve 返回实体指针（本文件约定），构造器需要 equation() 方程
+                CURVE *profEnt = (CURVE *)parseCurve(rp, &perr);
+                if (profEnt) {
+                    const curve &profEq = profEnt->equation();
+                    SPAposition axis_root = parsePosition(gj.value("rot_axis_root").toArray());
+                    SPAunit_vector axis_dir = parseUnitVector(gj.value("rot_axis_dir").toArray());
+                    QJsonArray ruv = gj.value("rot_uv").toArray();
+                    SPAinterval up = ruv.size() >= 4 ? SPAinterval(ruv[0].toDouble(), ruv[1].toDouble())
+                                                     : SpaAcis::NullObj::get_interval();
+                    SPAinterval vp = ruv.size() >= 4 ? SPAinterval(ruv[2].toDouble(), ruv[3].toDouble())
+                                                     : SpaAcis::NullObj::get_interval();
+                    rot_spl_sur *rs = ACIS_NEW rot_spl_sur(profEq, axis_root, axis_dir, up, vp);
+                    api_del_entity(profEnt); // 构造器拷贝母线（G16 采样偏差断言守门）
+                    spline *def = ACIS_NEW spline(rs);
+                    if (gj.value("reversed").toInt(0) != 0) {
+                        *def = -(*def);
+                    }
+                    SPApar_box uvRot = parseParBox(gj.value("uv_range").toArray());
+                    if (!uvRot.u_range().empty() && !uvRot.v_range().empty()) {
+                        def->limit(uvRot);
+                    }
+                    SPLINE *sp = ACIS_NEW SPLINE(*def);
+                    ACIS_DELETE def;
+                    return (surface *)sp;
+                }
+                qWarning() << "[Collab] deserialize rot_profile rebuild failed:" << perr
+                           << "- falling back to NURBS path";
+            }
+        }
         QJsonArray ctrlArr = gj.value("ctrlpts").toArray();
         if (ctrlArr.size() < 12) {
             if (error)

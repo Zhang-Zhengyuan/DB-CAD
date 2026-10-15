@@ -34,7 +34,7 @@
 | # | 触发条件 | 根因 | 细化方案 | 验收 | 状态 |
 |---|---|---|---|---|---|
 | R1 | `nobs3`：intcurve 无 bs3 载荷；恢复体 `null_surface` 支撑面 | 交线定义（surf1/surf2 两张曲面 + 参数域）未入载荷 | 定义载荷：嵌入 surf1/surf2 曲面载荷 + safe_range，恢复端带定义构造 | 两圆柱相交等真交线模型：恢复体 intcurve 定义面非空、SAT 无 `null_surface`、边长/体积精确 | **已完成（G15）** |
-| R2 | `spl_subtype ∉ {37,60,63}`（67 sweepsur / 44 rot / offset） | 过程曲面 NURBS 仅拟合 | 轨道律载荷（轨道曲线引用 + 扫掠向量/轴），需协议 v2 支持"几何引用几何"（载荷级→节点级） | 螺旋扫掠管不走片段，四重精确 + 恢复体 mass_pr 通过 | 待 |
+| R2 | `spl_subtype ∉ {37,60,63,44}`（67 sweepsur / 其余过程子类） | 过程曲面 NURBS 仅拟合 | **44 rot_spl_sur 已真重建（G16，采样偏差 0）**；67 sweepsur 实测 NURBS 偏差 3.1e-4 且 rail/draft/scale 三律非空、law 家族无公共构造 API → **片段回退为 67 的终态**（G14 负结果断言守门，防止无真重建而白名单化） | G16：44 往返采样零偏差、子类保持、无片段；G14：67 片段路径四重精确 | **已完成（分两半：44 细化 + 67 终态存证）** |
 | R3 | ATTRIB 属性链存在 | 拓扑 BFS 结构性看不到属性实体 | 先通用检测告警（已有）；再逐类载荷（DCAD 产生的属性优先）；外来私有属性本质只有 SAT 能兜底 | 带属性模型不走片段且属性保留 | 待 |
 | R4 | `unknown_surface` / `unknown_curve` | 新实体类型 | 按需扩展类型分支 | 类型不触发回退 | 待 |
 
@@ -44,6 +44,20 @@
 - 恢复端（`entity_graph_deserializer.cpp`）：`parseSurfaceEquation`（plane/sphere/torus/cone/exact_spl_sur→spline 包装）+ intcurve 构造器带定义曲面（构造器复制曲面，临时方程对象构造后删除）。
 - G15 实证（两平行偏置圆柱相交 → 四次交线）：定义恢复后**体积/边长/包围盒全部精确**（修复前体积 rel 2.7e-5）；恢复体 SAT 与原件逐记录一致（surfintcur + 双 cone 定义 + nullbs——参数 2D 曲线原件本就为空，属忠实复刻）。
 - 附带收益：`splSurToJson` 共享助手消除了 face.geometry 与定义曲面的 NURBS 提取重复。
+
+### R2 实现记录（2026-10-15）
+
+**实验定策（G14 [R2] 块，负结果存证）**：剥离片段后纯图路径重建螺旋扫掠管——
+- 曲面采样（10×10 参数网格）最大偏差 **3.089e-04**（管半径 0.4，即 0.08% 量级）：sweepsur 的 bs3 只是粗逼近，**NURBS 不是权威表示**；
+- 原件 `get_rail()/get_draft()/get_scale()` **三律全部非空**（默认扫掠也带律对象），而 law 家族（SIMPLE_RAIL/DCUR 等）无公共构造/解析入口；
+- 结论：**片段回退是 67（sweepsur）的终态**，G14 固化区间断言（dev ∈ (1e-6, 1e-3)）防止未来无真重建而白名单化。
+
+**rot_spl_sur（44）真重建（G16）**：与 sweepsur 不同，`rot_spl_sur` 无 law 且数据成员公开（`axis_root`/`axis_dir`/`cur` 母线指针），公开构造器 `(curve, axis_pt, axis_dir, uparam, vparam)` 完全可序列化：
+- 序列化：spline 载荷新增 `rot_profile`（母线方程载荷：straight/ellipse/intcurve-bs3，经 `curveEquationToJson`）+ `rot_axis_root/rot_axis_dir` + `rot_uv`；
+- 恢复：`parseSurface` spline 分支 rot 字段优先（母线经 parseCurve 实体→`equation()` 方程），失败落回 NURBS 路径；
+- G16 实证（straight/ellipse 双母线合成面）：恢复子类保持 44（非 exactsur 退化）、**采样偏差 0.000e+00**、轴往返精确、无片段触发；
+- 触发集白名单 {37,60,63} → **{37,60,63,44}**（净收缩）。
+
 
 
 配套工程：
