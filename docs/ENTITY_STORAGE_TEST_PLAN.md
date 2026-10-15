@@ -89,7 +89,7 @@ Bolt 栈（栈 D）按规范覆盖完整，但存在实测 bug：
 | G10 | 圆角 | blend：cone/sphere 面 + tangent 边 + **凸性** | **PASS**（关键修复：边区间取曲线自身参数空间 + 周期整圆不设限 + convexity 序列化） |
 | G11 | subshell 探测 | **subshell** | SKIP（建模未触发；序列化/反序列化已实现，语义由 L2 锁定） |
 | G12 | 直线线框 | wire + straight（**param_scale 入方向模长**） | **PASS** |
-| G13 | 扭转六边形放样 | **spline 面（spl_sur NURBS）** | 载荷/拓扑/边长/包围盒 **PASS**；体积 **KNOWN-LIMIT**：原生面为内部 rulesur（SAT ref 共享），公开 API 只能重建 exactsur，质量积分器拒绝——几何已精确等价 |
+| G13 | 扭转六边形放样 | **spline 面（spl_sur NURBS）+ pcurve** | **全 PASS（含体积 505.070416 精确一致）**。原 KNOWN-LIMIT 经隔离实验证伪：rulesur 子类不背锅，真因是 pcurve 装配把 SURFACE 实体当方程对象解引用（类型混淆 → mass_pr 求值 AV）；隔离实验（原体仅换 exactsur 面）mass_pr 通过 + 错误码 #110007 实锤 spline 面积分需要 pcurve |
 
 ### 3.1 Phase 1 发现与第一轮修复（已完成 ✅）
 

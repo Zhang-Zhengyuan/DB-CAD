@@ -23,6 +23,9 @@
 #include <curve.hxx>
 #include <straight.hxx>
 #include <skinapi.hxx>
+#include <sps3srtn.hxx>
+#include <exct_spl.hxx>
+#include "spldef.hxx"
 #include <pcurve.hxx>
 #include <cstdio>
 #include <cstdlib>
@@ -731,31 +734,6 @@ int main(int argc, char **argv) {
             char buf[160];
             snprintf(buf, sizeof(buf), "G13 model spline faces=%d/%d", nSpl, fl.count());
             check(nSpl >= 1, buf);
-            {
-                ENTITY_LIST all;
-                api_get_entities(skinned, all, -1, -1);
-                int nCo = 0, nCoGeom = 0, nPcur = 0;
-                const char *firstGeomName = nullptr;
-                int firstId1 = 0, firstId2 = 0;
-                for (ENTITY *e : all) {
-                    if (is_COEDGE(e)) {
-                        nCo++;
-                        if (((COEDGE *)e)->geometry() != nullptr) {
-                            nCoGeom++;
-                            if (((COEDGE *)e)->geometry()->identity(2) == PCURVE_ID)
-                                nPcur++;
-                            if (firstGeomName == nullptr) {
-                                firstGeomName = ((COEDGE *)e)->geometry()->type_name();
-                                firstId1 = ((COEDGE *)e)->geometry()->identity(1);
-                                firstId2 = ((COEDGE *)e)->identity(2) == 2 ? ((COEDGE *)e)->geometry()->identity(2) : ((COEDGE *)e)->geometry()->identity(2);
-                            }
-                        }
-                    }
-                }
-                printf("    [probe] coedges=%d with-geometry=%d pcurve=%d first-geom=%s id1=%d id2=%d' + BSN + '", nCo, nCoGeom,
-                       nPcur, firstGeomName, firstId1, firstId2);
-            }
-
             ENTITY_LIST top(skinned);
             GraphRT rt;
             graph_rt(top, 1, rt);
@@ -770,38 +748,11 @@ int main(int argc, char **argv) {
                 check(sp.value("ctrlpts").toArray().size() >= 12, buf);
             }
             check(rt.deserOk, "G13 deserialize ok");
+            // 体积已恢复为真实检查：原 KNOWN-LIMIT（怀疑 exactsur 子类被积分器
+            // 拒绝）经隔离实验证伪——真实根因是 pcurve 装配把 SURFACE 实体当
+            // 方程对象解引用（类型混淆 → mass_pr 求值 AV），修复后 exactsur 完全可用。
             if (rt.body) {
-                // 已知内核限制（KNOWN-LIMIT）：skin 原生面为内部 rulesur（SAT 以 ref
-                // 共享），公开 API 只能重建为 exactsur；边长/包围盒/拓扑已精确一致，
-                // 但质量积分器拒绝 exactsur 重建体（mass_pr 报错而非数值偏差）。
-                // 体积断言留待 rulesur 等价路径（Phase B 服务端表示或内核接口更新）。
-                TopoCounts co13 = topo_counts(skinned), cr13 = topo_counts(rt.body);
-                char b13[160];
-                snprintf(b13, sizeof(b13), "G13 topo f%d/%d e%d/%d v%d/%d", cr13.faces, co13.faces, cr13.edges,
-                         co13.edges, cr13.verts, co13.verts);
-                check(cr13.faces == co13.faces && cr13.edges == co13.edges && cr13.verts == co13.verts, b13);
-                double omn13[3], omx13[3], rmn13[3], rmx13[3];
-                if (body_box(skinned, omn13, omx13) && body_box(rt.body, rmn13, rmx13)) {
-                    double d13 = 0;
-                    for (int i = 0; i < 3; ++i) {
-                        d13 = std::max(d13, std::fabs(omn13[i] - rmn13[i]));
-                        d13 = std::max(d13, std::fabs(omx13[i] - rmx13[i]));
-                    }
-                    snprintf(b13, sizeof(b13), "G13 bbox delta %.3e", d13);
-                    check(d13 < 1e-6, b13);
-                }
-                auto len13 = [](BODY *b) {
-                    double sum = 0;
-                    ENTITY_LIST el;
-                    api_get_edges(b, el);
-                    for (ENTITY *e : el)
-                        if (is_EDGE(e))
-                            sum += ((EDGE *)e)->length();
-                    return sum;
-                };
-                double l13o = len13(skinned), l13r = len13(rt.body);
-                snprintf(b13, sizeof(b13), "G13 edge length %.6f vs %.6f", l13r, l13o);
-                check(std::fabs(l13o - l13r) / std::max(1.0, std::fabs(l13o)) < 1e-6, b13);
+                compare_bodies(skinned, rt.body, "G13 skin-solid", 1e-5);
             }
             free_rt(rt, true);
             api_del_entity(skinned);

@@ -754,7 +754,9 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                             deg, (logical)(rat ? 1 : 0), (logical)(form >= 1 ? 1 : 0),
                             (logical)(form == 2 ? 1 : 0), numCtrl, c2.data(), rat ? w2.data() : nullptr, DBL_MIN,
                             (int)kv.size(), kv.data(), DBL_MIN);
-                        pcurve *pdef = ACIS_NEW pcurve(bs2, 1.0, *hostSurf);
+                        // hostSurf 实为 SURFACE 实体指针（parseSurface 返回实体），必须取 equation()
+                        // 作方程对象传入——直接解引用实体是类型混淆，求值即 AV（G13 教训）
+                        pcurve *pdef = ACIS_NEW pcurve(bs2, 1.0, ((SURFACE *)hostSurf)->equation());
                         PCURVE *pent = ACIS_NEW PCURVE(*pdef);
                         ACIS_DELETE pdef;
                         co->set_geometry(pent);
@@ -766,7 +768,7 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
             }
             if (!done && edgeCurve != nullptr) {
                 API_BEGIN;
-                pcurve *pdef = ACIS_NEW pcurve(edgeCurve->equation(), *hostSurf, SPAresabs);
+                pcurve *pdef = ACIS_NEW pcurve(edgeCurve->equation(), ((SURFACE *)hostSurf)->equation(), SPAresabs);
                 PCURVE *pent = ACIS_NEW PCURVE(*pdef);
                 ACIS_DELETE pdef;
                 co->set_geometry(pent);
@@ -774,8 +776,7 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 fittedPcurve++;
             }
         }
-        fprintf(stderr, "[Collab] deserialize: pcurve assembly payload=%d fitted=%d' + BSN + '", payloadPcurve,
-                fittedPcurve);
+        fprintf(stderr, "[Collab] deserialize: pcurve assembly payload=%d fitted=%d\n", payloadPcurve, fittedPcurve);
     }
     fprintf(stderr, "[Collab] deserializeACISEntityGraph: PASS 3 (topology links)\n");
     // =========================================================================
