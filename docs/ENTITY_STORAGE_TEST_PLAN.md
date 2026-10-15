@@ -107,7 +107,25 @@ Bolt 栈（栈 D）按规范覆盖完整，但存在实测 bug：
 3. **helix 载荷**（缺口 3，G8）、spline/spl_sur（缺口 1）、subshell（缺口 4）、pcurve/par_cur（缺口 5）。
 4. 观察项：SAT 文本含 `-0` vs `0` 的负零伪差异（数值等价，SHA 字本比对需归一化）；mass_pr 对混合面时向 stdout 打印分面积分（ACIS 行为）。
 
+## 3.2 复杂工图探针（2026-10-15，Q1/Q2 实测取证）
+
+`scripts/tests/acis/probe_complex.cpp`（`build_probe_complex.bat` 构建）：布尔挖孔 + 12 边圆角 + 顶开抽壳（A）、圆截面沿螺旋扫掠薄壁管（B）、扭转六边形放样（C）三部件场景，全实体普查 + JSON 往返四重比对 + SAT 双向比对。结论：
+
+| 路径 | 结果 |
+|---|---|
+| **SAT（粗粒度）** | 三部件体积全部精确一致；save→restore→save 仅 32 个实体的第 2 字段（内核 history 指针 id）规范化为 -1，几何字节相同。**任意复杂图可完整正确储存** |
+| **JSON（细粒度）** | 拓扑计数 100% 一致（254 coedge/127 edge/68 face 全同）；A、C 体积/边长/包围盒全精确。**未知类型静默丢失 = 0** |
+
+JSON 路径在复杂图上暴露的三个真实缺口（均已被探针固化，SAT 普查为证）：
+
+1. **过程曲面再拟合**：B 管的 sweepsur（spl_sur::type()=67）带轨道律（SAT `SIMPLE_RAIL(VEC,DCUR)`）；JSON 重建为 exact NURBS 后边长精确、但恢复体 mass_pr 报 #111001——接缝 intcurve 用空支撑面重建（SAT `nullbs`/`null_surface` 记录为证）。rulesur（放样/直纹）NURBS 分母精确（C 体积 9.3e-16）。
+2. **ATTRIB 属性实体丢失**：圆角留下 `integer_attrib-name_attrib-gen-attrib … make_tangent`；拓扑 BFS 遍历结构性看不到属性链（`api_get_entities(-1,-1)` 普查亦无 attrib 行）。
+3. **边长微差**：A（圆角+抽壳）边总长 rel 4.3e-3（体积/包围盒精确）——某条边参数化往返偏差，复现件在 `probe_complex.cpp`。
+
+另证：该内核布尔/构造结果体为"原点居中几何 + TRANSFORM"结构（原始顶点坐标与世界系差一个平移），探针用 `body_coord_offset` 校正后选边/选面。
+
 ### L2：后端契约与图逻辑（无 DB，pytest，进 CI）
+
 
 新增 `backend/tests/test_json_graph_entity_matrix.py`：按 `entity_graph_serializer.h` 文档契约手工构造与 C++ 输出一致的每实体 JSON 夹具，逐实体验证：
 
