@@ -371,11 +371,16 @@ static curve *parseCurve(const QJsonObject &gj, QString *error) {
     if (type == "straight") {
         SPAposition root = parsePosition(gj.value("root_point").toArray());
         SPAvector direction = parseVector(gj.value("direction").toArray());
-        // SAT 惯例：直线恢复为无界（SAT 落盘 I I），边的参数区间由起终顶点推导。
-        // 不能按序列化区间 limit：get_param_range() 是归一化值（真实区间可能是
-        // [-0.8,0] 而序列化成 [0,0.8]），limit 后端顶点投影不进曲线 → 长度退化 0
-        //（探针实证：抽壳连接边 0.8 → 0）。
+        // 区间语义（L1.5 修正）：序列化端发【顶点实际参数】（保方向，
+        // straightRangeToJson），恢复端按其 limit——受限直线（如圆角边
+        // F -7..7）落盘形态与原件一致；无界直线（range 无限）不 limit，
+        // 边区间由顶点推导（SAT I I 惯例）。
         straight *def = ACIS_NEW straight(root, normalise(direction), direction.len());
+        bool unbounded = true;
+        SPAinterval range = parseInterval(gj.value("range").toArray(), &unbounded);
+        if (!unbounded && !range.empty()) {
+            def->limit(range);
+        }
         STRAIGHT *st = ACIS_NEW STRAIGHT(*def);
         ACIS_DELETE def;
         return (curve *)st;
@@ -542,6 +547,11 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
 
     // id → ENTITY* 映射（用于后续阶段）
     QHash<QString, ENTITY *> idToEntity;
+    // loop 分类（loop_type）：pass1 建 LOOP 时无 face/拓扑，set_classification
+    // 依赖 lt_surf_ptr——推迟到拓扑链接完成后应用（信任序列化字段，
+    // 不重算：api_loop_type 对部分结构会过度推断 periphery）
+    QHash<QString, int> pendingLoopClass;
+
 
     // =====================================================================
     // SAT 片段回退（fail-safe 的恢复端）：body 节点带 props.sat_fragment 的
@@ -691,6 +701,9 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 loop = ACIS_NEW LOOP();
                 API_END;
                 ent = (ENTITY *)loop;
+                const QJsonObject lpProps = node.value("props").toObject();
+                if (lpProps.contains("classification"))
+                    pendingLoopClass.insert(id, lpProps.value("classification").toInt(0));
                 createdLoop++;
             } else if (label == "coedge") {
                 COEDGE *co = nullptr;
@@ -1148,6 +1161,33 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
             }
         }
         API_END;
+    }
+
+    // loop 分类（loop_type）：SAT 落盘字段（periphery/hole/…）。按序列化
+    // 字段应用（拓扑已完备，set_classification 的 lt_surf_ptr 可在位）；
+    // 序列化端 get_classification() 与内核保存路径同源。
+    if (!pendingLoopClass.isEmpty()) {
+        int loopClassSet = 0;
+        API_BEGIN;
+        for (auto pcIt = pendingLoopClass.begin(); pcIt != pendingLoopClass.end(); ++pcIt) {
+            ENTITY *le = idToEntity.value(pcIt.key(), nullptr);
+            if (le && is_LOOP(le)) {
+                loop_type want = (loop_type)pcIt.value();
+                if (((LOOP *)le)->get_classification() != want) {
+                    LOOP *lp = (LOOP *)le;
+                    lp->set_classification(want);
+                    if (lp->get_classification() != want) {
+                        qWarning() << "[Collab] loop classification did not stick, id=" << pcIt.key();
+                    } else {
+                        loopClassSet++;
+                    }
+                }
+            }
+        }
+        API_END;
+        if (loopClassSet)
+            fprintf(stderr, "[Collab] deserialize: loop classification restored x%d\n", loopClassSet);
+        pendingLoopClass.clear();
     }
 
     qDebug().noquote() << "[Collab] deserialize: pass3 done. linkSuccess=" << linkSuccess << "linkFail=" << linkFail

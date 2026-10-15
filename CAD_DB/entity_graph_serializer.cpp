@@ -116,6 +116,23 @@ inline QJsonArray intervalToJson(const SPAinterval &iv) {
 // 一致）；仅当曲线区间无限（如未受限 straight）时回退到 EDGE param_bound。
 // 教训（G10 圆角弧边）：EDGE bound 与曲线参数空间存在错位（弧线曲线区间
 // [-π/2,0] 而 bound 为 [0,π/2]），直接用 bound 限制曲线会取错弧段。
+// straight 边的【曲线区间】载荷：取曲线方程自身 param_range()——它是
+// limit 状态的权威视图（无界 → I I；受限 → F lo hi），与 SAT 落盘字段
+// 一一对应（L1.5 实测：内核对方块棱留 I I、对圆角体直线限 F -7..7，
+// 两种形态都真实存在，照抄即可）。边自身的区间由恢复端顶点推导，
+// 不经此字段（get_param_range() 的归一化丢方向问题因此无关紧要）。
+inline QJsonArray straightRangeToJson(const straight &st, const EDGE *edge) {
+    SPAinterval r = st.param_range();
+    if (!r.empty() && r.type() == interval_type::interval_finite)
+        return intervalToJson(r);
+    QJsonArray unbounded;
+    unbounded.append(1.0);
+    unbounded.append(0.0);
+    unbounded.append(1.0);
+    unbounded.append(0.0);
+    return unbounded;
+}
+
 inline QJsonArray curveRangeToJson(const curve &crv, const EDGE *edge) {
     // 退化边（起终点重合、几何长度为 0，如抽壳/锥顶产生的接缝边）：曲线自身
     // 参数区间可能是完整跨度（恢复后长度会凭空变大），必须原样使用 EDGE 自身
@@ -684,6 +701,9 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
             node.label = "loop";
             node.id = genNodeId(e, LOOP_ID);
             node.props["entity_type"] = "loop";
+            // L1.5 发现：loop 分类（periphery/hole/unknown…）是 SAT 落盘字段，
+            // 缺省 unknown 导致恢复件 SAT 与原件出现 per↔unk 伪差异
+            node.props["classification"] = (int)loop->get_classification();
             orderedNodes.push_back({ePtr, node});
             ptrToId[ePtr] = node.id;
             enqueueChild((ENTITY *)loop->next());
@@ -809,7 +829,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     gj["direction"] = vecToJson(SPAvector(gem.direction.x() * gem.param_scale,
                                                           gem.direction.y() * gem.param_scale,
                                                           gem.direction.z() * gem.param_scale));
-                    gj["range"] = curveRangeToJson(gem, edge);
+                    gj["range"] = straightRangeToJson(gem, edge);
                     break;
                 }
                 case ELLIPSE_ID: {
