@@ -309,7 +309,7 @@ static void run_solid_group(BODY *orig, const char *tag, double volRelTol) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
-    int run_upto = (argc > 1) ? atoi(argv[1]) : 16;
+    int run_upto = (argc > 1) ? atoi(argv[1]) : 17;
     if (!initialize_base()) { printf("FAIL base\n"); return 1; }
     outcome r = api_start_modeller(0);
     if (!r.ok()) { printf("FAIL modeller\n"); return 1; }
@@ -1164,6 +1164,67 @@ int main(int argc, char **argv) {
             free_rt(rt, true);
             api_del_entity(fb);
         }
+    }
+
+    if (++g_id > run_upto) goto finish;
+    printf("== G17 拉伸体属性普查（extrude：解析面 × ATTRIB 触发重叠调查，R3）==\n");
+    {
+        // 矩形线框沿 z 拉伸 8 —— 最常见 CAD 操作。若拉伸留属性而面全解析，
+        // 则属性触发独立于 67 触发存在（R3 有独立增量）；否则完全重叠。
+        SPAposition rect[5] = {SPAposition(2, 1, 0), SPAposition(6, 1, 0), SPAposition(6, 4, 0),
+                               SPAposition(2, 4, 0), SPAposition(2, 1, 0)};
+        BODY *rw = nullptr;
+        check(api_make_wire((BODY *)nullptr, 5, rect, rw).ok(), "G17 api_make_wire(rect)");
+        BODY *ext = nullptr;
+        sweep_options so;
+        EDGE *pathEd = nullptr;
+        {
+            straight *p = ACIS_NEW straight(SPAposition(4, 2.5, 0), SPAunit_vector(0, 0, 1));
+            p->limit(SPAinterval(0, 8)); // 有界路径（无限直线路径扫掠会失败）
+            api_make_edge_from_curve(p, pathEd);
+            ACIS_DELETE p;
+        }
+        check(api_sweep_with_options(rw, pathEd, &so, ext).ok(), "G17 api_sweep(rect→straight)");
+        if (!ext)
+            ext = rw; // 线框轮廓时结果可能留在 profile body 里
+        // 属性普查：遍历全实体 attrib() 链 + 面型普查
+        {
+            std::map<std::string, int> ac;
+            int withAttrib = 0;
+            std::map<int, int> fsub;
+            ENTITY_LIST al;
+            api_get_entities(ext, al, -1, -1);
+            for (ENTITY *e : al) {
+                if (is_FACE(e) && ((FACE *)e)->geometry())
+                    fsub[(int)((FACE *)e)->geometry()->identity(2)]++;
+                ATTRIB *a = e->attrib();
+                if (a)
+                    withAttrib++;
+                for (; a; a = a->next())
+                    ac[a->type_name()]++;
+            }
+            printf("    [G17] entities=%d with-attrib-entities=%d\n", al.count(), withAttrib);
+            for (auto &kv : ac)
+                printf("    [G17] attrib %-28s x%d\n", kv.first.c_str(), kv.second);
+            for (auto &kv : fsub)
+                printf("    [G17] face identity(2)=%d x%d\n", kv.first, kv.second);
+        }
+        ENTITY_LIST top(ext);
+        GraphRT rt;
+        graph_rt(top, 1, rt);
+        bool frag = false;
+        for (const QJsonValue &v : nodesOf(rt.json)) {
+            QJsonObject n = v.toObject();
+            if (n.value("labels").toArray()[0].toString() == "body" &&
+                n.value("props").toObject().contains("sat_fragment"))
+                frag = true;
+        }
+        printf("    [G17] sat_fragment triggered = %d\n", (int)frag);
+        check(rt.deserOk, "G17 deserialize ok");
+        if (rt.body)
+            compare_bodies(ext, rt.body, "G17 extrude", 1e-9);
+        free_rt(rt, true);
+        api_del_entity(ext);
     }
 
 finish:

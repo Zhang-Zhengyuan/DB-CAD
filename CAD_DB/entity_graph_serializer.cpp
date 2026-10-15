@@ -1246,12 +1246,32 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     return true;
                 }
             }
-            // ATTRIB 属性链存在性（即使载荷层不支持也要保真，不能静默丢）
+            // ATTRIB 属性链存在性（即使载荷层不支持也要保真，不能静默丢）。
+            // 同时检查几何方程实体（SURFACE/CURVE/PCURVE/APOINT）上的属性——
+            // 它们不是图节点，拓扑遍历结构性不可见（R3 检测加固）。
             ENTITY *en = idToEnt.value(n.id, nullptr);
-            if (en && en->attrib() != nullptr) {
-                fprintf(stderr, "[Collab] serialize: fallback-trigger attrib-chain id=%s label=%s\n",
-                        n.id.toUtf8().constData(), n.label.toUtf8().constData());
-                return true;
+            if (en) {
+                if (en->attrib() != nullptr) {
+                    fprintf(stderr, "[Collab] serialize: fallback-trigger attrib-chain id=%s label=%s\n",
+                            n.id.toUtf8().constData(), n.label.toUtf8().constData());
+                    return true;
+                }
+                ENTITY *geoms[4] = {nullptr, nullptr, nullptr, nullptr};
+                if (n.label == "face" && ((FACE *)en)->geometry())
+                    geoms[0] = (ENTITY *)((FACE *)en)->geometry();
+                if (n.label == "edge" && ((EDGE *)en)->geometry())
+                    geoms[1] = (ENTITY *)((EDGE *)en)->geometry();
+                if (n.label == "coedge" && ((COEDGE *)en)->geometry())
+                    geoms[2] = (ENTITY *)((COEDGE *)en)->geometry();
+                if (n.label == "vertex" && ((VERTEX *)en)->geometry())
+                    geoms[3] = (ENTITY *)((VERTEX *)en)->geometry();
+                for (ENTITY *g2 : geoms) {
+                    if (g2 && g2->attrib() != nullptr) {
+                        fprintf(stderr, "[Collab] serialize: fallback-trigger attrib-on-geometry id=%s label=%s\n",
+                                n.id.toUtf8().constData(), n.label.toUtf8().constData());
+                        return true;
+                    }
+                }
             }
             return false;
         };
