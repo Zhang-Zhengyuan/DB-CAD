@@ -219,6 +219,146 @@ QString surfaceTypeName(ENTITY *e) {
     }
 }
 
+// QJsonObject 合并（Qt6 无 unite；逐键 insert，不覆盖已有键）
+inline void mergeJsonInto(QJsonObject &dst, const QJsonObject &src) {
+    for (auto it = src.begin(); it != src.end(); ++it)
+        dst.insert(it.key(), it.value());
+}
+
+// SURFACE 实体 → 方程对象（int_int_cur 定义源的宿主面提取；未知类型返回 null）
+inline const surface *surfaceEntityEquation(SURFACE *se) {
+    if (!se)
+        return nullptr;
+    switch (se->identity(2)) {
+    case PLANE_ID:
+        return &((PLANE *)se)->equation();
+    case SPHERE_ID:
+        return &((SPHERE *)se)->equation();
+    case TORUS_ID:
+        return &((TORUS *)se)->equation();
+    case CONE_ID:
+        return &((CONE *)se)->equation();
+    case SPLINE_ID:
+        return &((SPLINE *)se)->equation();
+    default:
+        return nullptr;
+    }
+}
+
+// spl_sur NURBS 载荷（face.geometry 与 intcurve 定义曲面共用布局；不含 type/uv_range）
+inline QJsonObject splSurToJson(const spl_sur &ss) {    QJsonObject o;
+    int dim = 0, form_u = 0, form_v = 0, pole_u = 0, pole_v = 0, num_u = 0, num_v = 0;
+    int degree_u = 0, num_uknots = 0, degree_v = 0, num_vknots = 0;
+    logical rational_u = 0, rational_v = 0;
+    SPAposition *ctrlpts = nullptr;
+    double *weights = nullptr, *uknots = nullptr, *vknots = nullptr;
+    bs3_surface_to_array(ss.sur(), dim, rational_u, rational_v, form_u, form_v, pole_u, pole_v, num_u, num_v,
+                         ctrlpts, weights, degree_u, num_uknots, uknots, degree_v, num_vknots, vknots, 0);
+    auto rleEncode = [](const double *knots, int n) {
+        std::vector<double> ks;
+        for (int i = 0; i < n; ++i) {
+            double v = knots[i];
+            if (ks.empty() || v != ks[ks.size() - 2]) {
+                ks.push_back(v);
+                ks.push_back(1);
+            } else {
+                ks.back()++;
+            }
+        }
+        if (ks.size() >= 4) {
+            ks[1]--;
+            ks.back()--;
+        }
+        QJsonArray arr;
+        for (double v : ks)
+            arr.append(v);
+        return arr;
+    };
+    o["rational_u"] = (int)rational_u;
+    o["rational_v"] = (int)rational_v;
+    o["degree_u"] = degree_u;
+    o["degree_v"] = degree_v;
+    o["form_u"] = form_u;
+    o["form_v"] = form_v;
+    o["u_singularity"] = pole_u;
+    o["v_singularity"] = pole_v;
+    o["num_u"] = num_u;
+    o["num_v"] = num_v;
+    o["uknots"] = rleEncode(uknots, num_uknots);
+    o["vknots"] = rleEncode(vknots, num_vknots);
+    bool rational = rational_u || rational_v;
+    QJsonArray ctrlArr;
+    for (int i = 0; i < num_v; ++i) {
+        for (int j = 0; j < num_u; ++j) {
+            SPAposition *pt = ctrlpts + j * num_v + i;
+            ctrlArr.append(pt->x());
+            ctrlArr.append(pt->y());
+            ctrlArr.append(pt->z());
+            if (rational)
+                ctrlArr.append(weights[j * num_v + i]);
+        }
+    }
+    o["ctrlpts"] = ctrlArr;
+    o["fitol"] = ss.fitol();
+    return o;
+}
+
+// 方程级曲面载荷（R1：intcurve 定义曲面 surf1/surf2）。
+// schema 与 face.geometry 一致（无 uv_range/subtype）；未知类型返回空对象。
+inline QJsonObject surfaceEquationToJson(const surface *s) {
+    QJsonObject o;
+    if (!s)
+        return o;
+    switch (s->type()) {
+    case plane_type: {
+        const plane *p = (const plane *)s;
+        o["type"] = "plane";
+        o["root_point"] = posToJson(p->root_point);
+        o["normal"] = unitVecToJson(p->normal);
+        o["u_deriv"] = vecToJson(p->u_deriv);
+        break;
+    }
+    case sphere_type: {
+        const sphere *p = (const sphere *)s;
+        o["type"] = "sphere";
+        o["centre"] = posToJson(p->centre);
+        o["radius"] = p->radius;
+        break;
+    }
+    case torus_type: {
+        const torus *p = (const torus *)s;
+        o["type"] = "torus";
+        o["centre"] = posToJson(p->centre);
+        o["normal"] = unitVecToJson(p->normal);
+        o["major_radius"] = p->major_radius;
+        o["minor_radius"] = p->minor_radius;
+        break;
+    }
+    case cone_type: {
+        const cone *p = (const cone *)s;
+        ellipse base = p->base;
+        o["type"] = "cone";
+        o["base_centre"] = posToJson(base.centre);
+        o["base_normal"] = unitVecToJson(base.normal);
+        o["base_major_axis"] = vecToJson(base.major_axis);
+        o["base_radius_ratio"] = base.radius_ratio;
+        o["sine_angle"] = p->sine_angle;
+        o["cosine_angle"] = p->cosine_angle;
+        o["u_param_scale"] = p->u_param_scale;
+        break;
+    }
+    case spline_type: {
+        const spline *sp = (const spline *)s;
+        o["type"] = "spline";
+        mergeJsonInto(o, splSurToJson(sp->get_spl_sur()));
+        break;
+    }
+    default:
+        break;
+    }
+    return o;
+}
+
 } // namespace JsonSerialize
 
 // ============================================================================
@@ -426,63 +566,10 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     //（控制点按 v 外层、u 内层，索引 u*num_v+v；节点向量 RLE 端点-1）
                     const spline &gem = static_cast<const spline &>(((SPLINE *)geom)->equation());
                     const spl_sur &ss = gem.get_spl_sur();
-                    int dim = 0, form_u = 0, form_v = 0, pole_u = 0, pole_v = 0, num_u = 0, num_v = 0;
-                    int degree_u = 0, num_uknots = 0, degree_v = 0, num_vknots = 0;
-                    logical rational_u = 0, rational_v = 0;
-                    SPAposition *ctrlpts = nullptr;
-                    double *weights = nullptr, *uknots = nullptr, *vknots = nullptr;
-                    bs3_surface_to_array(ss.sur(), dim, rational_u, rational_v, form_u, form_v, pole_u, pole_v,
-                                         num_u, num_v, ctrlpts, weights, degree_u, num_uknots, uknots, degree_v,
-                                         num_vknots, vknots, 0);
-                    auto rleEncode = [](const double *knots, int n) {
-                        std::vector<double> ks;
-                        for (int i = 0; i < n; ++i) {
-                            double v = knots[i];
-                            if (ks.empty() || v != ks[ks.size() - 2]) {
-                                ks.push_back(v);
-                                ks.push_back(1);
-                            } else {
-                                ks.back()++;
-                            }
-                        }
-                        if (ks.size() >= 4) {
-                            ks[1]--;
-                            ks.back()--;
-                        }
-                        QJsonArray arr;
-                        for (double v : ks)
-                            arr.append(v);
-                        return arr;
-                    };
-                    gj["rational_u"] = (int)rational_u;
-                    gj["rational_v"] = (int)rational_v;
-                    gj["degree_u"] = degree_u;
-                    gj["degree_v"] = degree_v;
-                    gj["form_u"] = form_u;
-                    gj["form_v"] = form_v;
-                    gj["u_singularity"] = pole_u;
-                    gj["v_singularity"] = pole_v;
-                    gj["num_u"] = num_u;
-                    gj["num_v"] = num_v;
-                    gj["uknots"] = rleEncode(uknots, num_uknots);
-                    gj["vknots"] = rleEncode(vknots, num_vknots);
-                    bool rational = rational_u || rational_v;
-                    QJsonArray ctrlArr;
-                    for (int i = 0; i < num_v; ++i) {
-                        for (int j = 0; j < num_u; ++j) {
-                            SPAposition *pt = ctrlpts + j * num_v + i;
-                            ctrlArr.append(pt->x());
-                            ctrlArr.append(pt->y());
-                            ctrlArr.append(pt->z());
-                            if (rational)
-                                ctrlArr.append(weights[j * num_v + i]);
-                        }
-                    }
-                    gj["ctrlpts"] = ctrlArr;
-                    gj["fitol"] = ss.fitol();
-                    gj["reversed"] = (int)gem.reversed();
+                    mergeJsonInto(gj, splSurToJson(ss));
                     // 子类码：37/60=exactsur、63=rulesur 为 NURBS 精确型；67=sweepsur、
                     // 44=rot_spl_sur 等为过程曲面（NURBS 仅拟合）→ 组件回退判据
+                    gj["reversed"] = (int)gem.reversed();
                     gj["spl_subtype"] = ss.type();
                     break;
                 }
@@ -706,7 +793,42 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     gj["nobs3"] = 1;
                 }
                 gj["range"] = curveRangeToJson(icv, edge);
-                    break;
+                // R1 定义载荷：交线的定义曲面 + safe_range，消除恢复端 null_surface
+                // 空支撑面（其会破坏恢复体上的下游算法，如 mass_pr）。
+                // 定义源两级：① pcur(index, TRUE) 物化的参数曲线宿主面（parcur 型，
+                // 如扫掠体接缝 → sweepsur-spline）；② int_int_cur（surf-surf 型）无
+                // 公共曲面访问器，用边的宿主面曲面（几何等价：交线落在两张宿主面上）。
+                {
+                    pcurve *pc1 = icv.pcur(1, TRUE);
+                    pcurve *pc2 = icv.pcur(2, TRUE);
+                    QJsonObject d1, d2;
+                    if (pc1) {
+                        d1 = surfaceEquationToJson(&pc1->surf());
+                        delete pc1;
+                    }
+                    if (pc2) {
+                        d2 = surfaceEquationToJson(&pc2->surf());
+                        delete pc2;
+                    }
+                    if ((d1.isEmpty() || d2.isEmpty()) && edge) {
+                        COEDGE *co = edge->coedge();
+                        if (co && d1.isEmpty() && co->owner() && ((LOOP *)co->owner())->face() &&
+                            ((LOOP *)co->owner())->face()->geometry())
+                            d1 = surfaceEquationToJson(
+                                surfaceEntityEquation(((LOOP *)co->owner())->face()->geometry()));
+                        if (co && d2.isEmpty() && co->partner() && co->partner()->owner() &&
+                            ((LOOP *)co->partner()->owner())->face() &&
+                            ((LOOP *)co->partner()->owner())->face()->geometry())
+                            d2 = surfaceEquationToJson(
+                                surfaceEntityEquation(((LOOP *)co->partner()->owner())->face()->geometry()));
+                    }
+                    if (!d1.isEmpty())
+                        gj["def_surf1"] = d1;
+                    if (!d2.isEmpty())
+                        gj["def_surf2"] = d2;
+                    gj["safe_range"] = intervalToJson(icv.safe_range());
+                }
+                break;
                 }
                 default:
                     break;

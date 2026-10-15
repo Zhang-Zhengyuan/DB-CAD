@@ -24,6 +24,7 @@
 #include <sps3crtn.hxx>
 #include <curve.hxx>
 #include <straight.hxx>
+#include <intcurve.hxx>
 #include <skinapi.hxx>
 #include <sps3srtn.hxx>
 #include <exct_spl.hxx>
@@ -306,7 +307,7 @@ static void run_solid_group(BODY *orig, const char *tag, double volRelTol) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
-    int run_upto = (argc > 1) ? atoi(argv[1]) : 14;
+    int run_upto = (argc > 1) ? atoi(argv[1]) : 15;
     if (!initialize_base()) { printf("FAIL base\n"); return 1; }
     outcome r = api_start_modeller(0);
     if (!r.ok()) { printf("FAIL modeller\n"); return 1; }
@@ -884,6 +885,86 @@ int main(int argc, char **argv) {
             compare_bodies(blk, rt2.body, "G14 block(fine-grained)", 1e-9);
         free_rt(rt2, true);
         api_del_entity(blk);
+    }
+
+    if (++g_id > run_upto) goto finish;
+    printf("== G15 交线定义载荷（两圆柱相交 → intcurve surf1/surf2 真定义重建）==\n");
+    {
+        BODY *c1 = nullptr, *c2 = nullptr;
+        check(api_solid_cylinder_cone(SPAposition(0, 0, -10), SPAposition(0, 0, 10), 4.0, 4.0, 4.0, nullptr, c1).ok(),
+              "G15 cylinder1");
+        check(api_solid_cylinder_cone(SPAposition(-10, 3, 0), SPAposition(10, 3, 0), 3.0, 3.0, 3.0, nullptr, c2).ok(),
+              "G15 cylinder2");
+        outcome ir = api_intersect(c1, c2);
+        check(ir.ok(), "G15 api_intersect (两圆柱 → 四次交线)");
+        BODY *res = c2; // 结果在 blank（第二参数）
+        int nInt = 0;
+        {
+            ENTITY_LIST el;
+            api_get_edges(res, el);
+            for (ENTITY *e : el)
+                if (is_EDGE(e) && ((EDGE *)e)->geometry() &&
+                    ((EDGE *)e)->geometry()->identity(2) == INTCURVE_ID)
+                    nInt++;
+        }
+        char buf[96];
+        snprintf(buf, sizeof(buf), "G15 model intcurve edges=%d", nInt);
+        check(nInt >= 1, buf);
+        ENTITY_LIST top(res);
+        GraphRT rt;
+        graph_rt(top, 1, rt);
+        QJsonObject ic = find_geometry(rt.json, "intcurve");
+        // 交线常为 parcur 型（仅一张定义曲面，subtype 25）；断言取 def_surf1
+        bool hasDef = !ic.isEmpty() && ic.contains("def_surf1") &&
+                      ic.value("def_surf1").toObject().value("type").toString() == "cone";
+        check(hasDef, "G15 json intcurve payload has def_surf1 (cone)");
+        bool frag = false;
+        for (const QJsonValue &v : nodesOf(rt.json)) {
+            QJsonObject n = v.toObject();
+            if (n.value("labels").toArray()[0].toString() == "body" &&
+                n.value("props").toObject().contains("sat_fragment"))
+                frag = true;
+        }
+        check(!frag, "G15 no sat_fragment (analytic definitions stay fine-grained)");
+        check(rt.deserOk, "G15 deserialize ok");
+        if (rt.body) {
+            compare_bodies(res, rt.body, "G15 cyl-intersect", 1e-9);
+            // R1 保真判据：恢复体 SAT 落盘无 null_surface（定义曲面真实存在；
+            // 修复前恢复体带 null_surface/nullbs 记录，破坏下游 mass_pr 等算法）
+            {
+                FILE *tf = tmpfile();
+                if (tf) {
+                    ENTITY_LIST lr(rt.body);
+                    api_save_entity_list(tf, TRUE, lr);
+                    fseek(tf, 0, SEEK_END);
+                    long sz = ftell(tf);
+                    rewind(tf);
+                    std::string sat((size_t)sz, '\0');
+                    fread(&sat[0], 1, (size_t)sz, tf);
+                    fclose(tf);
+                    FILE *dbg = fopen("G15_rest.sat", "wb");
+                    if (dbg) {
+                        fwrite(sat.data(), 1, sat.size(), dbg);
+                        fclose(dbg);
+                    }
+                    {
+                        FILE *fo = fopen("G15_orig.sat", "wb");
+                        if (fo) {
+                            ENTITY_LIST lo(res);
+                            api_save_entity_list(fo, TRUE, lo);
+                            fclose(fo);
+                        }
+                    }
+                    // 判据（与原件实测一致）：无 null_surface + 定义块存在（surfintcur）。
+                    // 块内的 nullbs（参数 2D 曲线）原件本就为空，属忠实复刻。
+                    check(sat.find("null_surface") == std::string::npos &&
+                              sat.find("surfintcur") != std::string::npos,
+                          "G15 restored SAT has no null_surface (real definition)");
+                }
+            }
+        }
+        free_rt(rt, true);
+        api_del_entity(res);
     }
 
 finish:

@@ -1,0 +1,62 @@
+# 100% 储存保真：里程碑与细化路线图
+
+> 分支 `storage/entity-unit-tests`。
+> 策略（既定）：**能细粒度就细粒度，实在不行回退到粗粒度，以 100% 一致为目标；
+> 达成后把粗粒度部分逐步细粒度化，触发集单调收缩，每步都有测试守门。**
+
+## M0 里程碑：任意复杂工图 100% 可储存（2026-10-15，commit 4def18c）
+
+机制：组件级 SAT 片段回退（实现细节见 `ENTITY_STORAGE_TEST_PLAN.md` §3.3）。
+
+- 序列化端按 body 连通闭包做风险检测，命中即把组件完整实体表存为 SAT 文本
+  挂 body 节点 `props.sat_fragment`（内核权威格式，含 ATTRIB/过程曲面定义）。
+- 恢复端带片段的组件整体 `api_restore_entity_list` 读回，跳过图重建；
+  片段损坏回退普通图重建。
+- 实体节点照常发射，查询/合并粒度不变；协议向后兼容（旧客户端忽略新字段）。
+
+达成证据（同日全量重跑）：
+
+| 判据 | 结果 |
+|---|---|
+| 复杂工图探针（布尔+圆角+抽壳 / 螺旋扫掠 / 扭转放样） | `PROBE ALL CHECKS PASSED`（A/C 纯细粒度四重精确；B 片段回退 mass_pr 修复） |
+| L1 C++ 往返套件 | 14 组 132 检查全过（G1–G14） |
+| L2/L3 后端 + 真 Neo4j 集成 | 62 passed, 1 skipped（skip 与存储无关） |
+| SAT 粗粒度基线 | 几何字节级一致（仅内核 history 指针字段规范化） |
+
+顺带修复（细粒度级别，非回退）：straight 恢复改无界（SAT `I I` 惯例），
+区间由顶点推导——修复抽壳连接边 4.3e-3 长度偏差（根因：`get_param_range()`
+归一化丢方向，真实区间 [-0.8,0] 被序列化成 [0,0.8]）。
+
+## 细化路线：逐类清空触发集
+
+当前触发集（`entity_graph_serializer.cpp` 风险检测）与对应细化项：
+
+| # | 触发条件 | 根因 | 细化方案 | 验收 | 状态 |
+|---|---|---|---|---|---|
+| R1 | `nobs3`：intcurve 无 bs3 载荷；恢复体 `null_surface` 支撑面 | 交线定义（surf1/surf2 两张曲面 + 参数域）未入载荷 | 定义载荷：嵌入 surf1/surf2 曲面载荷 + safe_range，恢复端带定义构造 | 两圆柱相交等真交线模型：恢复体 intcurve 定义面非空、SAT 无 `null_surface`、边长/体积精确 | **已完成（G15）** |
+| R2 | `spl_subtype ∉ {37,60,63}`（67 sweepsur / 44 rot / offset） | 过程曲面 NURBS 仅拟合 | 轨道律载荷（轨道曲线引用 + 扫掠向量/轴），需协议 v2 支持"几何引用几何"（载荷级→节点级） | 螺旋扫掠管不走片段，四重精确 + 恢复体 mass_pr 通过 | 待 |
+| R3 | ATTRIB 属性链存在 | 拓扑 BFS 结构性看不到属性实体 | 先通用检测告警（已有）；再逐类载荷（DCAD 产生的属性优先）；外来私有属性本质只有 SAT 能兜底 | 带属性模型不走片段且属性保留 | 待 |
+| R4 | `unknown_surface` / `unknown_curve` | 新实体类型 | 按需扩展类型分支 | 类型不触发回退 | 待 |
+
+### R1 实现记录（2026-10-15）
+
+- 序列化端（`entity_graph_serializer.cpp`）：intcurve 载荷新增 `def_surf1`/`def_surf2`（方程级曲面载荷，schema 与 face.geometry 一致）+ `safe_range`。定义源两级：① `pcur(index, TRUE)` 物化的参数曲线宿主面（parcur 型，如扫掠接缝 → sweepsur-spline）；② `int_int_cur`（surf-surf 型）无公共曲面访问器，用**边的宿主面曲面**（几何等价：交线落在两张宿主面上，经 coedge→loop→face 指针链）。
+- 恢复端（`entity_graph_deserializer.cpp`）：`parseSurfaceEquation`（plane/sphere/torus/cone/exact_spl_sur→spline 包装）+ intcurve 构造器带定义曲面（构造器复制曲面，临时方程对象构造后删除）。
+- G15 实证（两平行偏置圆柱相交 → 四次交线）：定义恢复后**体积/边长/包围盒全部精确**（修复前体积 rel 2.7e-5）；恢复体 SAT 与原件逐记录一致（surfintcur + 双 cone 定义 + nullbs——参数 2D 曲线原件本就为空，属忠实复刻）。
+- 附带收益：`splSurToJson` 共享助手消除了 face.geometry 与定义曲面的 NURBS 提取重复。
+
+
+配套工程：
+
+- **L1.5 语料库回归**（贯穿）：`任意 .sat` → 内核读入 → JSON 往返 → SAT 归一化
+  diff / 四重测量比对。探针（`probe_complex.cpp`）是其三部件实例；后续扩为
+  目录驱动，作为每轮细化的总验收。
+- **G 编号守门**：每类细化配一个正式组（R1→G15，R2→G16…），回退机制自身
+  由 G14 锁定（正例触发 + 负例不触发）。
+
+## 约束与边界（沿袭既定原则）
+
+- 协议只加不改：新载荷字段向后兼容，旧客户端忽略；不动 HTTP/WS、Mode0/Mode1
+  隔离、base_version 语义。
+- 每轮细化的合并条件：探针全绿 + L1 全绿 + 后端全绿 + 触发集净减少。
+- 100% 的最终判据永远是 SAT 等价（内核权威），不是"测量值差不多"。

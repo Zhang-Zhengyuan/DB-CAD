@@ -248,6 +248,83 @@ static surface *parseSurface(const QJsonObject &gj, QString *error) {
     return nullptr;
 }
 
+// R1：intcurve 定义曲面方程（载荷 schema 与 face.geometry 一致，无 uv_range）。
+// 返回堆上方程对象（plane/sphere/torus/cone/exact_spl_sur），调用方删除；
+// 不支持的类型返回 nullptr（恢复端退回空支撑面，不劣于旧行为）。
+static surface *parseSurfaceEquation(const QJsonObject &gj) {
+    const QString type = gj.value("type").toString();
+    if (type == "plane") {
+        return ACIS_NEW plane(parsePosition(gj.value("root_point").toArray()),
+                              parseUnitVector(gj.value("normal").toArray()),
+                              parseVector(gj.value("u_deriv").toArray()));
+    }
+    if (type == "sphere") {
+        return ACIS_NEW sphere(parsePosition(gj.value("centre").toArray()), gj.value("radius").toDouble(1.0));
+    }
+    if (type == "torus") {
+        return ACIS_NEW torus(parsePosition(gj.value("centre").toArray()),
+                              parseUnitVector(gj.value("normal").toArray()),
+                              gj.value("major_radius").toDouble(1.0), gj.value("minor_radius").toDouble(0.1));
+    }
+    if (type == "cone") {
+        // 与 parseSurface cone 分支同构：u_param_scale 缺省 1（构造器默认 0 会损坏锥面）
+        return ACIS_NEW cone(parsePosition(gj.value("base_centre").toArray()),
+                             parseUnitVector(gj.value("base_normal").toArray()),
+                             parseVector(gj.value("base_major_axis").toArray()),
+                             gj.value("base_radius_ratio").toDouble(1.0), gj.value("sine_angle").toDouble(0.0),
+                             gj.value("cosine_angle").toDouble(1.0), gj.value("u_param_scale").toDouble(1.0));
+    }
+    if (type == "spline") {
+        QJsonArray ctrlArr = gj.value("ctrlpts").toArray();
+        int num_u = gj.value("num_u").toInt(0);
+        int num_v = gj.value("num_v").toInt(0);
+        if (ctrlArr.size() < 12 || num_u <= 0 || num_v <= 0)
+            return nullptr;
+        bool rational = gj.value("rational_u").toInt(0) != 0 || gj.value("rational_v").toInt(0) != 0;
+        auto expandKnots = [](const QJsonArray &arr, std::deque<double> &out) {
+            for (int i = 0; i * 2 + 1 < arr.size(); ++i) {
+                double k = arr[i * 2].toDouble();
+                int cnt = (int)arr[i * 2 + 1].toDouble();
+                for (int j = 0; j < cnt; ++j)
+                    out.push_back(k);
+            }
+            out.push_front(out.front());
+            out.push_back(out.back());
+        };
+        std::deque<double> uq, vq;
+        expandKnots(gj.value("uknots").toArray(), uq);
+        expandKnots(gj.value("vknots").toArray(), vq);
+        std::vector<double> ku(uq.begin(), uq.end()), kv(vq.begin(), vq.end());
+        int stride = rational ? 4 : 3;
+        std::vector<SPAposition> ctrl(num_u * num_v);
+        std::vector<double> weights;
+        if (rational)
+            weights.resize(num_u * num_v, 1.0);
+        for (int i = 0; i < num_v; ++i) {
+            for (int j = 0; j < num_u; ++j) {
+                int flat = (i * num_u + j) * stride;
+                ctrl[j * num_v + i] = SPAposition(ctrlArr[flat].toDouble(), ctrlArr[flat + 1].toDouble(),
+                                                  ctrlArr[flat + 2].toDouble());
+                if (rational)
+                    weights[j * num_v + i] = ctrlArr[flat + 3].toDouble();
+            }
+        }
+        int pole_u = gj.value("u_singularity").toInt(0);
+        int pole_v = gj.value("v_singularity").toInt(0);
+        bs3_surface bs = bs3_surface_from_ctrlpts(
+            gj.value("degree_u").toInt(3), (logical)(gj.value("rational_u").toInt(0) != 0 ? 1 : 0),
+            gj.value("form_u").toInt(0), pole_u, num_u, gj.value("degree_v").toInt(3),
+            (logical)(gj.value("rational_v").toInt(0) != 0 ? 1 : 0), gj.value("form_v").toInt(0), pole_v, num_v,
+            ctrl.data(), rational ? weights.data() : nullptr, SPAresabs.value(), (int)ku.size(), ku.data(),
+            (int)kv.size(), kv.data(), SPAresnor.value());
+        // exact_spl_sur 不继承 surface（spl_sur : subtrans_object），
+        // 需经 spline 包装类承载（与 parseSurface spline 分支同构）
+        spl_sur *ss = ACIS_NEW exact_spl_sur(bs);
+        return ACIS_NEW spline(ss);
+    }
+    return nullptr;
+}
+
 // 辅助：从 JSON 对象解析 curve，返回 APISESSION 分配的指针
 // 注意：此函数应始终在 API_BEGIN/API_END 事务块内调用
 static curve *parseCurve(const QJsonObject &gj, QString *error) {
@@ -351,10 +428,20 @@ static curve *parseCurve(const QJsonObject &gj, QString *error) {
         else
             bs3_curve_set_periodic(bs);
         double fitol = gj.value("fitol").toDouble(1e-6);
-        // 文档化路径："exact B-spline from bs3_curve"——bs3 为唯一主表示，
-        // 双端曲面留空（精确交线重建是后续增强）
-        intcurve *def =
-            ACIS_NEW intcurve(bs, fitol, SpaAcis::NullObj::get_surface(), SpaAcis::NullObj::get_surface());
+        // R1：定义曲面载荷（def_surf1/def_surf2）→ 真实定义重建，消除
+        // null_surface 空支撑面（其会破坏恢复体上的下游算法，如 mass_pr）。
+        // intcurve 构造器复制曲面（调用方保留所有权），构造后删除临时方程对象。
+        surface *s1 = parseSurfaceEquation(gj.value("def_surf1").toObject());
+        surface *s2 = parseSurfaceEquation(gj.value("def_surf2").toObject());
+        bool srUnbounded = true;
+        SPAinterval safeRange = parseInterval(gj.value("safe_range").toArray(), &srUnbounded);
+        const SPAinterval &safeArg = srUnbounded ? SpaAcis::NullObj::get_interval() : safeRange;
+        intcurve *def = ACIS_NEW intcurve(bs, fitol, s1 ? *s1 : SpaAcis::NullObj::get_surface(),
+                                          s2 ? *s2 : SpaAcis::NullObj::get_surface(), NULL, NULL, safeArg);
+        if (s1)
+            ACIS_DELETE s1;
+        if (s2)
+            ACIS_DELETE s2;
         bool unbounded = true;
         SPAinterval range = parseInterval(gj.value("range").toArray(), &unbounded);
         if (!unbounded && !range.empty()) {
