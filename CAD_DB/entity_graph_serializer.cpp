@@ -63,12 +63,16 @@ inline QJsonArray unitVecToJson(const SPAunit_vector &v) {
     return QJsonArray{v.x(), v.y(), v.z()};
 }
 
-// SPAinterval → [type1, val1, type2, val2]  (与 access.cpp getmglist_SPAinterval 完全一致)
+// SPAinterval → [type1, val1, type2, val2]  (与 access.cpp getmglist_SPAinterval 一致)
+// 恒定输出 4 元素：旧实现对无限/半无限区间只输出 2–3 元素，对端 parseInterval
+// 要求 ≥4 元素而回退成 [0,1]，导致无限底层直线的边参数区间整体塌缩。
 inline QJsonArray intervalToJson(const SPAinterval &iv) {
     QJsonArray arr;
     if (iv.empty()) {
         arr.append(1.0);
+        arr.append(0.0);
         arr.append(1.0);
+        arr.append(0.0);
     } else {
         interval_type t = iv.type();
         if (t == interval_type::interval_finite) {
@@ -80,16 +84,32 @@ inline QJsonArray intervalToJson(const SPAinterval &iv) {
             arr.append(2.0);
             arr.append(iv.start_pt());
             arr.append(1.0);
+            arr.append(0.0);
         } else if (t == interval_type::interval_finite_above) {
             arr.append(1.0);
+            arr.append(0.0);
             arr.append(2.0);
             arr.append(iv.end_pt());
         } else {
             arr.append(1.0);
+            arr.append(0.0);
             arr.append(1.0);
+            arr.append(0.0);
         }
     }
     return arr;
+}
+
+// 边的参数区间（EDGE::param_bound）：有效 ACIS 边必有有限范围；顺序统一为升序。
+// 旧实现序列化的是底层曲线方程的 param_range（常为无限），见 intervalToJson 注释。
+inline QJsonArray edgeParamRangeToJson(const EDGE *edge) {
+    SPAinterval r = edge->param_range();
+    if (r.empty())
+        return intervalToJson(r);
+    double lo = r.start_pt(), hi = r.end_pt();
+    if (lo > hi)
+        std::swap(lo, hi);
+    return intervalToJson(SPAinterval(lo, hi));
 }
 
 // SPApar_box → [u0, u1, v0, v1]
@@ -346,9 +366,15 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     ellipse base = gem.base;
                     gj["base_centre"] = posToJson(base.centre);
                     gj["base_normal"] = unitVecToJson(base.normal);
+                    // base_major_axis 此前漏发，对端 parseVector 拿到空数组会得到
+                    // 未初始化向量，锥面直接损坏（SAT 显示 1e-310 量级垃圾值）
+                    gj["base_major_axis"] = vecToJson(base.major_axis);
                     gj["base_radius_ratio"] = base.radius_ratio;
                     gj["sine_angle"] = gem.sine_angle;
                     gj["cosine_angle"] = gem.cosine_angle;
+                    // u_param_scale：cone 构造器 para 参数默认 0，不传则 u 方向
+                    // 参数化丢失（SAT 中 major/para 均归零），曲面不可用
+                    gj["u_param_scale"] = gem.u_param_scale;
                     break;
                 }
                 default:
@@ -431,7 +457,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     const straight &gem = static_cast<const straight &>(((STRAIGHT *)geom)->equation());
                     gj["root_point"] = posToJson(gem.root_point);
                     gj["direction"] = unitVecToJson(gem.direction);
-                    gj["range"] = intervalToJson(gem.param_range());
+                    gj["range"] = edgeParamRangeToJson(edge);
                     break;
                 }
                 case ELLIPSE_ID: {
@@ -440,7 +466,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     gj["normal"] = unitVecToJson(gem.normal);
                     gj["major_axis"] = vecToJson(gem.major_axis);
                     gj["radius_ratio"] = gem.radius_ratio;
-                    gj["range"] = intervalToJson(gem.param_range());
+                    gj["range"] = edgeParamRangeToJson(edge);
                     break;
                 }
                 default:

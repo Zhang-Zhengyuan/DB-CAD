@@ -52,7 +52,7 @@ static SPAposition parsePosition(const QJsonArray &arr) {
     if (arr.size() >= 3) {
         return SPAposition(arr[0].toDouble(), arr[1].toDouble(), arr[2].toDouble());
     }
-    return SPAposition();
+    return SPAposition(0, 0, 0);
 }
 
 // 辅助：从 JSON 数组解析 SPAvector
@@ -60,7 +60,8 @@ static SPAvector parseVector(const QJsonArray &arr) {
     if (arr.size() >= 3) {
         return SPAvector(arr[0].toDouble(), arr[1].toDouble(), arr[2].toDouble());
     }
-    return SPAvector();
+    // SPAvector() 默认构造不置零（SAT 出现 1e-310 垃圾值），必须显式给确定值
+    return SPAvector(0, 0, 0);
 }
 
 // 辅助：从 JSON 数组解析 SPAunit_vector
@@ -83,19 +84,21 @@ static SPAmatrix parseMatrix(const QJsonArray &arr) {
 }
 
 // 辅助：从 JSON 数组解析 SPAinterval
-// 格式: [type1, val1, type2, val2]
-static SPAinterval parseInterval(const QJsonArray &arr) {
+// 格式: [type1, val1, type2, val2]（恒 4 元素）；兼容旧格式 2–3 元素
+// unbounded 置 true 表示区间为无限/半无限（旧图或无限区间），调用方应跳过 limit
+static SPAinterval parseInterval(const QJsonArray &arr, bool *unbounded = nullptr) {
+    if (unbounded)
+        *unbounded = true;
     if (arr.size() >= 4) {
-        double start = 0.0, end = 1.0;
         int type1 = arr[0].toInt(1);
-        if (type1 == 2)
-            start = arr[1].toDouble();
         int type2 = arr[2].toInt(1);
-        if (type2 == 2)
-            end = arr[3].toDouble();
-        return SPAinterval(start, end);
+        if (type1 == 2 && type2 == 2) {
+            if (unbounded)
+                *unbounded = false;
+            return SPAinterval(arr[1].toDouble(), arr[3].toDouble());
+        }
     }
-    return SPAinterval(0, 1);
+    return SPAinterval();
 }
 
 // 辅助：从 JSON 对象解析 surface，返回 APISESSION 分配的指针
@@ -137,17 +140,21 @@ static surface *parseSurface(const QJsonObject &gj, QString *error) {
     } else if (type == "cone") {
         SPAposition base_centre = parsePosition(gj.value("base_centre").toArray());
         SPAunit_vector base_normal = parseUnitVector(gj.value("base_normal").toArray());
-        SPAvector major_axis = parseVector(gj.value("major_axis").toArray());
+        // 字段名必须与序列化端一致：base_major_axis（旧代码读 "major_axis" 拿到
+        // 空数组，配合未置零默认值产生垃圾锥面）
+        SPAvector major_axis = parseVector(gj.value("base_major_axis").toArray());
         double rratio = gj.value("base_radius_ratio").toDouble(1.0);
         double sine = gj.value("sine_angle").toDouble(0.0);
         double cosine = gj.value("cosine_angle").toDouble(1.0);
-        ellipse *gem_base = ACIS_NEW ellipse(base_centre, base_normal, major_axis, rratio);
-        SPAinterval base_u_range = parseInterval(gj.value("uv_range").toArray());
-        if (!base_u_range.empty()) {
-            gem_base->limit(base_u_range);
+        // para（u 参数化）不传时构造器默认 0，曲面损坏；旧图无此字段按 1 回退
+        double uScale = gj.value("u_param_scale").toDouble(1.0);
+        cone *def = ACIS_NEW cone(base_centre, base_normal, major_axis, rratio, sine, cosine, uScale);
+        // uv_range 是裸值 [u0,u1,v0,v1]（parBoxToJson），仅在 u/v 均有效时限制曲面
+        QJsonArray uv = gj.value("uv_range").toArray();
+        if (uv.size() >= 4 && uv[1].toDouble() > uv[0].toDouble() && uv[3].toDouble() > uv[2].toDouble()) {
+            def->limit(SPApar_box(SPAinterval(uv[0].toDouble(), uv[1].toDouble()),
+                                  SPAinterval(uv[2].toDouble(), uv[3].toDouble())));
         }
-        cone *def = ACIS_NEW cone(*gem_base, sine, cosine);
-        ACIS_DELETE gem_base;
         CONE *cn = ACIS_NEW CONE(*def);
         ACIS_DELETE def;
         return (surface *)cn;
@@ -165,8 +172,9 @@ static curve *parseCurve(const QJsonObject &gj, QString *error) {
         SPAposition root = parsePosition(gj.value("root_point").toArray());
         SPAvector direction = parseVector(gj.value("direction").toArray());
         straight *def = ACIS_NEW straight(root, normalise(direction), direction.len());
-        SPAinterval range = parseInterval(gj.value("range").toArray());
-        if (!range.empty()) {
+        bool unbounded = true;
+        SPAinterval range = parseInterval(gj.value("range").toArray(), &unbounded);
+        if (!unbounded && !range.empty()) {
             def->limit(range);
         }
         STRAIGHT *st = ACIS_NEW STRAIGHT(*def);
@@ -178,8 +186,9 @@ static curve *parseCurve(const QJsonObject &gj, QString *error) {
         SPAvector major_axis = parseVector(gj.value("major_axis").toArray());
         double ratio = gj.value("radius_ratio").toDouble(1.0);
         ellipse *def = ACIS_NEW ellipse(centre, normal, major_axis, ratio);
-        SPAinterval range = parseInterval(gj.value("range").toArray());
-        if (!range.empty()) {
+        bool unbounded = true;
+        SPAinterval range = parseInterval(gj.value("range").toArray(), &unbounded);
+        if (!unbounded && !range.empty()) {
             def->limit(range);
         }
         ELLIPSE *el = ACIS_NEW ELLIPSE(*def);

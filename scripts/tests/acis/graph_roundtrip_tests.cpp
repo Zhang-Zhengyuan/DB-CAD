@@ -213,6 +213,19 @@ static void compare_bodies(BODY *orig, BODY *rest, const char *tag, double volRe
         char buf[128];
         snprintf(buf, sizeof(buf), "%s: mass_pr failed (orig=%d rest=%d)", tag, (int)okO, (int)okR);
         check(false, buf);
+        std::string base(tag);
+        for (char &c : base)
+            if (c == ' ' || c == ':')
+                c = '_';
+        ENTITY_LIST lo2(orig);
+        FILE *f3 = fopen((base + "_orig.sat").c_str(), "wb");
+        if (f3) { api_save_entity_list(f3, TRUE, lo2); fclose(f3); }
+        if (rest) {
+            ENTITY_LIST lr2(rest);
+            FILE *f4 = fopen((base + "_rest.sat").c_str(), "wb");
+            if (f4) { api_save_entity_list(f4, TRUE, lr2); fclose(f4); }
+        }
+        printf("    [diag] dumped %s_orig.sat\n", base.c_str());
     }
 
     TopoCounts co = topo_counts(orig), cr = topo_counts(rest);
@@ -344,6 +357,15 @@ int main(int argc, char **argv) {
         ENTITY_LIST top(cone);
         GraphRT rt;
         graph_rt(top, 1, rt);
+        {
+            // 诊断：落盘本组 JSON，便于核对边 range / 锥面字段
+            FILE *jf = fopen("G4_graph.json", "wb");
+            if (jf) {
+                QByteArray js = QJsonDocument(rt.json).toJson(QJsonDocument::Indented);
+                fwrite(js.constData(), 1, js.size(), jf);
+                fclose(jf);
+            }
+        }
         QJsonObject gj = find_geometry(rt.json, "cone");
         check(has_keys(gj, "base_centre", "sine_angle", "cosine_angle"), "G4 cone payload");
         check(rt.deserOk, "G4 deserialize ok");
