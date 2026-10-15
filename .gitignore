@@ -99,5 +99,6 @@ CAD_DB/spatial_license.h
 # ACIS 测试资产：许可密钥与构建产物不入库（SAT 样例入库供回归测试用）
 scripts/tests/acis/spatial_license.h
 scripts/tests/acis/entity_tests.exe
+scripts/tests/acis/graph_roundtrip_tests.exe
 scripts/tests/acis/*.dll
 scripts/tests/acis/*.obj
