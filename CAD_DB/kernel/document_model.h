@@ -13,6 +13,8 @@ struct ENTITY_TREE_ITEM {
     int subOperatorType = 0;
     dbcad::HandleGrid handles;
     std::vector<int> index_base;
+    // All components of one operation are rebuilt together, once.
+    int rebuildGroup = -1;
     bool isAutoUpdate = true;
     std::vector<int> index_support;
     GmeMesh::DisplayData* ptrDisplayData = nullptr;

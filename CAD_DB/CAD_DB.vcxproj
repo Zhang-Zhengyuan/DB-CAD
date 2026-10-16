@@ -167,7 +167,8 @@
     <ClCompile Include="ui\mainwindow_config.cpp" />
     <ClCompile Include="ui\mainwindow_menus.cpp" />
 
-    <ClCompile Include="main.cpp" />
+    <ClCompile Include="main.cpp" Condition="'$(DBCADRegression)' != 'true'" />
+    <ClCompile Include="..\scripts\tests\client_regression.cpp" Condition="'$(DBCADRegression)' == 'true'" />
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="window.h" />
@@ -231,6 +232,8 @@
   <PropertyGroup>
     <OutDir>$(MSBuildProjectDirectory)\..\x64\$(Configuration)\</OutDir>
     <IntDir>$(MSBuildProjectDirectory)\..\x64\obj\CAD_DB\$(Configuration)\</IntDir>
+    <IntDir Condition="'$(DBCADRegression)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\ClientRegression\$(Configuration)\</IntDir>
+    <TargetName Condition="'$(DBCADRegression)' == 'true'">client_regression</TargetName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

@@ -115,11 +115,9 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (maybeSave()) {
+        if(curWindow && !curWindow->close()) { event->ignore(); return; }
         event->accept();
         disconnectFastAPISync();
-        if (curWindow) {
-            curWindow->close();
-        }
         dbcad::shutdownStorage();
         dbcad::shutdownKernel();
     } else {

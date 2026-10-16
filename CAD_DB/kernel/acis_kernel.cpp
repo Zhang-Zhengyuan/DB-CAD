@@ -1,5 +1,6 @@
 #include "geometry_kernel.h"
 #include "legacy_storage.h"
+#include "acis_sat_io.hxx"
 #include "../acis.hxx"
 #include "../access.hxx"
 #include "../gme_dump_object.hxx"
@@ -8,6 +9,7 @@
 #include "acis/include/boolapi.hxx"
 #include "acis/include/cstrapi.hxx"
 #include "acis/include/intrapi.hxx"
+#include "acis/include/intcucu.hxx"
 #include "acis/include/insanity_list.hxx"
 #include "acis/include/kernapi.hxx"
 #include "acis/include/rnd_api.hxx"
@@ -145,9 +147,14 @@ public:
     }
     void noteState() override { DELTA_STATE* ds=nullptr; require(api_note_state(ds)); }
     QJsonObject encodeGraph(const QHash<int,QString>& uuids, const ShapeList& shapes) override {
+        for(size_t i=0;i<shapes.size();++i) {
+            if(kind(shapes[i])==ShapeKind::Unknown) throw std::runtime_error("存在未完成的样条草稿，请完成后再提交");
+            if(uuids.value(static_cast<int>(i)).isEmpty()) throw std::runtime_error("形状缺少业务 UUID");
+        }
         auto list=nativeList(shapes); return serializeACISEntityGraph(uuids,list);
     }
     bool decodeGraph(const QJsonObject& graph, DecodedGraph& result, QString& error) override {
+        result.shapes.clear();
         DeserializedEntityGraph decoded{nullptr,{}};
         if(!deserializeACISEntityGraph(graph,&decoded,&error)) return false;
         result.shapes.clear();
@@ -156,37 +163,15 @@ public:
         delete decoded.entities; return true;
     }
     QByteArray writeNative(const ShapeList& shapes) override {
-        QTemporaryFile temp(QDir::tempPath()+"/dbcad_kernel_XXXXXX.sat");
-        if(!temp.open()) throw std::runtime_error("无法创建内核临时文件");
-        QString path=temp.fileName(); temp.close();
-        FILE* file=_wfopen(reinterpret_cast<const wchar_t*>(path.utf16()),L"wb");
-        if(!file) throw std::runtime_error("无法打开内核临时文件");
-        outcome status;
-        API_NOP_BEGIN;
-        api_save_version(2,0);
-        FileInfo info; info.set_units(1.0); info.set_product_id("demo_qt");
-        result=api_set_file_info(FileIdent|FileUnits,info);
-        if(result.ok()) result=api_set_int_option("sequence_save_files",1);
-        if(result.ok()) { ENTITY_LIST list=nativeList(shapes); result=api_save_entity_list(file,true,list); }
-        API_NOP_END;
-        status=result;
-        fclose(file); require(status);
-        QFile input(path); if(!input.open(QIODevice::ReadOnly)) throw std::runtime_error("无法读取内核临时文件");
-        return input.readAll();
+        for(auto shape:shapes) if(kind(shape)==ShapeKind::Unknown)
+            throw std::runtime_error("存在未完成的样条草稿，请完成后再保存");
+        auto list=nativeList(shapes);
+        return acis_detail::writeSat(list);
     }
-    ShapeList readNative(const QByteArray& data) override {
-        QTemporaryFile temp(QDir::tempPath()+"/dbcad_kernel_XXXXXX.sat");
-        if(!temp.open() || temp.write(data)!=data.size()) throw std::runtime_error("无法写入内核临时文件");
-        QString path=temp.fileName(); temp.close();
-        FILE* file=_wfopen(reinterpret_cast<const wchar_t*>(path.utf16()),L"rb");
-        if(!file) throw std::runtime_error("无法读取内核临时文件");
-        ENTITY_LIST list; outcome status;
-        API_BEGIN;
-        api_save_version(2,0); result=api_restore_entity_list(file,true,list);
-        API_END;
-        status=result;
-        fclose(file);
-        if(!status.ok()) { if(list.count()) api_del_entity_list(list); require(status); }
+    ShapeList readNative(const QByteArray& bytes) override {
+        ENTITY_LIST list;
+        try { acis_detail::readSat(bytes,list); }
+        catch(...) { if(list.count()) api_del_entity_list(list); throw; }
         return adoptList(list);
     }
     void dump(ShapeHandle h,const std::string& name,FILE* file,bool debug) override {
@@ -208,7 +193,12 @@ void shutdownKernel() { instance.reset(); }
 ShapeList AcisKernel::operate(OPERATOR_TYPES op,int subtype,const ShapeList& inputs) {
     const auto minimum=op==OPERATOR_DEFEATURE?1u:2u;
     if(inputs.size()<minimum) throw std::runtime_error("未选择足够实体");
+    if(op!=OPERATOR_DEFEATURE && inputs.size()!=2) throw std::runtime_error("运算需要恰好两个实体");
+    std::set<std::uint64_t> uniqueInputs;
+    for(auto shape:inputs) if(!uniqueInputs.insert(shape.value).second) throw std::runtime_error("运算实体不能重复");
     ENTITY_LIST outputs;
+    bool adopted=false;
+    const auto discardOutputs=qScopeGuard([&]() { if(!adopted && outputs.count()) api_del_entity_list(outputs); });
     ENTITY_LIST temporaryBodies;
     const auto cleanup=qScopeGuard([&]() { if(temporaryBodies.count()) api_del_entity_list(temporaryBodies); });
     auto toBody=[&](ShapeHandle h) -> BODY* {
@@ -251,6 +241,7 @@ ShapeList AcisKernel::operate(OPERATOR_TYPES op,int subtype,const ShapeList& inp
         }
         else if(is_EDGE(a)&&is_EDGE(b)) {
             curve_curve_int* intersections=nullptr;
+            const auto discardIntersections=qScopeGuard([&]() { delete_curve_curve_ints(intersections); });
             require(api_inter_ed_ed((EDGE*)a,(EDGE*)b,intersections));
             if(intersections) require(api_ed_inters_to_ents((EDGE*)a,intersections,outputs));
         } else throw std::runtime_error("当前形状组合不支持求交");
@@ -271,7 +262,7 @@ ShapeList AcisKernel::operate(OPERATOR_TYPES op,int subtype,const ShapeList& inp
             ENTITY* copy=nullptr; require(api_deep_down_copy_entity(bodies[i],copy)); outputs.add(copy);
         }
     } else throw std::runtime_error("当前内核尚未实现该运算");
-    return adoptList(outputs);
+    auto handles=adoptList(outputs); adopted=true; return handles;
 }
 void initializeStorage() { mg_init(); }
 void shutdownStorage() { mg_finalize(); }

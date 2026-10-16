@@ -117,7 +117,7 @@ void MainWindow::deleteEntityByIndexForCollaboration(int index) {
             delete it->ptrDisplayData; it=etiList.erase(it);
         } else ++it;
     }
-    curWindow->ptrCurrentTreeItem=nullptr;
+    curWindow->currentEntityIndex=-1;
     curWindow->setCurrentEntity({});
 
     // 3. 修正剩余 entity 的 index_base / index_support：清掉指向已删除 index 的位置

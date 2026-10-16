@@ -105,12 +105,12 @@ void MainWindow::pgLoadFromDatabaseToCurrent() {
     if (!ok || name.trimmed().isEmpty())
         return;
 
-    // Connect the loaded signal once; disconnect after first emission.
+    // Scope only the per-request callbacks; retain the permanent error handler.
+    auto requestContext=new QObject(this);
     connect(
-        m_pgService.get(), &PgService::loaded, this,
-        [this, name](const QString &satText) {
-            disconnect(m_pgService.get(), &PgService::loaded, this, nullptr);
-            disconnect(m_pgService.get(), &PgService::loadFailed, this, nullptr);
+        m_pgService.get(), &PgService::loaded, requestContext,
+        [this, name, requestContext](const QString &satText) {
+            requestContext->deleteLater();
 
             if (curWindow == nullptr)
                 addWindow();
@@ -125,15 +125,8 @@ void MainWindow::pgLoadFromDatabaseToCurrent() {
         },
         Qt::SingleShotConnection);
 
-    connect(
-        m_pgService.get(), &PgService::loadFailed, this,
-        [this](const QString &err) {
-            disconnect(m_pgService.get(), &PgService::loaded, this, nullptr);
-            disconnect(m_pgService.get(), &PgService::loadFailed, this, nullptr);
-            QMessageBox::warning(this, tr("DBCAD"), tr("从 PostgreSQL 加载失败:\n%1").arg(err));
-            statusBar()->showMessage(tr("从 PostgreSQL 加载失败"), 4000);
-        },
-        Qt::SingleShotConnection);
+    connect(m_pgService.get(), &PgService::loadFailed, requestContext,
+            [requestContext](const QString&) { requestContext->deleteLater(); }, Qt::SingleShotConnection);
 
     m_pgService->loadSat(name);
 }

@@ -135,6 +135,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="kernel\acis_sat_io.hxx" />
     <ClCompile Include="kernel\acis_kernel.cpp" />
     <ClCompile Include="acis.cpp" />
     <ClCompile Include="access.cpp" />

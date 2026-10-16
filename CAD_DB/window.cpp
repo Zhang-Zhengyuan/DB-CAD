@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCloseEvent>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -19,8 +20,11 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QUuid>
+#include <QSignalBlocker>
+#include <QJsonArray>
 #include <cstdio>
 #include <set>
+#include <functional>
 #include <unordered_map>
 
 #include "collab_session.h"
@@ -30,7 +34,7 @@ using namespace dbcad;
 
 Window::Window(MainWindow* mw) : mainWindow(mw) {
     glWidget = new GLWidget(this);
-    ptrCurrentTreeItem = nullptr;
+    currentEntityIndex = -1;
     selected_entities.clear();
 
     treeWidget = new QTreeWidget(this);
@@ -59,11 +63,11 @@ Window::Window(MainWindow* mw) : mainWindow(mw) {
 }
 
 void Window::currentEntityChanged(QTreeWidgetItem* current, QTreeWidgetItem* previous) {
-    if (current == nullptr) return;
+    if (current == nullptr) { currentEntityIndex=-1; return; }
     int index = current->text(1).toInt();
     for (auto& eti : entity_tree) {
         if (eti.index == index) {
-            ptrCurrentTreeItem = &eti;
+            currentEntityIndex = eti.index;
             updateTabWidget();
         }
     }
@@ -79,8 +83,14 @@ void Window::entityChanged(QTreeWidgetItem* item, int column) {
             else if (item->checkState(0) == Qt::Unchecked)
                 selected_entities.erase(std::remove(selected_entities.begin(), selected_entities.end(), index), selected_entities.end());
 
-            std::string s = item->text(0).toStdString();
-            if (s.length()) eti.name = s;
+            std::string name = item->text(0).toStdString();
+            if(!name.empty() && name!=eti.name) {
+                eti.name=name;
+                mainWindow->recordEntityModified(eti.index);
+                isModified=true;
+                captureHistory();
+                mainWindow->notifyModelChangedForCollaboration();
+            }
         }
     }
 }
@@ -188,20 +198,22 @@ void Window::addTabWidget() {
 }
 
 void Window::isDisplayChanged() {
-    if (ptrCurrentTreeItem == nullptr) {
+    if (currentEntityItem() == nullptr) {
         QMessageBox::information(this, tr("未选择实体"), tr("请先在实体树窗口选择一个实体。"));
         return;
     }
-    ptrCurrentTreeItem->visible = displayCheckBox->isChecked();
+    currentEntityItem()->visible = displayCheckBox->isChecked();
     this->updateMeshData();
 }
 
 void Window::updateTabWidget() {
     // 显示
-    if (nullptr == ptrCurrentTreeItem) return;
+    if (nullptr == currentEntityItem()) return;
 
-    displayCheckBox->setChecked(ptrCurrentTreeItem->visible);
-    displayComboBox->setCurrentIndex(ptrCurrentTreeItem->displayType);
+    QSignalBlocker blockVisibility(displayCheckBox);
+    QSignalBlocker blockDisplay(displayComboBox);
+    displayCheckBox->setChecked(currentEntityItem()->visible);
+    displayComboBox->setCurrentIndex(currentEntityItem()->displayType);
 }
 
 
@@ -218,7 +230,10 @@ void Window::setPointSize(int ps) {
 }
 
 void Window::addTreeItem(QTreeWidgetItem* item, std::vector<int> index_base) {
+    std::set<int> ancestors;
+    for(auto parent=item;parent;parent=parent->parent()) ancestors.insert(parent->text(1).toInt());
     for (auto index : index_base) {
+        if(ancestors.contains(index)) continue;
         for (auto eti : entity_tree) {
             if (eti.index == index) {
                 QTreeWidgetItem* i = new QTreeWidgetItem(item);
@@ -234,6 +249,7 @@ void Window::addTreeItem(QTreeWidgetItem* item, std::vector<int> index_base) {
 
 void Window::updateTreeWidget() {
     if (nullptr == treeWidget) return;
+    QSignalBlocker blockTreeSignals(treeWidget);
     treeWidget->clear();
     QList<QTreeWidgetItem*> items;
     for (auto eti : entity_tree) {
@@ -252,23 +268,26 @@ void Window::updateTreeWidget() {
 }
 
 void Window::closeEvent(QCloseEvent* event) {
-    try { clear(); } catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); }
+    try { clear(); event->accept(); }
+    catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); event->ignore(); }
 }
 
 void Window::clear() {
     kernel().erase(getEntityList());
     for(auto& item:entity_tree) { mainWindow->recordEntityRemoved(item.index); delete item.ptrDisplayData; }
     entity_tree.clear();
-    input_handles.clear(); selected_entities.clear(); ptrCurrentTreeItem=nullptr;
-    latest_index=0; imode=SELECTION;
+    input_handles.clear(); selected_entities.clear(); currentEntityIndex=-1;
+    imode=SELECTION;
     updateTreeWidget(); glWidget->clear();
     captureHistory();
     isModified=true;
 }
 
 void Window::keyPressEvent(QKeyEvent* e) {
-    if (e->key() == Qt::Key_Escape)
-        close();
+    if (e->key() == Qt::Key_Escape) {
+        imode=SELECTION; input_handles.clear(); setCurrentEntity({});
+        glWidget->update();
+    }
     else
         QWidget::keyPressEvent(e);
 }
@@ -280,15 +299,15 @@ void Window::visiablility() {
 }
 
 void Window::displayInfo() {
-    if (ptrCurrentTreeItem) {
-        kernel().statistics(ptrCurrentTreeItem->shape);
+    if (currentEntityItem()) {
+        kernel().statistics(currentEntityItem()->shape);
     }
 }
 
 void Window::displayTypeChanged() {
-    if (ptrCurrentTreeItem) {
-        ptrCurrentTreeItem->displayType = (DISPLAY_TYPES)displayComboBox->currentIndex();
-        if (ptrCurrentTreeItem->ptrDisplayData) ptrCurrentTreeItem->ptrDisplayData->displayType = ptrCurrentTreeItem->displayType;
+    if (currentEntityItem()) {
+        currentEntityItem()->displayType = (DISPLAY_TYPES)displayComboBox->currentIndex();
+        if (currentEntityItem()->ptrDisplayData) currentEntityItem()->ptrDisplayData->displayType = currentEntityItem()->displayType;
     } else {
         QMessageBox::information(this, tr("未选择实体"), tr("请先在实体树窗口选择一个实体。"));
         return;
@@ -302,11 +321,18 @@ void Window::createEntity(const int id, ShapeHandle& shape, HandleGrid& handles)
         imode=INPUT_SPLINE; input_handles.clear();
         shape=kernel().draft(); glWidget->setPickedEntity(shape); return;
     }
-    try { shape=kernel().create(id,handles); }
+    try { auto candidate=handles; shape=kernel().create(id,candidate); handles=std::move(candidate); }
     catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); }
 }
 
 bool Window::operation(OPERATOR_TYPES type,int subtype,std::vector<int>& ids,ShapeList& outputs,bool updateDocument) {
+    if(type!=OPERATOR_DEFEATURE && ids.size()!=2) { showMessage(tr("此运算需要恰好两个实体"),4000); return false; }
+    if(std::set<int>(ids.begin(),ids.end()).size()!=ids.size()) { showMessage(tr("不能重复选择同一实体"),4000); return false; }
+    if(updateDocument && type==OPERATOR_BOOLEAN) {
+        for(auto id:ids) if(auto item=getEntityItemByIndex(id); item && !item->index_support.empty()) {
+            showMessage(tr("实体仍有依赖结果，请先删除依赖结果再进行布尔运算"),5000); return false;
+        }
+    }
     ShapeList inputs;
     for(auto id:ids) { auto item=getEntityItemByIndex(id); if(item && item->shape) inputs.push_back(item->shape); }
     try { outputs=kernel().operate(type,subtype,inputs); }
@@ -314,19 +340,26 @@ bool Window::operation(OPERATOR_TYPES type,int subtype,std::vector<int>& ids,Sha
     if(outputs.empty()) { showMessage(tr("运算未产生结果"),4000); return false; }
     if(updateDocument) {
         if(type==OPERATOR_BOOLEAN) {
+            try { kernel().erase({inputs[0],inputs[1]}); }
+            catch(const std::exception& e) { kernel().erase(outputs); outputs.clear(); showMessage(QString::fromUtf8(e.what()),5000); return false; }
             for(auto it=entity_tree.begin();it!=entity_tree.end();) {
                 if(std::find(ids.begin(),ids.begin()+2,it->index)!=ids.begin()+2) {
                     mainWindow->recordEntityRemoved(it->index);
                     delete it->ptrDisplayData; it=entity_tree.erase(it);
                 } else ++it;
             }
-            // KEEP_BOTH in the adapter makes input lifetime explicit here.
-            kernel().erase({inputs[0],inputs[1]});
+            // Remove dependency references to consumed input rows.
+            for(auto& item:entity_tree) {
+                auto consumed=[&](int id) { return id==ids[0] || id==ids[1]; };
+                std::erase_if(item.index_base,consumed);
+                std::erase_if(item.index_support,consumed);
+            }
         } else {
             for(auto id:ids) if(auto item=getEntityItemByIndex(id)) item->visible=false;
         }
-        ptrCurrentTreeItem=nullptr;
+        currentEntityIndex=-1;
         clearSelectedEntities();
+        setCurrentEntity({});
     }
     return true;
 }
@@ -414,7 +447,7 @@ void Window::updateMeshData() {
         auto& e = entity_tree[idx];
         std::fprintf(stderr, "[Window::updateMeshData] processing idx=%zu shape=%llu visible=%d\n",
                      idx, static_cast<unsigned long long>(e.shape.value), (int)e.visible);
-        if (e.visible) {
+        if (e.visible && kernel().kind(e.shape)!=ShapeKind::Unknown) {
             if (e.ptrDisplayData == nullptr) {
                 std::fprintf(stderr, "[Window::updateMeshData] calling CreateMeshFromEntity for idx=%zu\n", idx);
                 GmeMesh::DisplayData* dd = new GmeMesh::DisplayData;
@@ -456,13 +489,14 @@ void Window::updateMeshData() {
 void Window::addHandle(ShapeHandle shape, double* p) {
     for (auto& eti : entity_tree) {
         if (eti.shape == shape) {
+            auto pointsBefore=input_handles;
             input_handles.push_back(Point3(p));
             auto previous=eti.shape;
             HandleGrid splineHandles{input_handles};
             ShapeHandle curve;
             bool update=input_handles.size()>1;
             try { curve=update?kernel().create(E_BSPLINE,splineHandles):kernel().draft(); }
-            catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); return; }
+            catch(const std::exception& e) { input_handles=std::move(pointsBefore); showMessage(QString::fromUtf8(e.what()),5000); return; }
             eti.shape=curve;
             kernel().erase({previous});
             std::vector<std::vector<Point3>> points;
@@ -471,7 +505,7 @@ void Window::addHandle(ShapeHandle shape, double* p) {
             glWidget->setPickedEntity(curve);
             if (eti.ptrDisplayData) delete eti.ptrDisplayData;
             eti.ptrDisplayData = nullptr;
-            if (update) this->updateMeshData();
+            this->updateMeshData();
             mainWindow->recordEntityModified(eti.index);
             captureHistory();
             mainWindow->notifyModelChangedForCollaboration();
@@ -545,10 +579,11 @@ void Window::changeEntity(ShapeHandle shape, QVector3D v) {
 
 void Window::changeEntity(ShapeHandle shape, Translation t) {
     if (!shape) return;
-    kernel().translate(shape, t);
+    try { kernel().translate(shape,t); }
+    catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); return; }
     for (auto& eti : entity_tree) {
         if (eti.shape == shape) {
-            if (eti.operatorType == OPERATOR_TYPES::OPERATOR_CONSTRUCTOR && eti.subOperatorType < BASIC_ENTITIES::E_BSPLINE_CTRLPTS) eti.trans *= t;
+            if (eti.operatorType != OPERATOR_CONSTRUCTOR || eti.subOperatorType < E_BSPLINE_CTRLPTS) eti.trans *= t;
             for (auto& h_u : eti.handles)
                 for (auto& h : h_u) {
                     h += t.translation();
@@ -569,33 +604,65 @@ void Window::changeEntity(ShapeHandle shape, Translation t) {
 }
 
 void Window::updateEntites(std::vector<int>& indices) {
-    const auto pending=indices;
-    for(auto index:pending) {
+    std::set<int> affected,visited,active;
+    bool cycle=false;
+    std::function<void(int)> collect=[&](int index) {
+        if(!affected.insert(index).second) return;
+        if(auto row=getEntityItemByIndex(index)) for(auto child:row->index_support) collect(child);
+    };
+    for(auto index:indices) collect(index);
+    std::function<void(int)> rebuild=[&](int index) {
+        if(visited.contains(index)) return;
+        if(!active.insert(index).second) { cycle=true; return; }
         auto item=getEntityItemByIndex(index);
-        if(!item || !item->shape || !item->isAutoUpdate) continue;
+        const auto bases=item?item->index_base:std::vector<int>{};
+        for(auto base:bases) if(affected.contains(base)) rebuild(base);
+        active.erase(index);
+        if(cycle) return;
+        if(!visited.insert(index).second) return;
+        item=getEntityItemByIndex(index);
+        if(!item || !item->shape || !item->isAutoUpdate) return;
+        auto metadata=*item;
+        std::vector<int> siblings{index};
+        if(metadata.rebuildGroup>=0) {
+            siblings.clear();
+            for(const auto& row:entity_tree) if(row.rebuildGroup==metadata.rebuildGroup) {
+                siblings.push_back(row.index); visited.insert(row.index);
+            }
+        }
         ShapeList results;
-        if(item->operatorType==OPERATOR_CONSTRUCTOR) {
-            ShapeHandle shape; createEntity(item->subOperatorType,shape,item->handles);
+        if(metadata.operatorType==OPERATOR_CONSTRUCTOR) {
+            ShapeHandle shape; createEntity(metadata.subOperatorType,shape,metadata.handles);
             if(shape) results.push_back(shape);
         } else {
-            auto bases=item->index_base;
-            if(!operation(item->operatorType,item->subOperatorType,bases,results,false)) continue;
+            auto bases=metadata.index_base;
+            if(!operation(metadata.operatorType,metadata.subOperatorType,bases,results,false)) return;
         }
-        if(results.empty()) continue;
-        // Preserve the row identity for the first result; append other components.
-        auto old=item->shape;
-        auto metadata=*item;
-        kernel().copyColor(old,results.front());
-        kernel().translate(results.front(),item->trans,true);
-        item->shape=results.front();
-        if(old!=results.front()) kernel().erase({old});
-        delete item->ptrDisplayData; item->ptrDisplayData=nullptr;
-        mainWindow->recordEntityModified(index);
-        auto downstream=item->index_support;
-        for(size_t i=1;i<results.size();++i)
-            addEntity(results[i],metadata.name,metadata.subOperatorType,metadata.index_base,metadata.operatorType);
-        updateEntites(downstream);
-    }
+        if(results.empty()) return;
+        for(size_t i=0;i<results.size();++i) {
+            auto row=i<siblings.size()?getEntityItemByIndex(siblings[i]):nullptr;
+            kernel().copyColor(metadata.shape,results[i]);
+            kernel().translate(results[i],row?row->trans:metadata.trans,true);
+        }
+        for(size_t i=0;i<results.size();++i) {
+            if(i<siblings.size()) {
+                auto row=getEntityItemByIndex(siblings[i]);
+                auto old=row->shape;
+                row->shape=results[i];
+                kernel().erase({old});
+                delete row->ptrDisplayData; row->ptrDisplayData=nullptr;
+                mainWindow->recordEntityModified(row->index);
+            } else {
+                auto row=addEntity(results[i],metadata.name,metadata.subOperatorType,metadata.index_base,metadata.operatorType);
+                row->rebuildGroup=metadata.rebuildGroup;
+                row->trans=metadata.trans;
+            }
+        }
+        for(size_t i=results.size();i<siblings.size();++i)
+            mainWindow->deleteEntityByIndexForCollaboration(siblings[i]);
+    };
+    for(auto index:affected) { rebuild(index); if(cycle) break; }
+    if(cycle) showMessage(tr("检测到循环依赖，已停止重建"),5000);
 }
 
 ENTITY_TREE_ITEM* Window::getEntityItemByIndex(int index) {
@@ -626,7 +693,15 @@ void Window::captureHistory() {
             uuids.insert(static_cast<int>(shapes.size()),QString::fromStdString(item.uuid));
             shapes.push_back(item.shape);
         }
-        if(!shapes.empty()) snapshot.geometry=kernel().encodeGraph(uuids,shapes);
+        if(!shapes.empty()) {
+            snapshot.geometry=kernel().encodeGraph(uuids,shapes);
+            auto nodes=snapshot.geometry.value("nodes").toArray();
+            for(int i=0;i<nodes.size();++i) {
+                auto node=nodes[i].toObject(); auto props=node.value("props").toObject();
+                if(props.value("top_level").toBool()) { props.insert("fallback","sat_fragment"); node.insert("props",props); nodes[i]=node; }
+            }
+            snapshot.geometry.insert("nodes",nodes);
+        }
     } catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); return; }
     snapshot.items=entity_tree; snapshot.nextIndex=latest_index;
     for(auto& item:snapshot.items) { item.ptrDisplayData=nullptr; item.shape={}; }
@@ -661,7 +736,7 @@ void Window::restoreHistory(int direction) {
         auto& item=entity_tree[i]; item.shape=restored[i];
         mainWindow->recordEntityAdded(QString::fromStdString(item.uuid),QString::fromStdString(item.name),"body",item.index);
     }
-    ptrCurrentTreeItem=nullptr; selected_entities.clear(); input_handles.clear(); imode=SELECTION;
+    currentEntityIndex=-1; selected_entities.clear(); input_handles.clear(); imode=SELECTION;
     setCurrentEntity({});
     historyPosition=target;
     updateTreeWidget(); updateMeshData(); isModified=true;

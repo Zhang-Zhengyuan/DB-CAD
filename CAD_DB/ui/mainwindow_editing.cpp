@@ -123,7 +123,12 @@ void MainWindow::operation(OPERATOR_TYPES type,int subtype) {
     dbcad::ShapeList outputs;
     if(!curWindow->operation(type,subtype,ids,outputs,true)) return;
     if(type==OPERATOR_BOOLEAN) ids.clear();
-    for(auto shape:outputs) curWindow->addEntity(shape,name,subtype,ids,type);
+    int group=-1;
+    for(auto shape:outputs) {
+        auto item=curWindow->addEntity(shape,name,subtype,ids,type);
+        if(group<0) group=item->index;
+        item->rebuildGroup=group;
+    }
     curWindow->captureHistory();
 }
 

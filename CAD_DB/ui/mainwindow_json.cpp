@@ -14,6 +14,10 @@ bool MainWindow::submitMode1JsonDelta(const QString &reason) {
     QHash<QString, EntityChange> lastChange;
     for (const auto &change : pendingEntityChanges)
         lastChange.insert(change.uuid, change);
+    QSet<QString> liveIds;
+    for(const auto& item:curWindow->getEntityTree()) liveIds.insert(QString::fromStdString(item.uuid));
+    for(auto it=lastChange.begin();it!=lastChange.end();++it)
+        if(!liveIds.contains(it.key())) it->changeType=EntityChangeType::REMOVE;
     const QList<EntityChange> submittedChanges = lastChange.values();
     const auto decision = session.tryBeginSubmit(reason);
     if (decision.kind != CollabSession::SubmitDecision::Allow) {

@@ -16,6 +16,7 @@
  */
 
 #include "entity_graph_serializer.h"
+#include "kernel/acis_sat_io.hxx"
 
 #include <acis/include/api.hxx>
 #include <acis/include/cstrapi.hxx>
@@ -1328,23 +1329,11 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
             ENTITY_LIST lst;
             lst.add(idToEnt.value(bodyId));
             QString frag;
-            FILE *tf = tmpfile();
-            if (tf && api_save_entity_list(tf, TRUE, lst).ok()) {
-                fseek(tf, 0, SEEK_END);
-                long sz = ftell(tf);
-                rewind(tf);
-                if (sz > 0) {
-                    std::string buf((size_t)sz, '\0');
-                    if (fread(&buf[0], 1, (size_t)sz, tf) == (size_t)sz)
-                        frag = QString::fromLatin1(buf.data(), (int)buf.size());
-                }
-            }
-            if (tf)
-                fclose(tf);
-            if (frag.isEmpty()) {
-                fprintf(stderr, "[Collab] serialize: sat_fragment WRITE FAILED body=%s (submission rejected)\n",
-                        bodyId.toUtf8().constData());
-                throw std::runtime_error("Cannot serialize SAT backup for body " + bodyId.toStdString());
+            try {
+                const auto bytes=dbcad::acis_detail::writeSat(lst);
+                frag=QString::fromLatin1(bytes);
+            } catch(const std::exception& error) {
+                throw std::runtime_error("Cannot serialize SAT backup for body " + bodyId.toStdString() + ": " + error.what());
             }
             fragCount++;
             for (auto &pr2 : orderedNodes) {

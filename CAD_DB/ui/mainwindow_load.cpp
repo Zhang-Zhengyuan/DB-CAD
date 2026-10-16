@@ -32,7 +32,6 @@ void MainWindow::loadFile(const QString &fileName) {
             isRead=true;
         } catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); }
     } else if (checkedAct == setFASTAPIModeAct) {
-        curWindow->clear(); pendingEntityChanges.clear(); entityIndexToUuid.clear();
         std::fprintf(stderr, "[DEBUG] loadFile: setFASTAPIModeAct, fileName =%s\n", fileName.toUtf8().constData());
         BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author),
                                 QString::fromStdString(fastapi_password));
@@ -50,6 +49,7 @@ void MainWindow::loadFile(const QString &fileName) {
                     if (!created.has_value()) {
                         QMessageBox::warning(this, tr("DBCAD"), tr("创建协作项目失败：%1").arg(client.lastError()));
                     } else {
+                        curWindow->clear(); pendingEntityChanges.clear(); entityIndexToUuid.clear();
                         fastapi_project_id = created->id;
                         fastapi_project_name = fileName;
                         CollabSession::instance().setProjectId(created->id);
@@ -72,11 +72,7 @@ void MainWindow::loadFile(const QString &fileName) {
                 if (!jsonModel.has_value()) {
                     QMessageBox::warning(this, tr("DBCAD"), tr("读取 Mode1 JSON 项目失败：%1").arg(client.lastError()));
                 } else {
-                    fastapi_project_id = project->id;
-                    fastapi_project_name = fileName;
                     auto &session = CollabSession::instance();
-                    session.setProjectId(project->id);
-                    session.setModelVersion(0);
                     bool restored = true;
                     if (jsonModel->version > 0) {
                         QJsonParseError graphError;
@@ -85,22 +81,23 @@ void MainWindow::loadFile(const QString &fileName) {
                         restored = graphError.error == QJsonParseError::NoError && graphDoc.isObject();
                         if (restored && !graphDoc.object().value("nodes").toArray().isEmpty()) {
                             restored = pullEntityGraph(jsonModel->version, graphDoc.object(),
-                                                           jsonModel->delta, jsonModel->removedIds);
+                                                           false, jsonModel->removedIds);
                         } else if (restored) {
                             // An intentionally empty latest snapshot is a valid project.
-                            session.setModelVersion(jsonModel->version);
+                            curWindow->clear();
                         }
                     }
                     if (restored) {
+                        if(jsonModel->version==0) curWindow->clear();
+                        pendingEntityChanges.clear();
+                        entityIndexToUuid.clear();
+                        for(const auto& item:curWindow->getEntityTree()) entityIndexToUuid.insert(item.index,QString::fromStdString(item.uuid));
+                        fastapi_project_name=fileName;
+                        session.setProjectId(project->id);
                         session.setModelVersion(jsonModel->version);
                         reconnectFastAPISync();
                         isRead = true;
                     } else {
-                        disconnectFastAPISync();
-                        fastapi_project_id.clear();
-                        fastapi_project_name.clear();
-                        session.setProjectId(QString());
-                        session.setModelVersion(0);
                         updateCollabPanelUi();
                         QMessageBox::warning(this, tr("DBCAD"), tr("Mode1 JSON 图无法重建，请检查序列化器兼容性"));
                     }

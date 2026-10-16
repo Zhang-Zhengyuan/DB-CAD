@@ -5,7 +5,7 @@
 // The decoder chooses fine JSON or the matching SAT backup per stable UUID.
 bool MainWindow::pullEntityGraph(int version, const QJsonObject &graph, bool deltaGraph,
                                      const QStringList &removedIds, const QHash<QString, QString> &remoteNames) {
-    if (!curWindow || fastapi_project_id.isEmpty())
+    if (!curWindow)
         return false;
     dbcad::DecodedGraph decoded;
     QString error;
@@ -48,6 +48,9 @@ bool MainWindow::pullEntityGraph(int version, const QJsonObject &graph, bool del
         if (incoming.contains(uuid)) {
             replaced.push_back(item.shape);
             item.shape = decoded.shapes.value(uuid);
+            // Incoming geometry replaces the old local construction recipe.
+            item.operatorType=OPERATOR_IMPORT; item.subOperatorType=-1;
+            item.handles.clear(); item.trans={}; item.index_base.clear(); item.rebuildGroup=-1;
             retiredMeshes.push_back(item.ptrDisplayData);
             item.ptrDisplayData = nullptr;
             if (names.contains(uuid))
@@ -69,6 +72,7 @@ bool MainWindow::pullEntityGraph(int version, const QJsonObject &graph, bool del
         item.shape = decoded.shapes.value(uuid);
         item.visible = true;
         item.subOperatorType = -1;
+        item.operatorType = OPERATOR_IMPORT;
         tree.push_back(item);
         uuidMapping.insert(item.index, uuid);
     }
@@ -79,9 +83,10 @@ bool MainWindow::pullEntityGraph(int version, const QJsonObject &graph, bool del
         auto missing = [&](int index) { return !validIndices.contains(index); };
         item.index_base.erase(std::remove_if(item.index_base.begin(), item.index_base.end(), missing),
                               item.index_base.end());
-        item.index_support.erase(std::remove_if(item.index_support.begin(), item.index_support.end(), missing),
-                                 item.index_support.end());
+        item.index_support.clear();
     }
+    for(const auto& item:tree) for(auto base:item.index_base)
+        for(auto& source:tree) if(source.index==base) source.index_support.push_back(item.index);
     try { dbcad::kernel().erase(replaced); }
     catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); return false; }
     currentTree=std::move(tree);
@@ -91,7 +96,7 @@ bool MainWindow::pullEntityGraph(int version, const QJsonObject &graph, bool del
     committed=true;
     // Remote edits invalidate old local undo snapshots, which must not undo a colleague's changes.
     curWindow->resetDocumentHistory();
-    curWindow->ptrCurrentTreeItem = nullptr;
+    curWindow->currentEntityIndex = -1;
     curWindow->clearSelectedEntities();
     curWindow->setCurrentEntity({});
     curWindow->updateTreeWidget();

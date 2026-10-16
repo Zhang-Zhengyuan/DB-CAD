@@ -1,6 +1,7 @@
 #include <QScopeGuard>
 // JSON graph restoration: skeletons, geometry and topology retain their original order.
 #include "entity_graph_serializer.h"
+#include "kernel/acis_sat_io.hxx"
 
 #include <acis/include/api.hxx>
 #include <acis/include/cstrapi.hxx>
@@ -591,46 +592,30 @@ static bool deserializeACISEntityGraphComponent(const QJsonObject &graphJson, De
             if (frag.isEmpty() || node.value("props").toObject().value("fallback").toString("sat_fragment") != "sat_fragment")
                 continue;
             bool ok = false;
-            FILE *tf = tmpfile();
-            if (tf) {
-                const QByteArray bytes = frag.toLatin1();
-                if (fwrite(bytes.constData(), 1, (size_t)bytes.size(), tf) == (size_t)bytes.size()) {
-                    rewind(tf);
-                    ENTITY_LIST lst;
-                    if (api_restore_entity_list(tf, TRUE, lst).ok()) {
-                        ENTITY *rb = nullptr;
-                        for (ENTITY *en = lst.first(); en; en = lst.next())
-                            if (!rb && QString::fromLatin1(en->type_name()).toLower() == labels[0].toString()) rb = en;
-                        if (rb) {
-                            outResult->entities->add(rb);
-                            outResult->uuidToEntity[id] = (void *)rb;
-                            fragmentBodies++;
-                            // 组件闭包全部跳过图重建
-                            QSet<QString> seen{id};
-                            QQueue<QString> q;
-                            q.enqueue(id);
-                            while (!q.isEmpty()) {
-                                const QString cur = q.dequeue();
-                                fragmentIds.insert(cur);
-                                for (const QString &nb : adj.value(cur))
-                                    if (!seen.contains(nb)) {
-                                        seen.insert(nb);
-                                        q.enqueue(nb);
-                                    }
-                            }
-                            fprintf(stderr,
-                                    "[Collab] deserialize: sat_fragment restored body=%s entities=%d (skips graph rebuild)\n",
-                                    id.toUtf8().constData(), lst.count());
-                            ok = true;
-                        } else {
-                            // 无 BODY（异常片段）：清掉已恢复实体，回退图重建
-                            for (ENTITY *en = lst.first(); en; en = lst.next())
-                                api_del_entity(en);
-                        }
-                    }
+            ENTITY_LIST restored;
+            try {
+                dbcad::acis_detail::readSat(frag.toLatin1(),restored);
+                ENTITY* root=nullptr;
+                // A component backup must contain exactly one matching top-level root.
+                if(restored.count()==1) {
+                    auto entity=restored[0];
+                    if(QString::fromLatin1(entity->type_name()).toLower()==labels[0].toString()) root=entity;
                 }
-                fclose(tf);
+                if(root) {
+                    outResult->entities->add(root);
+                    outResult->uuidToEntity[id]=root;
+                    ++fragmentBodies;
+                    QSet<QString> seen{id}; QQueue<QString> pending; pending.enqueue(id);
+                    while(!pending.isEmpty()) {
+                        const auto current=pending.dequeue(); fragmentIds.insert(current);
+                        for(const auto& next:adj.value(current)) if(!seen.contains(next)) { seen.insert(next); pending.enqueue(next); }
+                    }
+                    ok=true;
+                }
+            } catch(const std::exception& error) {
+                fprintf(stderr,"[Collab] SAT restore failed: %s\n",error.what());
             }
+            if(!ok && restored.count()) api_del_entity_list(restored);
             if (!ok) {
                 if (errorMessage) *errorMessage = QStringLiteral("Required SAT fragment could not be restored: ") + id;
                 return false;

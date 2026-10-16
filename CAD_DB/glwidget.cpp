@@ -470,6 +470,7 @@ void GLWidget::paintGL() {
             glColor4f(1, 0, 0, 1);
             glBegin(GL_LINES);
             for (int i = 0; i < handles.size(); i++) {
+                if(handles[i].size()<2) continue;
                 GLfloat p1[3] = { handles[i][0].x(), handles[i][0].y(), handles[i][0].z() };
                 glVertex3fv(p1);
                 for (int j = 1; j < handles[i].size() - 1; j++) {
@@ -480,7 +481,7 @@ void GLWidget::paintGL() {
                 GLfloat p3[3] = { handles[i][handles[i].size() - 1].x(), handles[i][handles[i].size() - 1].y(), handles[i][handles[i].size() - 1].z() };
                 glVertex3fv(p3);
             }
-            if (handles.size() > 1) {
+            if (handles.size() > 1 && std::all_of(handles.begin(),handles.end(),[&](const auto& row) { return row.size()==handles.front().size(); })) {
                 // 假设：控制点组成M*N的标准网格
                 for (int i = 0; i < handles[0].size(); i++) {
                     GLfloat p1[3] = { handles[0][i].x(), handles[0][i].y(), handles[0][i].z() };

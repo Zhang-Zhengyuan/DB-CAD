@@ -1,0 +1,183 @@
+// Integration regressions through the same kernel, widgets and HTTP client as CAD_DB.
+#include "window.h"
+#include "backend_api_client.h"
+#include "collab_session.h"
+#include <QApplication>
+#include <QFile>
+#include <QTemporaryDir>
+#include <QTreeWidget>
+#include <QCheckBox>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QKeyEvent>
+#include <QUuid>
+#include <QWebSocket>
+#include <QEventLoop>
+#include <QTimer>
+#include <stdexcept>
+#include <cstdio>
+using namespace dbcad;
+static int checks=0;
+static void expect(bool value,const char* message) {
+    if(!value) throw std::runtime_error(message);
+    ++checks; printf("PASS %s\n",message); fflush(stdout);
+}
+static QJsonObject satOnly(QJsonObject graph) {
+    auto nodes=graph.value("nodes").toArray();
+    for(int i=0;i<nodes.size();++i) {
+        auto node=nodes[i].toObject(); auto props=node.value("props").toObject();
+        if(props.value("top_level").toBool()) { props.insert("fallback","sat_fragment"); node.insert("props",props); nodes[i]=node; }
+    }
+    graph.insert("nodes",nodes); return graph;
+}
+static ShapeList shapes(const DecodedGraph& graph) {
+    ShapeList values; for(auto h:graph.shapes) values.push_back(h); return values;
+}
+static void kernelChecks() {
+    auto& k=kernel(); HandleGrid h; auto cube=k.create(E_CUBE,h);
+    GmeMesh::DisplayData data;
+    expect(k.mesh(cube,data),"cold cube meshes");
+    // Must be the first native write, without any caller initialising FileInfo.
+    auto graph=k.encodeGraph({{0,"cold-cube"}},{cube});
+    expect(!graph.value("nodes").toArray().isEmpty(),"cold Push creates SAT backup");
+    expect(!k.encodeGraph({{0,"cold-cube"}},{cube}).isEmpty(),"repeated Push succeeds");
+    auto bytes=k.writeNative({cube});
+    auto restored=k.readNative(bytes);
+    expect(restored.size()==1 && k.kind(restored[0])==ShapeKind::Body,"native roundtrip"); k.erase(restored);
+    DecodedGraph decoded; QString error;
+    expect(k.decodeGraph(satOnly(graph),decoded,error),"authoritative SAT decode"); k.erase(shapes(decoded));
+    auto draft=k.draft(); bool rejected=false;
+    try { k.encodeGraph({{0,"draft"}},{draft}); } catch(const std::exception&) { rejected=true; }
+    expect(rejected,"unfinished draft rejected without losing document");
+    rejected=false; try { k.writeNative({draft}); } catch(const std::exception&) { rejected=true; }
+    expect(rejected,"native save rejects unfinished draft"); k.erase({draft});
+    auto second=k.create(E_CUBE,h); k.translate(second,{{0.5,0,0}});
+    auto united=k.operate(OPERATOR_BOOLEAN,int(BooleanOperation::Unite),{cube,second});
+    expect(!united.empty() && k.kind(cube)==ShapeKind::Body && k.kind(second)==ShapeKind::Body,"Boolean preserves input ownership");
+    k.erase(united); k.erase({cube,second});
+    rejected=false; try { k.kind(cube); } catch(const std::exception&) { rejected=true; }
+    expect(rejected,"deleted handle rejected");
+    for(int id=E_CUBE;id<=E_BEZIER;++id) {
+        HandleGrid points; auto shape=k.create(id,points);
+        auto uuid=QString("primitive-%1").arg(id);
+        auto g=k.encodeGraph({{0,uuid}},{shape});
+        expect(k.decodeGraph(g,decoded,error),qPrintable(QString("primitive %1 hybrid roundtrip: %2").arg(id).arg(error)));
+        expect(decoded.shapes.contains(uuid),"UUID retained");
+        k.erase(shapes(decoded)); k.erase({shape});
+    }
+    // Failed component must not adopt the already decoded first component.
+    h.clear(); cube=k.create(E_CUBE,h); second=k.create(E_SPHERE,h);
+    auto bad=satOnly(k.encodeGraph({{0,"a"},{1,"b"}},{cube,second}));
+    auto nodes=bad.value("nodes").toArray();
+    for(int i=0;i<nodes.size();++i) {
+        auto n=nodes[i].toObject(); if(n.value("id").toString()!="b") continue;
+        auto props=n.value("props").toObject(); props.insert("sat_fragment","invalid SAT"); n.insert("props",props); nodes[i]=n;
+    }
+    bad.insert("nodes",nodes);
+    expect(!k.decodeGraph(bad,decoded,error) && decoded.shapes.isEmpty(),"failed multi-component decode is atomic");
+    expect(k.mesh(cube,data),"failed decode preserves live shapes"); k.erase({cube,second});
+    QTemporaryDir unicode(QDir::tempPath()+QString::fromUtf8("/几何回归XXXXXX"));
+    expect(unicode.isValid(),"Unicode temp directory available");
+    const auto oldTmp=qgetenv("TMP"),oldTemp=qgetenv("TEMP");
+    qputenv("TMP",unicode.path().toLocal8Bit()); qputenv("TEMP",unicode.path().toLocal8Bit());
+    expect(QDir::tempPath()==unicode.path(),"Qt uses Unicode temporary path");
+    h.clear(); cube=k.create(E_CUBE,h);
+    expect(!k.encodeGraph({{0,"unicode"}},{cube}).isEmpty(),"SAT supports Unicode temporary path"); k.erase({cube});
+    qputenv("TMP",oldTmp); qputenv("TEMP",oldTemp);
+}
+static QString compact(QJsonObject o) { return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)); }
+static void clientChecks(const QString& url) {
+    QTemporaryDir temp; expect(temp.isValid(),"isolated client directory");
+    QDir::setCurrent(temp.path());
+    QFile config("fastapi_connect_info.conf"); expect(config.open(QIODevice::WriteOnly),"test client configuration");
+    config.write(url.toUtf8()+"\nregression\n\n"); config.close();
+    MainWindow main;
+    auto window=main.findChild<Window*>(); expect(window!=nullptr,"real client document created");
+    BackendApiClient peer(url,"peer"); auto project=peer.getOrCreateProject(QString("kernel-isolation-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    expect(project.has_value(),qPrintable("create project: "+peer.lastError()));
+    QWebSocket observer; QEventLoop connected; QTimer timeout; timeout.setSingleShot(true);
+    QObject::connect(&observer,&QWebSocket::connected,&connected,&QEventLoop::quit);
+    QObject::connect(&timeout,&QTimer::timeout,&connected,&QEventLoop::quit);
+    bool announced=false;
+    QObject::connect(&observer,&QWebSocket::textMessageReceived,[&](const QString& text) {
+        if(QJsonDocument::fromJson(text.toUtf8()).object().value("type").toString()=="json_delta_saved") announced=true;
+    });
+    auto ws=url; ws.replace("http://","ws://");
+    observer.open(QUrl(ws+"/ws/projects/"+project->id+"?client_id=observer")); timeout.start(5000); connected.exec();
+    expect(observer.isValid(),"peer WebSocket connected to same project");
+    auto& session=CollabSession::instance(); session.setProjectId(project->id); session.onReconnect(true);
+    main.show(); QApplication::processEvents();
+    HandleGrid h; auto cube=kernel().create(E_CUBE,h);
+    auto row=window->addEntity(cube,"original",E_CUBE,h); const int id=row->index;
+    const auto uuid=QString::fromStdString(row->uuid); window->captureHistory();
+    expect(main.submitMode1JsonDelta("cold-start"),"real UI first Push succeeds");
+    expect(session.modelVersion()==1,"first Push advances v1");
+    for(int i=0;i<10 && !announced;++i) { QEventLoop tick; QTimer::singleShot(20,&tick,&QEventLoop::quit); tick.exec(); }
+    expect(announced,"peer receives WebSocket version notification");
+    auto remote=peer.getJsonDelta(project->id,0);
+    DecodedGraph decoded; QString error;
+    expect(remote && kernel().decodeGraph(QJsonDocument::fromJson(remote->graphJson.toUtf8()).object(),decoded,error),"second client pulls and rebuilds v1");
+    kernel().erase(shapes(decoded));
+    // Tree selection survives vector reallocation and redraw.
+    auto tree=window->findChild<QTreeWidget*>(); tree->setCurrentItem(tree->topLevelItem(0));
+    for(int i=0;i<8;++i) { h.clear(); window->addEntity(kernel().create(E_CUBE,h),"additional",E_CUBE,h); }
+    auto checkbox=window->findChild<QCheckBox*>(); checkbox->setChecked(false);
+    expect(!window->getEntityItemByIndex(id)->visible,"selection identity survives vector growth");
+    window->captureHistory(); expect(main.submitMode1JsonDelta("additional"),"multiple roots Push");
+    window->changeEntity(cube,Translation{{2,0,0}});
+    expect(main.submitMode1JsonDelta("move"),"translated Push");
+    window->restoreHistory(-1);
+    expect(main.submitMode1JsonDelta("undo"),"undo followed by Push");
+    main.deleteEntityByIndexForCollaboration(id);
+    window->restoreHistory(-1);
+    expect(window->getEntityItemByIndex(id)!=nullptr && main.submitMode1JsonDelta("restore-deleted"),"delete undo Push retains UUID");
+    main.deleteEntityByIndexForCollaboration(id);
+    expect(main.submitMode1JsonDelta("delete"),"deletion Push");
+    remote=peer.getJsonDelta(project->id,0);
+    auto full=QJsonDocument::fromJson(remote->graphJson.toUtf8()).object();
+    bool present=false; for(auto n:full.value("nodes").toArray()) if(n.toObject().value("id").toString()==uuid) present=true;
+    expect(!present,"peer snapshot excludes deleted UUID");
+    h.clear(); auto sphere=kernel().create(E_SPHERE,h);
+    auto peerGraph=kernel().encodeGraph({{0,"peer-sphere"}},{sphere}); kernel().erase({sphere});
+    auto accepted=peer.saveJsonDelta(project->id,"peer",compact(peerGraph),"[]",{},remote->version);
+    expect(accepted.has_value(),"peer Push accepted");
+    main.pullMode1JsonDelta();
+    bool imported=false; for(const auto& item:window->getEntityTree()) if(item.uuid=="peer-sphere") imported=item.operatorType==OPERATOR_IMPORT && item.subOperatorType==-1 && item.handles.empty();
+    expect(imported && session.modelVersion()==*accepted,"real client Pull imports neutral geometry");
+    const auto liveBefore=window->getEntityList();
+    QJsonObject malformed{{"nodes",QJsonArray{QJsonObject{{"id","broken"},{"labels",QJsonArray{"body"}},{"props",QJsonObject{{"top_level",true},{"fallback","sat_fragment"},{"sat_fragment","invalid"}}}}}},{"rels",QJsonArray{}}};
+    expect(!main.pullEntityGraph(*accepted+1,malformed,true) && window->getEntityList()==liveBefore,"failed remote decode preserves entire document");
+    expect(!peer.saveJsonDelta(project->id,"peer",compact(peerGraph),"[]",{},remote->version).has_value() && peer.lastStatusCode()==409,"stale peer Push rejected");
+    const int nextBefore=window->getEntityTree().back().index;
+    window->clear(); h.clear(); row=window->addEntity(kernel().create(E_CUBE,h),"after-clear",E_CUBE,h);
+    expect(row->index>nextBefore,"clear never reuses document index");
+    window->captureHistory(); expect(main.submitMode1JsonDelta("clear-readd"),"clear readd Push");
+    // Rebuilding a multi-output operation replaces the group rather than appending duplicates.
+    window->clear(); h.clear(); auto left=kernel().create(E_CUBE,h);
+    const int leftId=window->addEntity(left,"left",E_CUBE,h)->index;
+    h.clear(); auto right=kernel().create(E_CUBE,h); kernel().translate(right,{{5,0,0}});
+    const int rightId=window->addEntity(right,"right",E_CUBE,h)->index;
+    std::vector<int> bases{leftId,rightId}; ShapeList outputs;
+    expect(window->operation(OPERATOR_DEFEATURE,DEFEATURE_UNREPEAT,bases,outputs) && outputs.size()==2,"multi-output operation created");
+    int group=-1;
+    for(auto output:outputs) {
+        auto result=window->addEntity(output,"derived",DEFEATURE_UNREPEAT,bases,OPERATOR_DEFEATURE);
+        if(group<0) group=result->index; result->rebuildGroup=group;
+    }
+    for(int i=0;i<3;++i) window->changeEntity(left,Translation{{0.1,0,0}});
+    expect(window->getEntityTree().size()==4,"repeated rebuild keeps two outputs without duplication");
+    // Imported geometry must not regenerate with a constructor subtype.
+    window->clear(); h.clear(); window->addEntity(kernel().create(E_CUBE,h),"escape",E_CUBE,h);
+    // Escape cancels input without closing the embedded document.
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier); QApplication::sendEvent(window,&escape);
+    expect(window->getEntityTree().size()==1,"Escape preserves document");
+    observer.close(); window->clear(); window->setIsModified(false); main.close();
+}
+int main(int argc,char** argv) {
+    QApplication app(argc,argv); int code=0;
+    try {
+        if(app.arguments().size()>1) clientChecks(app.arguments()[1]); else kernelChecks();
+        printf("PASS total=%d\n",checks);
+    } catch(const std::exception& e) { fprintf(stderr,"FAIL after %d checks: %s\n",checks,e.what()); code=1; }
+    shutdownKernel(); return code;
+}

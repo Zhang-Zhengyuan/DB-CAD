@@ -118,7 +118,8 @@ private:
     std::vector<ENTITY_TREE_ITEM> entity_tree;
     int latest_index = 0;
     std::vector<int> selected_entities;
-    ENTITY_TREE_ITEM* ptrCurrentTreeItem;
+    int currentEntityIndex = -1;
+    ENTITY_TREE_ITEM* currentEntityItem() { return getEntityItemByIndex(currentEntityIndex); }
 
     // 显示相关
     QCheckBox* displayCheckBox;
