@@ -7,56 +7,11 @@
 #include <QString>
 #include <QtGlobal>
 #include <memory>
-#include "access.hxx"
+#include <QColor>
+#include "kernel/model_types.h"
 #include "pg_service.h"
 
-enum OPERATOR_TYPES { OPERATOR_IMPORT = 0, OPERATOR_CONSTRUCTOR, OPERATOR_INTERSECTOR, OPERATOR_BOOLEAN, OPERATOR_DEFEATURE, OPERATOR_UNKNOWN, OPERATOR_SPERATOR = 999 };
-enum DEFEATURE_TYPES { DEFEATURE_UNREPEAT = 0, DEFEATURE_REMOVE_SMALL, DEFEATURE_SHELL, DEFEATURE_SPLIT, DEFEATURE_ENVELOPE, DEFEATURE_BREP2CSG };
-enum INPUT_MODES { SELECTION, INPUT_SPLINE };
-// 注意：BASIC_ENTITIES中非样条基本体需放在BSPLINE_CTRLPTS之前
-// 否则将导致进行变换时未修改ENTITY_TREE_ITEM的trans。
-enum BASIC_ENTITIES {
-    E_CUBE = 0,         // 立方体
-    E_SPHERE,           // 球体
-    E_CYLINDER,         // 圆柱体
-    E_TORUS,            // 圆环体
-    E_CONE,             // 圆锥体
-    E_PRISM,            // 多棱锥
-    E_PYRAMID,          // 金字塔
-    E_WIGGLE,           // 摆动体
-    E_PLANE,            // 矩形面
-    E_PPLANE,           // 平行四边形面
-    E_CPLANE,           // 圆形面
-    E_SPHERES,          // 球面
-    E_PSPHERES,         // 部分球面
-    E_CONIC_SIDE,       // 圆锥面
-    E_CYLINDER_SIDE,    // 圆柱面
-    E_PCONIC,           // 部分圆锥面
-    E_TORUSS,           // 完整圆环面
-    E_PTORUSS,          // 部分圆环面
-    E_LAWS,             // 公式面
-    E_LINE,             // 直线
-    E_ARC,              // 圆弧
-    E_ELLIPSE,          // 椭圆
-    E_CONIC,            // 二次线
-    E_HELIX,            // 螺旋线
-    E_SPIRAL,           // 阿基米德螺旋线
-    E_SPRING,           // 弹簧线
-    E_LAWC,             // 方程线
-    E_BSPLINE_CTRLPTS,  // 控制点b样条
-    E_BSPLINE_FIT,      // 拟合b样条
-    E_BSPLINE_INTRP,    // 插值b样条
-    E_BEZIER,           // 贝塞尔
-    E_BSPLINE           // b样条
-};
-
-class ENTITY_LIST;
-class AcisOptions;
-class outcome;
 class Window;
-class HISTORY_STREAM;
-class DELTA_STATE;
-class BULLETIN_BOARD;
 class QWebSocket;
 class QProcess;
 class QTimer;
@@ -66,15 +21,6 @@ class QCheckBox;
 class QPushButton;
 class QDockWidget;
 class QComboBox;
-
-typedef outcome(*GME_fp)(ENTITY_LIST&, AcisOptions*);
-
-struct menu_map {
-    std::string name;
-    int value;
-};
-
-extern std::unordered_map<std::string, std::vector<menu_map>> menus_example;
 
 const QStringList colorNames = QColor::colorNames();
 
@@ -96,7 +42,7 @@ public:
         EntityChangeType changeType;
         int entityIndex;
         qint64 timestamp;
-        // 仅 ADD 变更有效：把该 body 单独序列化的 SAT 文本，供接收端 acis_restore_entity_list 后 addEntity。
+        // Geometry belongs to the component graph; this record carries metadata only.
 
     };
 
@@ -107,28 +53,25 @@ public:
     void recordEntityModified(int index);
     QList<EntityChange> endEntityChangeTracking();
     void clearEntityChanges();
-    // 协作友好的本地删除：UI 右键删除按钮调用，ACIS 真删 + 记账 + 调度 Push
+    // 协作友好的本地删除：UI 右键删除按钮调用，内核删除、变更记账
     void deleteEntityByIndexForCollaboration(int index);
     QString exportEntityChangesToJson(const QList<EntityChange>& changes);
 
     // Legacy WebSocket delta apply, retained for old project history.
 
-    // Bridge-free Mode1: ACIS serialization stays on the client; server merges JSON.
+    // Component encoding stays on the client; the server merges opaque JSON.
     bool submitMode1JsonDelta(const QString& reason);
     void pullMode1JsonDelta();
 
-    // 拉取：用 entity_graph JSON（拓扑/UUID）+ content.sat（restore 用）做合并
-    // 用户在协作面板选择 "JSON 反序列化" 模式时调用此路径。
-    // 优先尝试纯 JSON 反序列化（deserializeACISEntityGraph），失败则 fallback 到 SAT restore。
-    // 不调用 Window::clear()，避免破坏 restore 出来的 body。
-    bool pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, bool deltaGraph = false, const QStringList& removedIds = {}, const QHash<QString, QString>& remoteNames = {});
-    // SAT restore + UUID 对齐辅助函数（EntityGraph fallback 路径）
+    // Reconstruct through the kernel codec, then merge by stable document UUID.
+    bool pullEntityGraph(int version, const QJsonObject& graph, bool deltaGraph = false,
+                         const QStringList& removedIds = {}, const QHash<QString, QString>& remoteNames = {});
 
     // ========== 其他 public 方法 ==========
     void setCurWindow(Window* w) { curWindow = w; }
     void showMessage(const QString s, int duration = -1);
     void notifyModelChangedForCollaboration();
-    void buildTreeFromHistroy(HISTORY_STREAM* hs = nullptr);
+
 
 protected:
     void loadFile(const QString& fileName);

@@ -1,16 +1,10 @@
-﻿#include "glwidget.h"
+#include "glwidget.h"
 
 #include <math.h>
 
 #include <QCoreApplication>
 #include <QMouseEvent>
 
-#include "acis/include/box.hxx"
-#include "acis/include/edge.hxx"
-#include "acis/include/face.hxx"
-#include "acis/include/kernapi.hxx"
-#include "acis/include/point.hxx"
-#include "acis/include/vertex.hxx"
 #include "window.h"
 
 static const char* vshader_face =
@@ -90,7 +84,7 @@ void GLWidget::clear() {
     posZ = 0.0;
     updateMove_local = false;
     scale = 1.0;
-    ptrPickedEntity = nullptr;
+    pickedShape = {};
     isPickedHandle = false;
     addPickedHandle = false;
     updateMove_handle = false;
@@ -258,7 +252,6 @@ void GLWidget::initializeShadersEdge() {
 }
 
 void GLWidget::updateMeshData() {
-    API_NOP_BEGIN
     // 将面网格数据写入VBO
     data_face.clear();
     count_face = 0;
@@ -327,7 +320,6 @@ void GLWidget::updateMeshData() {
     std::fprintf(stderr, "[GLWidget::updateMeshData] pendingGpuUpload=true data_face=%zu data_edge=%zu count_face=%d count_edge=%d radius=%.1f\n",
                  data_face.size(), data_edge.size(), count_face, count_edge, radius);
     update();
-    API_NOP_END
 }
 
 void GLWidget::uploadMeshDataToGpu() {
@@ -404,11 +396,10 @@ void GLWidget::paintGL() {
             if (dd->displayType == DISPLAY_TYPES::DISPLAY_FACE || dd->displayType == DISPLAY_TYPES::DISPLAY_ALL) {
                 for (unsigned int i = 0; i < dd->faceMesh.size(); i++) {
                     QColor color;
-                    ENTITY* ptrEntity = nullptr;
-                    api_get_owner(dd->faceMesh[i].ptrFace, ptrEntity);
-                    color.setRedF(ptrPickedEntity == ptrEntity ? 1.0 : dd->faceMesh[i].color.red());
-                    color.setGreenF(ptrPickedEntity == ptrEntity ? 0.0 : dd->faceMesh[i].color.green());
-                    color.setBlueF(ptrPickedEntity == ptrEntity ? 0.0 : dd->faceMesh[i].color.blue());
+                    auto shape = dd->owner;
+                    color.setRedF(pickedShape == shape ? 1.0 : dd->faceMesh[i].color.red());
+                    color.setGreenF(pickedShape == shape ? 0.0 : dd->faceMesh[i].color.green());
+                    color.setBlueF(pickedShape == shape ? 0.0 : dd->faceMesh[i].color.blue());
                     color.setAlphaF(surface_alpha);
                     program_face->setUniformValue(colorLoc, color);
                     glDrawArrays(GL_TRIANGLES, dd_offset + dd->faceMesh[i].baseIndex, dd->faceMesh[i].numIndices);
@@ -435,14 +426,13 @@ void GLWidget::paintGL() {
             if (dd->displayType == DISPLAY_TYPES::DISPLAY_EDGE || dd->displayType == DISPLAY_TYPES::DISPLAY_ALL) {
                 for (unsigned int i = 0; i < dd->edgeMesh.size(); i++) {
                     QColor color;
-                    ENTITY* ptrEntity = nullptr;
-                    api_get_owner(dd->edgeMesh[i].ptrEdge, ptrEntity);
-                    color.setRedF(ptrPickedEntity == ptrEntity ? 1.0 : dd->edgeMesh[i].color.red());
-                    color.setGreenF(ptrPickedEntity == ptrEntity ? 0.0 : dd->edgeMesh[i].color.green());
-                    color.setBlueF(ptrPickedEntity == ptrEntity ? 0.0 : dd->edgeMesh[i].color.blue());
+                    auto shape = dd->owner;
+                    color.setRedF(pickedShape == shape ? 1.0 : dd->edgeMesh[i].color.red());
+                    color.setGreenF(pickedShape == shape ? 0.0 : dd->edgeMesh[i].color.green());
+                    color.setBlueF(pickedShape == shape ? 0.0 : dd->edgeMesh[i].color.blue());
                     color.setAlphaF(1.0);
                     program_edge->setUniformValue(colorLoc, color);
-                    glLineWidth(ptrPickedEntity == ptrEntity ? line_width * 1.5 : line_width);
+                    glLineWidth(pickedShape == shape ? line_width * 1.5 : line_width);
                     glDrawArrays(GL_LINE_STRIP, dd_offset + dd->edgeMesh[i].baseVertex / 3, dd->edgeMesh[i].numIndices / 3);
                 }
             }
@@ -463,9 +453,9 @@ void GLWidget::paintGL() {
         program_edge->setUniformValue(lightPosLoc, QVector3D(0, 0, 70));
         QOpenGLVertexArrayObject::Binder vaoBinder(&vao_edge);
         GLint dd_offset = 0;
-        if (ptrPickedEntity && parent->getVisibility(ptrPickedEntity)) {
-            std::vector<std::vector<SPAposition>> handles;
-            parent->getHandles(ptrPickedEntity, handles);
+        if (pickedShape && parent->getVisibility(pickedShape)) {
+            std::vector<std::vector<dbcad::Point3>> handles;
+            parent->getHandles(pickedShape, handles);
             glPointSize(point_size);
             glColor4f(1, 0, 0, 1);
             glBegin(GL_POINTS);
@@ -523,9 +513,9 @@ void GLWidget::paintGL() {
         for (auto dd : display_data) {
             for (unsigned int i = 0; i < dd->vertexMesh.size(); i++) {
                 QColor color;
-                color.setRedF(ptrPickedEntity == (ENTITY*)dd->vertexMesh[i].ptrVertex ? 1.0 : dd->vertexMesh[i].color.red());
-                color.setGreenF(ptrPickedEntity == (ENTITY*)dd->vertexMesh[i].ptrVertex ? 0.0 : dd->vertexMesh[i].color.green());
-                color.setBlueF(ptrPickedEntity == (ENTITY*)dd->vertexMesh[i].ptrVertex ? 0.0 : dd->vertexMesh[i].color.blue());
+                color.setRedF(pickedShape == dd->owner ? 1.0 : dd->vertexMesh[i].color.red());
+                color.setGreenF(pickedShape == dd->owner ? 0.0 : dd->vertexMesh[i].color.green());
+                color.setBlueF(pickedShape == dd->owner ? 0.0 : dd->vertexMesh[i].color.blue());
                 color.setAlphaF(1.0);
                 program_edge->setUniformValue(colorLoc, color);
                 glPointSize(point_size);
@@ -552,7 +542,7 @@ void GLWidget::paintGL() {
             updateLP_local = false;
         } else if (addPickedHandle) {
             double p[3] = { lastPostion_local.x(), lastPostion_local.y(), lastPostion_local.z() };
-            parent->addHandle(ptrPickedEntity, p);
+            parent->addHandle(pickedShape, p);
             addPickedHandle = false;
             update();
         }
@@ -567,11 +557,11 @@ void GLWidget::paintGL() {
         lp2 /= scale * scale;
         lp2 -= lp1;
         if (updateMove_local) {
-            parent->changeEntity(ptrPickedEntity, lp2);
+            parent->changeEntity(pickedShape, lp2);
             updateMove_local = false;
         }
         if (updateMove_handle) {
-            parent->changeHandle(ptrPickedEntity, pickedHandle, lp2);
+            parent->changeHandle(pickedShape, pickedHandle, lp2);
             updateMove_handle = false;
         }
     }
@@ -595,7 +585,7 @@ void GLWidget::mousePressEvent(QMouseEvent* event) {
 void GLWidget::mouseDoubleClickEvent(QMouseEvent* event) {
     lastPosition_screen = event->position().toPoint();
     if (parent->getInputMode() == INPUT_MODES::SELECTION) {
-        ptrPickedEntity = nullptr;
+        pickedShape = {};
     } else {
         addPickedHandle = true;
     }
@@ -617,7 +607,7 @@ void GLWidget::mouseMoveEvent(QMouseEvent* event) {
             setYRotation(yRot + 8 * dx);
         }
     } else if (event->buttons() & Qt::RightButton) {
-        if (ptrPickedEntity) {
+        if (pickedShape) {
             updateMove_local = true;
             update();
         } else {
@@ -646,13 +636,13 @@ void GLWidget::wheelEvent(QWheelEvent* event) {
 
 void GLWidget::getSelectedEntites() {
     // 选择控制点
-    SPAposition lp = SPAposition(lastPostion_local.x(), lastPostion_local.y(), lastPostion_local.z());
-    if (ptrPickedEntity) {
-        std::vector<std::vector<SPAposition>> pos_vector;
-        parent->getHandles(ptrPickedEntity, pos_vector);
+    dbcad::Point3 lp = dbcad::Point3(lastPostion_local.x(), lastPostion_local.y(), lastPostion_local.z());
+    if (pickedShape) {
+        std::vector<std::vector<dbcad::Point3>> pos_vector;
+        parent->getHandles(pickedShape, pos_vector);
         for (auto& hp : pos_vector) {
             for (auto& p : hp) {
-                if (same_point(p, lp, 0.2)) {
+                if (dbcad::pointsNear(p, lp, 0.2)) {
                     pickedHandle = p;
                     isPickedHandle = true;
                     update();
@@ -666,9 +656,9 @@ void GLWidget::getSelectedEntites() {
     // 选择顶点
     for (auto dd : display_data) {
         for (unsigned int i = 0; i < dd->vertexMesh.size(); i++) {
-            if (same_point(dd->vertexMesh[i].ptrVertex->geometry()->coords(), lp, 0.2)) {
-                if (ptrPickedEntity == dd->vertexMesh[i].ptrVertex) return;
-                ptrPickedEntity = dd->vertexMesh[i].ptrVertex;
+            if (dbcad::pointsNear(dbcad::Point3(dd->vertexCoords[3*i],dd->vertexCoords[3*i+1],dd->vertexCoords[3*i+2]), lp, 0.2)) {
+                if (pickedShape == dd->owner) return;
+                pickedShape = dd->owner;
                 update();
                 return;
             }
@@ -678,24 +668,13 @@ void GLWidget::getSelectedEntites() {
     // 选择边
     for (auto dd : display_data) {
         for (unsigned int i = 0; i < dd->edgeMesh.size(); i++) {
-            if (dd->edgeMesh[i].ptrEdge == nullptr) continue;
-            SPAbox* ptrBox = dd->edgeMesh[i].ptrEdge->bound();
-            bool inside = true;
-            if (ptrBox) {
-                if (ptrBox->x_range().finite_above() && ptrBox->x_range().end_pt() < lastPostion_local.x()) inside = false;
-                if (ptrBox->x_range().finite_below() && ptrBox->x_range().start_pt() > lastPostion_local.x()) inside = false;
-                if (ptrBox->y_range().finite_above() && ptrBox->y_range().end_pt() < lastPostion_local.y()) inside = false;
-                if (ptrBox->y_range().finite_below() && ptrBox->y_range().start_pt() > lastPostion_local.y()) inside = false;
-                if (ptrBox->z_range().finite_above() && ptrBox->z_range().end_pt() < lastPostion_local.z()) inside = false;
-                if (ptrBox->z_range().finite_below() && ptrBox->z_range().start_pt() > lastPostion_local.z()) inside = false;
-            }
-            if (!inside) continue;
 
+            if(!dd->edgeMesh[i].bounds.contains(lp,0.2)) continue;
             unsigned int nI = (unsigned int)(dd->edgeMesh[i].numIndices / 3);
             if (nI > 0)
                 for (unsigned int j = 0; j < nI - 1; j++) {
                     int jj = 3 * j + dd->edgeMesh[i].baseVertex;
-                    if (dd->edgeCoords.size() <= jj) break;
+                    if (dd->edgeCoords.size() < static_cast<size_t>(jj+6)) break;
                     QVector3D t[2];
                     for (int k = 0; k < 2; k++) {
                         t[k].setX(dd->edgeCoords[jj + k * 3]);
@@ -703,10 +682,9 @@ void GLWidget::getSelectedEntites() {
                         t[k].setZ(dd->edgeCoords[jj + k * 3 + 2]);
                     }
                     if (pointInEdge(lastPostion_local, t[0], t[1])) {
-                        ENTITY* ptrEntity = nullptr;
-                        api_get_owner(dd->edgeMesh[i].ptrEdge, ptrEntity);
-                        if (ptrPickedEntity == ptrEntity) return;
-                        ptrPickedEntity = ptrEntity;
+                        auto shape = dd->owner;
+                        if (pickedShape == shape) return;
+                        pickedShape = shape;
                         update();
                         return;
                     }
@@ -716,19 +694,8 @@ void GLWidget::getSelectedEntites() {
     // 选择面
     for (auto dd : display_data) {
         for (unsigned int i = 0; i < dd->faceMesh.size(); i++) {
-            if (dd->faceMesh[i].ptrFace == nullptr) continue;
-            SPAbox* ptrBox = dd->faceMesh[i].ptrFace->bound();
-            bool inside = true;
-            if (ptrBox) {
-                if (ptrBox->x_range().finite_above() && ptrBox->x_range().end_pt() < lastPostion_local.x()) inside = false;
-                if (ptrBox->x_range().finite_below() && ptrBox->x_range().start_pt() > lastPostion_local.x()) inside = false;
-                if (ptrBox->y_range().finite_above() && ptrBox->y_range().end_pt() < lastPostion_local.y()) inside = false;
-                if (ptrBox->y_range().finite_below() && ptrBox->y_range().start_pt() > lastPostion_local.y()) inside = false;
-                if (ptrBox->z_range().finite_above() && ptrBox->z_range().end_pt() < lastPostion_local.z()) inside = false;
-                if (ptrBox->z_range().finite_below() && ptrBox->z_range().start_pt() > lastPostion_local.z()) inside = false;
-            }
-            if (!inside) continue;
 
+            if(!dd->faceMesh[i].bounds.contains(lp,0.2)) continue;
             unsigned int nT = (unsigned int)(dd->faceMesh[i].numIndices / 3);
             if (nT > 0)
                 for (unsigned int j = 0; j < nT; j++) {
@@ -741,10 +708,9 @@ void GLWidget::getSelectedEntites() {
                         t[k].setZ(dd->faceCoords[kk + 2]);
                     }
                     if (pointInTriangle(lastPostion_local, t[0], t[1], t[2])) {
-                        ENTITY* ptrEntity = nullptr;
-                        api_get_owner(dd->faceMesh[i].ptrFace, ptrEntity);
-                        if (ptrPickedEntity == ptrEntity) return;
-                        ptrPickedEntity = ptrEntity;
+                        auto shape = dd->owner;
+                        if (pickedShape == shape) return;
+                        pickedShape = shape;
                         update();
                         return;
                     }

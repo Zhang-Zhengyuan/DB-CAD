@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Static adapter dependencies are resolved by the final application link. -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <Link><AdditionalDependencies>$(DBCADDepsRoot)\acis\lib\SPAAcisDsd.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <Link><AdditionalDependencies>$(DBCADDepsRoot)\acis\lib\SPAAcisDs.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+</Project>

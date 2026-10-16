@@ -3,13 +3,13 @@
 
 // Reconstruct every incoming component before changing the visible document.
 // The decoder chooses fine JSON or the matching SAT backup per stable UUID.
-bool MainWindow::pullACISEntityGraph(int version, const QJsonObject &graph, bool deltaGraph,
+bool MainWindow::pullEntityGraph(int version, const QJsonObject &graph, bool deltaGraph,
                                      const QStringList &removedIds, const QHash<QString, QString> &remoteNames) {
     if (!curWindow || fastapi_project_id.isEmpty())
         return false;
-    DeserializedEntityGraph decoded{nullptr, {}};
+    dbcad::DecodedGraph decoded;
     QString error;
-    if (!graph.value("nodes").toArray().isEmpty() && !deserializeACISEntityGraph(graph, &decoded, &error)) {
+    if (!graph.value("nodes").toArray().isEmpty() && !dbcad::kernel().decodeGraph(graph, decoded, error)) {
         qWarning() << "[Collab] reconstruction failed:" << error;
         return false;
     }
@@ -24,41 +24,53 @@ bool MainWindow::pullACISEntityGraph(int version, const QJsonObject &graph, bool
     const bool localDirty = curWindow->getIsModified();
     session.setApplyingRemoteSnapshot(true);
     const auto restoreApply = qScopeGuard([&session]() { session.setApplyingRemoteSnapshot(false); });
-    auto &tree = curWindow->getEntityTree();
+    auto& currentTree=curWindow->getEntityTree();
+    auto tree=currentTree;
+    auto uuidMapping=entityIndexToUuid;
+    int nextIndex=curWindow->latest_index;
+    std::vector<GmeMesh::DisplayData*> retiredMeshes;
+    bool committed=false;
+    const auto discardDecoded=qScopeGuard([&]() {
+        if(!committed) {
+            dbcad::ShapeList abandoned;
+            for(auto h:decoded.shapes) abandoned.push_back(h);
+            try { dbcad::kernel().erase(abandoned); } catch(...) {}
+        }
+    });
     QSet<QString> incoming;
-    for (auto it = decoded.uuidToEntity.constBegin(); it != decoded.uuidToEntity.constEnd(); ++it)
+    for (auto it = decoded.shapes.constBegin(); it != decoded.shapes.constEnd(); ++it)
         incoming.insert(it.key());
-    QList<ENTITY *> replaced;
+    dbcad::ShapeList replaced;
     // Keep indices, visibility, dependencies and display settings on updates.
     for (int i = static_cast<int>(tree.size()) - 1; i >= 0; --i) {
         auto &item = tree[static_cast<size_t>(i)];
         const QString uuid = QString::fromStdString(item.uuid);
         if (incoming.contains(uuid)) {
-            replaced.append(item.ptrEntity);
-            item.ptrEntity = static_cast<ENTITY *>(decoded.uuidToEntity.value(uuid));
-            delete item.ptrDisplayData;
+            replaced.push_back(item.shape);
+            item.shape = decoded.shapes.value(uuid);
+            retiredMeshes.push_back(item.ptrDisplayData);
             item.ptrDisplayData = nullptr;
             if (names.contains(uuid))
                 item.name = names.value(uuid).toStdString();
-            entityIndexToUuid.insert(item.index, uuid);
+            uuidMapping.insert(item.index, uuid);
             incoming.remove(uuid);
-        } else if (removedIds.contains(uuid) || (!deltaGraph && !decoded.uuidToEntity.contains(uuid))) {
-            replaced.append(item.ptrEntity);
-            delete item.ptrDisplayData;
-            entityIndexToUuid.remove(item.index);
+        } else if (removedIds.contains(uuid) || (!deltaGraph && !decoded.shapes.contains(uuid))) {
+            replaced.push_back(item.shape);
+            retiredMeshes.push_back(item.ptrDisplayData);
+            uuidMapping.remove(item.index);
             tree.erase(tree.begin() + i);
         }
     }
     for (const auto &uuid : incoming) {
         ENTITY_TREE_ITEM item;
-        item.index = curWindow->latest_index++;
+        item.index = nextIndex++;
         item.uuid = uuid.toStdString();
         item.name = names.value(uuid, tr("远端实体")).toStdString();
-        item.ptrEntity = static_cast<ENTITY *>(decoded.uuidToEntity.value(uuid));
+        item.shape = decoded.shapes.value(uuid);
         item.visible = true;
         item.subOperatorType = -1;
         tree.push_back(item);
-        entityIndexToUuid.insert(item.index, uuid);
+        uuidMapping.insert(item.index, uuid);
     }
     QSet<int> validIndices;
     for (const auto &item : tree)
@@ -70,18 +82,18 @@ bool MainWindow::pullACISEntityGraph(int version, const QJsonObject &graph, bool
         item.index_support.erase(std::remove_if(item.index_support.begin(), item.index_support.end(), missing),
                                  item.index_support.end());
     }
-    ENTITY_LIST oldEntities;
-    for (auto *entity : replaced)
-        if (entity)
-            oldEntities.add(entity);
-    if (oldEntities.count()) {
-        API_NOP_BEGIN;
-        api_del_entity_list(oldEntities);
-        API_NOP_END;
-    }
-    delete decoded.entities;
+    try { dbcad::kernel().erase(replaced); }
+    catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); return false; }
+    currentTree=std::move(tree);
+    entityIndexToUuid=std::move(uuidMapping);
+    curWindow->latest_index=nextIndex;
+    for(auto mesh:retiredMeshes) delete mesh;
+    committed=true;
+    // Remote edits invalidate old local undo snapshots, which must not undo a colleague's changes.
+    curWindow->resetDocumentHistory();
     curWindow->ptrCurrentTreeItem = nullptr;
     curWindow->clearSelectedEntities();
+    curWindow->setCurrentEntity({});
     curWindow->updateTreeWidget();
     curWindow->updateMeshData();
     curWindow->setIsModified(localDirty && !pendingEntityChanges.isEmpty());

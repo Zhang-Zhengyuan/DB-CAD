@@ -162,7 +162,7 @@ void MainWindow::createActions() {
     QMenu *settingsMenu = menuBar()->addMenu(tr("设置存取模式(&S)"));
 
     setACISModeAct = new QAction(tr("SAT文件(ACIS)(&A)"), this);
-    setACISModeAct->setStatusTip(tr("存取为SAT文件，存取函数使用ACIS提供的API"));
+    setACISModeAct->setStatusTip(tr("使用当前几何内核读写 SAT 文件"));
     setACISModeAct->setCheckable(true);
     settingsMenu->addAction(setACISModeAct);
 
@@ -210,11 +210,11 @@ void MainWindow::createActions() {
     // ----------------------------------------------------------------
     QMenu *pgMenu = menuBar()->addMenu(tr("PostgreSQL(&P)"));
     pgSaveAct = pgMenu->addAction(tr("保存当前模型到 PostgreSQL"), this, &MainWindow::pgSaveCurrentToDatabase);
-    pgSaveAct->setStatusTip(tr("将当前 ACIS 实体导出为 SAT，调 PgService::saveSat 写入 dbcad_pg_demo 表。"));
+    pgSaveAct->setStatusTip(tr("将当前模型保存到 PostgreSQL。"));
     pgLoadAct =
         pgMenu->addAction(tr("从 PostgreSQL 加载到当前窗口..."), this, &MainWindow::pgLoadFromDatabaseToCurrent);
     pgLoadAct->setStatusTip(
-        tr("弹框输入零件名，调 PgService::loadSat 拉到本地，再用 api_restore_entity_list 重建实体。"));
+        tr("输入零件名，从 PostgreSQL 加载模型。"));
     pgListAct = pgMenu->addAction(tr("列出已存零件"), this, &MainWindow::pgListPartsInDatabase);
     pgListAct->setStatusTip(tr("调 PgService::listParts，在弹窗里看 id/name/bytes/updated_at。"));
     pgCountAct = pgMenu->addAction(tr("统计已存零件数"), this, &MainWindow::pgCountPartsInDatabase);

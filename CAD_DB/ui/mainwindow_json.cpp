@@ -27,18 +27,18 @@ bool MainWindow::submitMode1JsonDelta(const QString &reason) {
     for (const auto &change : submittedChanges)
         if (change.changeType != EntityChangeType::REMOVE)
             changedRoots.insert(change.uuid);
-    ENTITY_LIST entities;
+    dbcad::ShapeList entities;
     QHash<int, QString> serializerUuidByPosition;
     for (const auto &item : curWindow->getEntityTree()) {
         const QString uuid = QString::fromStdString(item.uuid);
         if (!changedRoots.contains(uuid))
             continue;
-        serializerUuidByPosition.insert(entities.count(), uuid);
-        entities.add(item.ptrEntity);
+        serializerUuidByPosition.insert(static_cast<int>(entities.size()), uuid);
+        entities.push_back(item.shape);
     }
     QJsonObject deltaGraph;
     try {
-        deltaGraph = serializeACISEntityGraph(serializerUuidByPosition, entities);
+        deltaGraph = dbcad::kernel().encodeGraph(serializerUuidByPosition, entities);
     } catch (const std::exception &ex) {
         session.rollbackSubmit();
         statusBar()->showMessage(tr("序列化失败：%1").arg(QString::fromUtf8(ex.what())), 6000);
@@ -168,7 +168,7 @@ void MainWindow::pullMode1JsonDelta() {
             return;
         }
     }
-    if (!pullACISEntityGraph(result->version, graphDoc.object(), true, result->removedIds, remoteNames)) {
+    if (!pullEntityGraph(result->version, graphDoc.object(), true, result->removedIds, remoteNames)) {
         statusBar()->showMessage(tr("Mode1 JSON Pull 重建 ACIS 失败"), 6000);
         return;
     }

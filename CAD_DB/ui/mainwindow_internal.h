@@ -3,7 +3,6 @@
 #include "mainwindow.h"
 #include "pg_service.h"
 #include "collab_session.h"
-#include "entity_graph_serializer.h"
 #include "entity_merge_engine.h"
 
 #include <QActionGroup>
@@ -58,30 +57,12 @@
 #include <functional>
 #include <sstream>
 
-#include "gme_dump_object.hxx"
-#include "acis/include/bulletin.hxx"
-#include "acis/include/attrib.hxx"
-#include "acis/include/kernapi.hxx"
-#include "acis/include/boolapi.hxx"
-#include "acis/include/cstrapi.hxx"
-#include "acis/include/insanity_list.hxx"
-#include "acis/include/rnd_api.hxx"
-#include "gme_user_data.hxx"
 #include "window.h"
-#include "acis/include/debug.hxx"
-
-#include "acis/include/part_api.hxx"
-
-#include "neo4j.hxx"
-#include "access.hxx"
-#include "common.hxx"
+#include "kernel/geometry_kernel.h"
+#include "kernel/legacy_storage.h"
 #include "backend_api_client.h"
-#include <mgclient-1.4.2/mgclient.h>
-#include <acis/include/ckoutcom.hxx>
-
-std::string process(outcome &result);
-int initialize_acis();
-void terminate_acis(int level);
+#include <filesystem>
+#include <format>
 
 struct menu_struct {
     std::string name_cn = "菜单";                                       // 菜单项中文名/状态栏提示

@@ -99,85 +99,8 @@ void MainWindow::open() {
     }
 }
 
-void MainWindow::buildTreeFromHistroy(HISTORY_STREAM *hs) {
-    if (hs == nullptr) {
-        hs = get_default_stream();
-    }
-
-    set_logging(false);
-    curWindow->clear();
-    DELTA_STATE *this_ds = hs->get_root_ds();
-    while (this_ds) {
-        GME_DELTA_STATE_user_data *delta_state_user_data = (GME_DELTA_STATE_user_data *)(this_ds->get_user_data());
-        if (delta_state_user_data) {
-            auto tree_items = delta_state_user_data->get_tree_items();
-            for (auto item : *tree_items) {
-                item.ptrDisplayData = nullptr;
-                curWindow->addTreeItem(item);
-                ENTITY_TREE_ITEM *restored = curWindow->getEntityItemByIndex(item.index);
-                if (restored == nullptr) {
-                    qWarning() << "[History] restored entity index not found:" << item.index;
-                    continue;
-                }
-                restored->index_support.clear();
-                for (auto base : item.index_base) {
-                    ENTITY_TREE_ITEM *baseItem = curWindow->getEntityItemByIndex(base);
-                    if (baseItem == nullptr) {
-                        qWarning() << "[History] base entity index not found:" << base;
-                        continue;
-                    }
-                    baseItem->visible = false;
-                    baseItem->index_support.push_back(item.index);
-                }
-            }
-        }
-        this_ds = this_ds->prev();
-    }
-    curWindow->updateTreeWidget();
-    curWindow->updateMeshData();
-
-    if (hs->current_ds) {
-        delete hs->current_ds;
-        hs->current_ds = nullptr;
-    }
-    set_logging(true);
-}
-
-void MainWindow::undo() {
-    HISTORY_STREAM *hs = get_default_stream();
-    if (!hs)
-        return;
-    abort_bb(hs);
-
-    int request_n = -1;
-    int actual_n = 0;
-
-    if (hs) {
-        api_roll_n_states(hs, request_n, actual_n);
-    }
-    if (actual_n != request_n) {
-        return;
-    }
-
-    buildTreeFromHistroy(hs);
-    return;
-}
-
-void MainWindow::redo() {
-    HISTORY_STREAM *hs = get_default_stream();
-    int request_n = 1;
-    int actual_n = 0;
-
-    if (hs) {
-        api_roll_n_states(hs, request_n, actual_n);
-    }
-    if (actual_n != request_n) {
-        return;
-    }
-
-    buildTreeFromHistroy(hs);
-    return;
-}
+void MainWindow::undo() { if(curWindow) curWindow->restoreHistory(-1); }
+void MainWindow::redo() { if(curWindow) curWindow->restoreHistory(1); }
 
 bool MainWindow::save() {
     if (curWindow == nullptr) {
@@ -192,9 +115,7 @@ bool MainWindow::save() {
         return false;
     }
 
-    ENTITY_LIST el;
-    acis_get_noattrib_toplevel_active_entities(el);
-    if (el.count() == 0 && setModeActGroup->checkedAction() != setFASTAPIModeAct) {
+    if (curWindow->getEntityList().empty() && setModeActGroup->checkedAction() != setFASTAPIModeAct) {
         QMessageBox::warning(this, tr("DBCAD"), tr("当前无顶级活跃实体。"));
         return false;
     }
@@ -248,7 +169,7 @@ void MainWindow::saveEntity() {
     if (file) {
         for (auto ei : curWindow->getSelectedEntities()) {
             ENTITY_TREE_ITEM *ptrEti = curWindow->getEntityItemByIndex(ei);
-            dump_object(file, ptrEti->name.c_str(), 0, ptrEti->ptrEntity);
+            dbcad::kernel().dump(ptrEti->shape,ptrEti->name,file,false);
         }
         fclose(file);
         ss = true;
@@ -291,10 +212,7 @@ void MainWindow::saveDebugFile() {
     if (file) {
         for (auto ei : curWindow->getSelectedEntities()) {
             ENTITY_TREE_ITEM *ptrEti = curWindow->getEntityItemByIndex(ei);
-            api_set_int_option("brief_surface_debug", false);
-            api_set_int_option("brief_curve_debug", false);
-            api_set_int_option("brief_pcurve_debug", false);
-            debug_entity(ptrEti->ptrEntity, file);
+            dbcad::kernel().dump(ptrEti->shape,ptrEti->name,file,true);
         }
         fclose(file);
         ss = true;
@@ -353,82 +271,10 @@ void MainWindow::about() {
 }
 
 void MainWindow::runTest() {
-    Neo4jPart conn(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(), "");
-
-    for (const auto &entry : std::filesystem::directory_iterator(".\\testcases")) {
-        if (entry.is_regular_file()) {
-            std::string filepath = entry.path().string();
-            std::string extname = std::filesystem::path(filepath).extension().string();
-            std::transform(extname.begin(), extname.end(), extname.begin(), tolower); // 忽略大小写
-            if (extname == ".sat") {
-                std::string TestCaseName = std::filesystem::path(filepath).stem().string();
-                ENTITY_LIST el;
-                acis_restore_entity_list(el, filepath.c_str(), 2, 0, true);
-
-                auto [testresult, neo4j_save_duration, acis_save_duration, neo4j_restore_duration,
-                      acis_restore_duration] = AccessTest::CheckTestCase(conn, TestCaseName, el);
-                api_del_entity_list(el);
-
-                std::ofstream logfs("testlog.txt", std::ios::app);
-                logfs << std::format("=======Test: {}=======", filepath) << std::endl;
-                logfs << (testresult ? "PASS" : "FAIL") << "\t数据库存:" << neo4j_save_duration
-                      << "ms\t文件存:" << acis_save_duration
-                      << "ms\t数据库存/文件存:" << neo4j_save_duration / acis_save_duration
-                      << "\t数据库取:" << neo4j_restore_duration << "ms\t文件取:" << acis_restore_duration
-                      << "ms\t数据库取/文件取:" << neo4j_restore_duration / acis_restore_duration << std::endl;
-                logfs.close();
-            }
-        }
-    }
-
-    QMessageBox::information(this, tr("DBCAD"), tr("neo4j测试运行结束，请打开./testlog.txt文件查看测试报告。"));
+    dbcad::runLegacyAccess({neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password});
+    QMessageBox::information(this,tr("DBCAD"),tr("存取诊断结束。"));
 }
-
 void MainWindow::incrementalTest() {
-    TMDF;
-
-    {
-
-        std::ofstream logfs("incremental_dighole_testlog.txt", std::ios::app);
-        BODY *block;
-        check_outcome(api_solid_block(SPAposition(0.0, 0.0, 0.0), SPAposition(1000.0, 2000.0, 300.0), block));
-        bool is_through = false;
-        int holecnt = 0;
-        for (int i = 10; i <= 990; i += 20) {      // 50个
-            for (int j = 10; j <= 1990; j += 20) { // 100个
-                BODY *hole;
-                check_outcome(api_solid_cylinder_cone(SPAposition(i, j, is_through ? -10.0 : 100.0),
-                                                      SPAposition(i, j, 310.0), 5.0, 5.0, 5.0, nullptr, hole));
-                check_outcome(api_subtract(hole, block));
-                holecnt++;
-
-                std::string acis_save_filename_str = std::format("acis_partTest_save_{}.sat", holecnt);
-                const char *acis_save_filename = acis_save_filename_str.c_str();
-                std::string acis_save_check_filename_str = std::format("check_acis_partTest_save_{}.sat", holecnt);
-                const char *acis_save_check_filename = acis_save_check_filename_str.c_str();
-                std::string conn_check_filename_str = std::format("check_incrementalTest_{}.sat", holecnt);
-                const char *conn_check_filename = conn_check_filename_str.c_str();
-
-                Neo4jPart conn_incremental(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(),
-                                           neo4jdb_password.c_str(), "incrementalTest");
-
-                // 增量存
-                TMST;
-                IncrementalContext incCtx_incrementalSave;
-                api_save_neo4j(conn_incremental, incCtx_incrementalSave);
-                TMED;
-                double neo4j_incremental_save_duration = TMDR;
-
-                // ACIS存
-                TMST;
-                acis_save_noattrib_toplevel_active_entities(acis_save_filename, 2, 0, true);
-                TMED;
-                double acis_save_duration = TMDR;
-
-                is_through = !is_through;
-            }
-        }
-    }
-
-    QMessageBox::information(this, tr("DBCAD"), tr("增量存取测试结束。"));
+    dbcad::runLegacyIncremental({neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password});
+    QMessageBox::information(this,tr("DBCAD"),tr("增量诊断结束。"));
 }

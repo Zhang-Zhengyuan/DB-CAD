@@ -89,7 +89,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SPAAcisDsd.lib;ws2_32.lib;openssl\lib\libssl.lib;openssl\lib\libcrypto.lib;postgresql\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;ws2_32.lib;openssl\lib\libssl.lib;openssl\lib\libcrypto.lib;postgresql\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- ACIS 官方要求：栈保留 4MB（深度递归的几何算法），对应链接器 /STACK:4194304。 -->
       <StackReserveSize>4194304</StackReserveSize>
     </Link>
@@ -105,7 +105,7 @@
       <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SPAAcisDs.lib;ws2_32.lib;openssl\lib\libssl.lib;openssl\lib\libcrypto.lib;postgresql\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;ws2_32.lib;openssl\lib\libssl.lib;openssl\lib\libcrypto.lib;postgresql\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
       <StackReserveSize>4194304</StackReserveSize>
     </Link>
@@ -134,25 +134,14 @@
       <GenerateDebugInformation>false</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
+  <Import Project="kernel\acis_link.props" />
   <ItemGroup>
-    <ClCompile Include="acis.cpp" />
     <ClCompile Include="backend_api_client.cpp" />
-    <ClCompile Include="common.cpp" />
-    <ClCompile Include="access.cpp" />
-    <ClCompile Include="storage\access_save_values.cpp" />
-    <ClCompile Include="storage\access_save_surfaces.cpp" />
-    <ClCompile Include="storage\access_save_curves.cpp" />
-    <ClCompile Include="storage\access_restore_values.cpp" />
 
     <ClCompile Include="DbcadAPI.cpp" />
     <ClCompile Include="collab_session.cpp" />
-    <ClCompile Include="entity_graph_serializer.cpp" />
-    <ClCompile Include="entity_graph_deserializer.cpp" />
     <ClCompile Include="entity_merge_engine.cpp" />
-    <ClCompile Include="gme_dump_object.cpp" />
-    <ClCompile Include="gme_mesh.cpp" />
     <ClCompile Include="glwidget.cpp" />
-    <ClCompile Include="neo4j.cpp" />
     <ClCompile Include="pg_service.cpp" />
     <ClCompile Include="pg_store.cpp" />
     <ClCompile Include="window.cpp" />
@@ -175,11 +164,6 @@
     <ClCompile Include="ui\mainwindow_editing.cpp" />
     <ClCompile Include="ui\mainwindow_load.cpp" />
     <ClCompile Include="ui\mainwindow_save.cpp" />
-    <ClCompile Include="storage\access_graph_save.cpp" />
-    <ClCompile Include="storage\access_graph_restore.cpp" />
-    <ClCompile Include="storage\access_history_save.cpp" />
-    <ClCompile Include="storage\access_history_restore.cpp" />
-    <ClCompile Include="storage\access_parts.cpp" />
     <ClCompile Include="ui\mainwindow_config.cpp" />
     <ClCompile Include="ui\mainwindow_menus.cpp" />
 
@@ -195,6 +179,10 @@
     <QtMoc Include="pg_service.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="kernel\geometry_kernel.h" />
+    <ClInclude Include="kernel\model_types.h" />
+    <ClInclude Include="kernel\document_model.h" />
+    <ClInclude Include="kernel\legacy_storage.h" />
     <ClInclude Include="acis.hxx" />
     <ClInclude Include="backend_api_client.h" />
     <ClInclude Include="common.hxx" />
@@ -233,6 +221,11 @@
   </ItemGroup>
   <ItemGroup>
     <Text Include="backend\requirements.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="DbcadAcis.vcxproj">
+      <Project>{EBBE07A9-F1B3-479B-AC5F-9E9A6832CC46}</Project>
+    </ProjectReference>
   </ItemGroup>
   <!-- Use the same output for solution builds and direct project builds. -->
   <PropertyGroup>

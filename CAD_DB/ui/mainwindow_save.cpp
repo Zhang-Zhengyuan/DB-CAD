@@ -65,44 +65,16 @@ bool MainWindow::saveFile(const QString &fileName) {
     QAction *checkedAct = setModeActGroup->checkedAction();
 
     if (checkedAct == setACISModeAct) {
-        FILE *f = nullptr;
-        f = fopen(fileName.toStdString().c_str(), "wb");
-        if (f) {
-            API_NOP_BEGIN;
-            api_save_version(2, 0);
-            FileInfo fileinfo;
-            fileinfo.set_units(1.0);
-            fileinfo.set_product_id("demo_qt");
-            result = api_set_file_info((FileIdent | FileUnits), fileinfo);
-            result = api_set_int_option("sequence_save_files", 1);
-            ENTITY_LIST el;
-            acis_get_noattrib_toplevel_active_entities(el);
-            result = api_save_entity_list(f, true, el);
-            API_NOP_END;
-            fclose(f);
-        } else {
-            errorMessage = tr("无法以写入方式打开文件%1。").arg(QDir::toNativeSeparators(fileName));
-        }
-
-    } else if (checkedAct == setNEO4JModeAct) {
         try {
-            Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(),
-                        fileName.toStdString());
-            ENTITY_LIST el;
-            acis_get_noattrib_toplevel_active_entities(el);
-            api_save_entity_list_neo4j_part(f, el);
-        } catch (const std::exception &ex) {
-            errorMessage = tr("保存到neo4j失败：%1").arg(QString::fromUtf8(ex.what()));
-        }
-    } else if (checkedAct == setNEO4JIncrementalModeAct) {
+            QByteArray bytes=dbcad::kernel().writeNative(curWindow->getEntityList());
+            QFile file(fileName);
+            if(!file.open(QIODevice::WriteOnly) || file.write(bytes)!=bytes.size()) errorMessage=tr("无法写入文件：%1").arg(fileName);
+        } catch(const std::exception& e) { errorMessage=QString::fromUtf8(e.what()); }
+    } else if(checkedAct==setNEO4JModeAct || checkedAct==setNEO4JIncrementalModeAct) {
         try {
-            Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(),
-                        fileName.toStdString());
-            IncrementalContext incCtx_incrementalSave2;
-            api_save_neo4j(f, incCtx_incrementalSave2);
-        } catch (const std::exception &ex) {
-            errorMessage = tr("保存到neo4j失败：%1").arg(QString::fromUtf8(ex.what()));
-        }
+            dbcad::saveLegacyPart({neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password},
+                fileName.toStdString(),curWindow->getEntityList(),checkedAct==setNEO4JIncrementalModeAct);
+        } catch(const std::exception& e) { errorMessage=QString::fromUtf8(e.what()); }
     } else {
         throw std::runtime_error("Cannot find the enum");
     }

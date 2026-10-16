@@ -61,10 +61,7 @@ void MainWindow::setNEO4JConnectInfo() {
         }
 
         try {
-            Neo4jPart conn(host.toStdString().c_str(), portEdit.value(),
-                           userEdit.text().trimmed().toStdString().c_str(), passwordEdit.text().toStdString().c_str(),
-                           "");
-            const int64_t projectCount = count_partnode(conn);
+            const auto projectCount=dbcad::legacyPartCount({host.toStdString(),portEdit.value(),userEdit.text().trimmed().toStdString(),passwordEdit.text().toStdString()},"");
             Q_UNUSED(projectCount);
             QMessageBox::information(this, tr("neo4j连接测试"), tr("连接成功。"));
         } catch (const std::exception &ex) {
@@ -106,90 +103,28 @@ void MainWindow::createStatusBar() {
     statusBar()->showMessage(tr("已就绪"));
 }
 
-void MainWindow::insertElements(const OPERATOR_TYPES ot, const int subOperatorType) {
-    if (!curWindow)
-        return;
-
-    ENTITY *ptrEntity = nullptr;
-    std::vector<std::vector<SPAposition>> handles;
-
-    // 1. 开始一个新的事务（开启 bulletin board）
-    api_bb_begin(TRUE); // TRUE = 线性历史流
-
-    // 2. 执行建模操作
-    curWindow->createEntity(subOperatorType, ptrEntity, handles);
-
-    // 3. 决定事务结果
-    outcome result; // 临时的 outcome，用于 api_bb_end
-    if (ptrEntity != nullptr) {
-        // 成功：关闭 bulletin board 并标注为成功
-        api_bb_end(result, TRUE, FALSE); // 第三个参数 FALSE 表示不删除 stacked BB
-        if (result.ok()) {
-            // 4. 成功：记录当前状态为 DELTA_STATE
-            DELTA_STATE *ds = nullptr;
-            outcome note_result = api_note_state(ds);
-
-            if (ds && ds->id() != 0) {
-                // 附加自定义数据
-                std::string name_cn = "实体";
-                for (auto mi : menus_entities) {
-                    if (mi.operatorType == ot && mi.subOperatorType == subOperatorType)
-                        name_cn = mi.name_cn;
-                }
-                GME_DELTA_STATE_user_data *userData = ACIS_NEW GME_DELTA_STATE_user_data();
-                userData->add_tree_item(curWindow->addEntity(ptrEntity, name_cn, subOperatorType, handles));
-                ds->set_user_data(userData);
-            }
-        }
-    } else {
-        // 失败：关闭 bulletin board 并标注为失败（这会自动回滚模型）
-        api_bb_end(result, FALSE, FALSE); // 第二个参数 FALSE 表示线性历史流（失败也需标记）
-        // 注意：result 此时会包含错误信息，但不需额外处理
-    }
-
-    // curWindow->addEntity(ptrEntity, name_cn, subOperatorType, handles);
-    //  @todo：以下版本管理导致demo_qt创建任意实体后再交互式插入B样条时程序崩溃。
-    /*GME_DELTA_STATE_user_data* delta_state_user_data = ACIS_NEW GME_DELTA_STATE_user_data();
-    delta_state_user_data->add_tree_item(curWindow->addEntity(ptrEntity, name_cn, subOperatorType, handles));
-
-    DELTA_STATE* ds = nullptr;
-    api_note_state(ds);
-    ds->set_user_data(delta_state_user_data);*/
-
-    // debug_history_stream();
+void MainWindow::insertElements(OPERATOR_TYPES type,int subtype) {
+    if(!curWindow) return;
+    dbcad::ShapeHandle shape; dbcad::HandleGrid handles;
+    curWindow->createEntity(subtype,shape,handles);
+    if(!shape) return;
+    std::string name="实体";
+    for(auto& menu:menus_entities) if(menu.operatorType==type && menu.subOperatorType==subtype) name=menu.name_cn;
+    curWindow->addEntity(shape,name,subtype,handles);
+    curWindow->captureHistory();
 }
-
-void MainWindow::operation(const OPERATOR_TYPES ot, const int subOperatorType) {
-    if (!curWindow)
-        return;
-
-    std::vector<int> ids = curWindow->getSelectedEntities();
-    ENTITY_TREE_ITEM *eti0 = curWindow->getEntityItemByIndex(ids[0]);
-    std::string eti0_name = eti0->name;
-    ENTITY_TREE_ITEM *eti1 = curWindow->getEntityItemByIndex(ids[1]);
-    std::string eti1_name = eti1->name;
-
-    ENTITY_LIST *el = ACIS_NEW ENTITY_LIST();
-    if (!curWindow->operation(ot, subOperatorType, ids, el, true))
-        return;
-    std::string name_cn = "运算结果";
-    for (auto mi : menus_operators) {
-        if (mi.operatorType == ot && mi.subOperatorType == subOperatorType)
-            name_cn = mi.name_cn;
-    }
-    std::string name_cn2 = std::format("[{}]和[{}]的{}", eti0_name, eti1_name, name_cn);
-
-    ids.clear(); // 两实体做布尔运算后，只保留运算结果，删除参与运算的两实体
-
-    GME_DELTA_STATE_user_data *delta_state_user_data = ACIS_NEW GME_DELTA_STATE_user_data();
-    for (ENTITY *ent = el->first(); ent; ent = el->next()) {
-        delta_state_user_data->add_tree_item(curWindow->addEntity(ent, name_cn2, subOperatorType, ids, ot));
-    }
-
-    DELTA_STATE *ds = nullptr;
-    api_note_state(ds);
-    ds->set_user_data(delta_state_user_data);
-    // debug_history_stream();
+void MainWindow::operation(OPERATOR_TYPES type,int subtype) {
+    if(!curWindow) return;
+    auto ids=curWindow->getSelectedEntities();
+    if(ids.size()<(type==OPERATOR_DEFEATURE?1u:2u)) { showMessage(tr("未选择足够实体"),4000); return; }
+    auto first=curWindow->getEntityItemByIndex(ids[0]);
+    if(!first) return;
+    std::string name=first->name+"的运算结果";
+    dbcad::ShapeList outputs;
+    if(!curWindow->operation(type,subtype,ids,outputs,true)) return;
+    if(type==OPERATOR_BOOLEAN) ids.clear();
+    for(auto shape:outputs) curWindow->addEntity(shape,name,subtype,ids,type);
+    curWindow->captureHistory();
 }
 
 void MainWindow::saveImage() {
@@ -204,7 +139,7 @@ void MainWindow::saveImage() {
         }
         return;
     }
-    if (curWindow->getEntityList().count() == 0) {
+    if (curWindow->getEntityList().empty()) {
         QMessageBox::warning(this, tr("DBCAD"), tr("当前窗口为空。"));
         return;
     }

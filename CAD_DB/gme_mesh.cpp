@@ -135,7 +135,8 @@ static void get_triangles_from_faceted_faces(ENTITY_LIST& faces, std::vector<Gme
             int pcurves = 0;
             for (LOOP* loop = face->loop(); loop; loop = loop->next()) {
                 ++loops;
-                for (COEDGE* co = loop->start(); co; co = co->next()) {
+                int guard = 0;
+                for (COEDGE* co = loop->start(); co && guard++ < 10000; co = co->next()) {
                     ++coedges;
                     if (co->geometry()) ++pcurves;
                 }
@@ -164,15 +165,16 @@ static void get_triangles_from_faceted_faces(ENTITY_LIST& faces, std::vector<Gme
             }
         }
         logical found = FALSE;
-        outcome out = api_rh_get_entity_rgb(ent, faceData[nF].color, TRUE, found);
+        rgb_color nativeColor;
+        outcome out = api_rh_get_entity_rgb(ent, nativeColor, TRUE, found);
+        faceData[nF].color = dbcad::Color(nativeColor.red(), nativeColor.green(), nativeColor.blue());
         if (!out.ok() || !found)
         {
-            faceData[nF].color = rgb_color(1., 1., 1.);
+            faceData[nF].color = dbcad::Color(1., 1., 1.);
         }
         faceData[nF].numIndices = (unsigned int)temp_triangles.size();
         faceData[nF].baseIndex = (unsigned int)nI;
         faceData[nF].baseVertex = (unsigned int)nV;
-        faceData[nF].ptrFace = face;
 
         nI += (unsigned int)temp_triangles.size();
         nV += (unsigned int)temp_coords.size();
@@ -217,14 +219,15 @@ static void get_polylines_from_faceted_edges(ENTITY_LIST& edges, std::vector<Gme
         ACIS_DELETE[] pos;
         pos = nullptr;
         logical found = FALSE;
-        out = api_rh_get_entity_rgb(ent, edgeData[nE].color, TRUE, found);
+        rgb_color nativeColor;
+        out = api_rh_get_entity_rgb(ent, nativeColor, TRUE, found);
+        edgeData[nE].color = dbcad::Color(nativeColor.red(), nativeColor.green(), nativeColor.blue());
         if (!out.ok() || !found)
         {
-            edgeData[nE].color = rgb_color(0., 0., 0.);
+            edgeData[nE].color = dbcad::Color(0., 0., 0.);
         }
         edgeData[nE].numIndices = 3 * nP;
         edgeData[nE].baseVertex = nV;
-        edgeData[nE].ptrEdge = edge;
         nV += 3 * nP;
         nE++;
     }
@@ -286,90 +289,6 @@ bool CreateMeshFromEntityList(ENTITY_LIST& el, GmeMesh::DisplayData& dd) {
     API_NOP_END
     return success;
 }
-// old
-/* 
-bool CreateMeshFromEntity(ENTITY* e, GmeMesh::DisplayData& dd) {
-    // API_BEGIN;
-    if (nullptr == e) {
-        return false;
-    }
-    {
-        if (is_VERTEX(e)) {
-            GmeMesh::VertexMesh vm = GmeMesh::VertexMesh();
-            vm.numIndices = 0;
-            vm.ptrVertex = (VERTEX*)e;
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().x());
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().y());
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().z());
-            dd.vertexMesh.push_back(vm);
-            return true;
-        }
-    }
-    {
-        outcome out;
-        out = api_facet_entity(e);
-        if (!out.ok()) {
-            return false;
-        }
-        {
-            if (is_VERTEX(e))
-            {
-                GmeMesh::VertexMesh vm = GmeMesh::VertexMesh();
-                vm.numIndices = 0;
-                vm.ptrVertex = (class VERTEX*)e;
-                dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().x());
-                dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().y());
-                dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().z());
-                dd.vertexMesh.push_back(vm);
-                return true;
-            }
-        }
-        {
-            outcome out;
-            out = api_facet_entity(e);
-            if (!out.ok())
-            {
-                return false;
-            }
-        }
-        ENTITY_LIST faces;
-        {
-            if (!is_EDGE(e))
-            {
-                outcome out = api_get_faces(e, faces);
-                if (!out.ok())
-                {
-                    return false;
-                }
-            }
-        }
-        int numFaces = faces.iteration_count();
-        dd.faceMesh.resize(numFaces);
-
-        ENTITY_LIST edges;
-        {
-            outcome out = api_get_edges(e, edges);
-            if (!out.ok())
-            {
-                return false;
-            }
-        }
-        int numEdges = edges.iteration_count();
-        dd.edgeMesh.resize(numEdges);
-
-        if (0 == numEdges + numFaces)
-        {
-            return false;
-        }
-
-        get_triangles_from_faceted_faces(faces, dd.faceMesh, dd.faceCoords, dd.triangles, dd.normalCoords);
-        get_polylines_from_faceted_edges(edges, dd.edgeMesh, dd.edgeCoords);
-
-
-    return true;
-    // API_END;
-}
-*/
 bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
     bool success = false;
     API_NOP_BEGIN
@@ -391,10 +310,11 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
             std::fprintf(stderr, "[CreateMeshFromEntity] e is VERTEX\n");
             GmeMesh::VertexMesh vm = GmeMesh::VertexMesh();
             vm.numIndices = 0;
-            vm.ptrVertex = (VERTEX *)e;
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().x());
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().y());
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().z());
+            SPAposition position=((VERTEX*)e)->geometry()->coords();
+            position*=get_owner_transf(e);
+            dd.vertexCoords.push_back(static_cast<float>(position.x()));
+            dd.vertexCoords.push_back(static_cast<float>(position.y()));
+            dd.vertexCoords.push_back(static_cast<float>(position.z()));
             dd.vertexMesh.push_back(vm);
             success = true;
             goto exit;

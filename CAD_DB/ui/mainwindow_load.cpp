@@ -4,9 +4,6 @@ void MainWindow::loadFile(const QString &fileName) {
     if (curWindow == nullptr)
         addWindow();
 
-    curWindow->clear();
-    pendingEntityChanges.clear();
-    entityIndexToUuid.clear();
 
     bool isRead = false;
 
@@ -17,46 +14,25 @@ void MainWindow::loadFile(const QString &fileName) {
     QAction *checkedAct = setModeActGroup->checkedAction();
 
     if (checkedAct == setACISModeAct) {
-        FILE *f = nullptr;
-        f = fopen(fileName.toStdString().c_str(), "r");
-        if (f) {
-            ENTITY_LIST el;
-
-            API_BEGIN;
-            api_save_version(2, 0);
-            result = api_restore_entity_list(f, true, el);
-            API_END;
-
-            for (int i = 0; i < el.count(); i++)
-                curWindow->addEntity(el[i], tr("导入(ACIS)实体%1").arg(i).toStdString(), -1);
-            fclose(f);
-            isRead = true;
-        } else {
-            QMessageBox::warning(this, tr("DBCAD"), tr("无法读取文件%1。").arg(QDir::toNativeSeparators(fileName)));
-        }
+        try {
+            QFile file(fileName);
+            if(!file.open(QIODevice::ReadOnly)) throw std::runtime_error("无法读取文件");
+            auto shapes=dbcad::kernel().readNative(file.readAll());
+            curWindow->clear(); pendingEntityChanges.clear(); entityIndexToUuid.clear();
+            for(size_t i=0;i<shapes.size();++i) curWindow->addEntity(shapes[i],tr("导入实体%1").arg(i).toStdString(),-1);
+            isRead=true;
+        } catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); }
     } else if (checkedAct == setNEO4JModeAct) {
         try {
-            Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(),
-                        fileName.toStdString());
-            int64_t countn = count_partnode(f);
-            if (countn == 1) {
-                ENTITY_LIST el;
-                API_BEGIN;
-                api_restore_entity_list_neo4j_part(f, el);
-                API_END;
-                for (int i = 0; i < el.count(); i++)
-                    curWindow->addEntity(el[i], tr("导入(neo4j)实体%1").arg(i).toStdString(), -1);
-                isRead = true;
-            } else if (countn == 0) {
-                QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不存在。").arg(QString(fileName)));
-            } else {
-                assert(countn > 1);
-                QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不唯一。").arg(QString(fileName)));
-            }
-        } catch (const std::exception &ex) {
-            QMessageBox::warning(this, tr("DBCAD"), tr("连接neo4j失败：%1").arg(QString::fromUtf8(ex.what())));
-        }
+            dbcad::DbConfig config{neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password};
+            if(dbcad::legacyPartCount(config,fileName.toStdString())!=1) throw std::runtime_error("零件不存在或不唯一");
+            auto shapes=dbcad::loadLegacyPart(config,fileName.toStdString());
+            curWindow->clear(); pendingEntityChanges.clear(); entityIndexToUuid.clear();
+            for(size_t i=0;i<shapes.size();++i) curWindow->addEntity(shapes[i],tr("导入实体%1").arg(i).toStdString(),-1);
+            isRead=true;
+        } catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); }
     } else if (checkedAct == setFASTAPIModeAct) {
+        curWindow->clear(); pendingEntityChanges.clear(); entityIndexToUuid.clear();
         std::fprintf(stderr, "[DEBUG] loadFile: setFASTAPIModeAct, fileName =%s\n", fileName.toUtf8().constData());
         BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author),
                                 QString::fromStdString(fastapi_password));
@@ -108,7 +84,7 @@ void MainWindow::loadFile(const QString &fileName) {
                             QJsonDocument::fromJson(jsonModel->graphJson.toUtf8(), &graphError);
                         restored = graphError.error == QJsonParseError::NoError && graphDoc.isObject();
                         if (restored && !graphDoc.object().value("nodes").toArray().isEmpty()) {
-                            restored = pullACISEntityGraph(jsonModel->version, graphDoc.object(),
+                            restored = pullEntityGraph(jsonModel->version, graphDoc.object(),
                                                            jsonModel->delta, jsonModel->removedIds);
                         } else if (restored) {
                             // An intentionally empty latest snapshot is a valid project.
@@ -140,6 +116,7 @@ void MainWindow::loadFile(const QString &fileName) {
     QGuiApplication::restoreOverrideCursor();
 #endif
     if (isRead) {
+        curWindow->resetDocumentHistory();
         curWindow->setIsModified(false);
         if (checkedAct == setACISModeAct) {
             disconnectFastAPISync();
@@ -183,23 +160,11 @@ void MainWindow::loadFile(const QString &partName, const int generation) {
 
     if (checkedAct == setNEO4JIncrementalModeAct) {
         try {
-            Neo4jPart f(neo4jdb_host.c_str(), neo4jdb_port_bolt, neo4jdb_username.c_str(), neo4jdb_password.c_str(),
-                        partName.toStdString());
-            int64_t countn = count_partnode(f);
-            if (countn == 1) {
-                IncrementalContext incCtx_incrementalRestore;
-                api_restore_neo4j(f, generation, incCtx_incrementalRestore);
-                ENTITY_LIST el;
-                acis_get_noattrib_toplevel_active_entities(el);
-                for (int i = 0; i < el.count(); i++)
-                    curWindow->addEntity(el[i], tr("导入(neo4j)实体%1").arg(i).toStdString(), -1);
-                isRead = true;
-            } else if (countn == 0) {
-                QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不存在。").arg(QString(partName)));
-            } else {
-                assert(countn > 1);
-                QMessageBox::warning(this, tr("DBCAD"), tr("名为%1的零件(neo4j)不唯一。").arg(QString(partName)));
-            }
+            dbcad::DbConfig config{neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password};
+            if(dbcad::legacyPartCount(config,partName.toStdString())!=1) throw std::runtime_error("零件不存在或不唯一");
+            auto shapes=dbcad::loadLegacyPart(config,partName.toStdString(),generation);
+            for(size_t i=0;i<shapes.size();++i) curWindow->addEntity(shapes[i],tr("导入实体%1").arg(i).toStdString(),-1);
+            isRead=true;
         } catch (const std::exception &ex) {
             QMessageBox::warning(this, tr("DBCAD"), tr("连接neo4j失败：%1").arg(QString::fromUtf8(ex.what())));
         }
@@ -230,7 +195,7 @@ void MainWindow::loadFile(const QString &partName, const int generation) {
                     const auto doc = QJsonDocument::fromJson(model->graphJson.toUtf8(), &parseError);
                     fastapi_project_id = project->id;
                     if (parseError.error != QJsonParseError::NoError || !doc.isObject() ||
-                        !pullACISEntityGraph(model->version, doc.object(), false)) {
+                        !pullEntityGraph(model->version, doc.object(), false)) {
                         QMessageBox::warning(this, tr("DBCAD"), tr("历史版本无法重建"));
                         fastapi_project_id.clear();
 #ifndef QT_NO_CURSOR
@@ -255,6 +220,7 @@ void MainWindow::loadFile(const QString &partName, const int generation) {
     QGuiApplication::restoreOverrideCursor();
 #endif
     if (isRead) {
+        curWindow->resetDocumentHistory();
         curWindow->setIsModified(false);
         setCurrentPartName(partName);
         if (checkedAct == setFASTAPIModeAct) {

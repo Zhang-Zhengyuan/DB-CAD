@@ -1,15 +1,12 @@
-﻿#pragma once
+#pragma once
 
 #include <QWidget>
 #include <algorithm>
 #include <vector>
 
-#include "acis/include/lists.hxx"
-#include "acis/include/position.hxx"
-#include "acis/include/transf.hxx"
+#include "kernel/geometry_kernel.h"
+#include "kernel/document_model.h"
 #include "glwidget.h"
-#include "gme_mesh.hxx"
-#include "gme_user_data.hxx"
 #include "mainwindow.h"
 
 QT_BEGIN_NAMESPACE class QCheckBox;
@@ -24,24 +21,6 @@ QT_END_NAMESPACE
 
 class MainWindow;
 
-struct ENTITY_TREE_ITEM {
-    std::string uuid;                                                      // 实体唯一标识符（用于协作增量同步）
-    std::string name = "Unknown";                                          // ENTITY名称
-    int index = 0;                                                        // 索引
-    ENTITY* ptrEntity = nullptr;                                         // ENTITY本身
-    OPERATOR_TYPES operatorType = OPERATOR_TYPES::OPERATOR_CONSTRUCTOR;  // 生成ENTITY的操作类型
-    SPAtransf trans = SPAtransf();                                       // 记录基本体的变换操作
-    int subOperatorType = 0;                                             // 生成ENTITY的子操作类型
-    std::vector<std::vector<SPAposition>> handles;                       // 基本体手柄
-    std::vector<int> index_base;                                         // 该ENTITY依赖的ENTITY
-    bool isAutoUpdate = true;                                            // 依赖的ENTITY发生变化时是否自动更新
-    std::vector<int> index_support;                                      // 依赖于该ENTITY的ENTITY
-    GmeMesh::DisplayData* ptrDisplayData = nullptr;                      // 离散化数据
-    bool visible = false;                                                // 是否显示
-    DISPLAY_TYPES displayType = DISPLAY_TYPES::DISPLAY_ALL;              // 显示类型
-    bool link_handles = true;                                            // 绘制时是否连接手柄
-};
-
 class Window : public QWidget {
     Q_OBJECT
 
@@ -51,17 +30,17 @@ public:
     Window(MainWindow* mw);
     void closeEvent(QCloseEvent* event) override;
     std::vector<ENTITY_TREE_ITEM>& getEntityTree() { return entity_tree; }
-    void createEntity(const int id, ENTITY*& ptrEntity, std::vector<std::vector<SPAposition>>& handles);
-    bool operation(const OPERATOR_TYPES ot, const int subOT, std::vector<int>& ids, ENTITY_LIST*& el, bool isHide = true);
+    void createEntity(const int id, dbcad::ShapeHandle& shape, std::vector<std::vector<dbcad::Point3>>& handles);
+    bool operation(const OPERATOR_TYPES ot, const int subOT, std::vector<int>& ids, dbcad::ShapeList& el, bool isHide = true);
     void addTreeItem(ENTITY_TREE_ITEM item) { entity_tree.push_back(item); }
-    ENTITY_TREE_ITEM* addEntity(ENTITY* ptrEntity, const std::string name, int subOperatorType);
-    ENTITY_TREE_ITEM* addEntity(ENTITY* ptrEntity, const std::string name, int subOperatorType, std::vector<int> index_base, OPERATOR_TYPES ot);
-    ENTITY_TREE_ITEM* addEntity(ENTITY* ptrEntity, const std::string name, int subOperatorType, std::vector<std::vector<SPAposition>>& handles);
-    ENTITY_TREE_ITEM* addEntity(ENTITY* ptrEntity, const std::string name, int subOperatorType, std::vector<std::vector<SPAposition>>& handles, std::vector<int> index_base, OPERATOR_TYPES ot = OPERATOR_TYPES::OPERATOR_CONSTRUCTOR);
-    void changeEntity(ENTITY_LIST e_list, QVector3D v);
-    void changeEntity(ENTITY* ptrEntity, QVector3D v);
-    void changeEntity(ENTITY* ptrEntity, SPAtransf t);
-    void setCurrentEntity(ENTITY* ptrEntity) { glWidget->setPickedEntity(ptrEntity); }
+    ENTITY_TREE_ITEM* addEntity(dbcad::ShapeHandle shape, const std::string name, int subOperatorType);
+    ENTITY_TREE_ITEM* addEntity(dbcad::ShapeHandle shape, const std::string name, int subOperatorType, std::vector<int> index_base, OPERATOR_TYPES ot);
+    ENTITY_TREE_ITEM* addEntity(dbcad::ShapeHandle shape, const std::string name, int subOperatorType, std::vector<std::vector<dbcad::Point3>>& handles);
+    ENTITY_TREE_ITEM* addEntity(dbcad::ShapeHandle shape, const std::string name, int subOperatorType, std::vector<std::vector<dbcad::Point3>>& handles, std::vector<int> index_base, OPERATOR_TYPES ot = OPERATOR_TYPES::OPERATOR_CONSTRUCTOR);
+    void changeEntity(dbcad::ShapeList e_list, QVector3D v);
+    void changeEntity(dbcad::ShapeHandle shape, QVector3D v);
+    void changeEntity(dbcad::ShapeHandle shape, dbcad::Translation t);
+    void setCurrentEntity(dbcad::ShapeHandle shape) { glWidget->setPickedEntity(shape); }
     GLWidget::ViewState getViewState() const { return glWidget->viewState(); }
     void setViewState(const GLWidget::ViewState& state) { glWidget->setViewState(state); }
     ENTITY_TREE_ITEM* getEntityItemByIndex(int index);
@@ -69,21 +48,24 @@ public:
     void visiablility();
     void displayInfo();
     void clear();
+    void captureHistory();
+    void resetDocumentHistory();
+    void restoreHistory(int direction);
     std::vector<int> getSelectedEntities() { return selected_entities; }
     void setIsInputHandle(bool ih) { isInputHandle = ih; };
     bool getIsInputHandle() { return isInputHandle; }
-    void addHandle(ENTITY* ptrEntity, double* p);
-    bool getHandles(ENTITY* ptrEntity, std::vector<std::vector<SPAposition>>& handles);
-    bool getVisibility(ENTITY* ptrEntity);
-    void changeHandle(ENTITY* ptrEntity, SPAposition p, QVector3D v);
+    void addHandle(dbcad::ShapeHandle shape, double* p);
+    bool getHandles(dbcad::ShapeHandle shape, std::vector<std::vector<dbcad::Point3>>& handles);
+    bool getVisibility(dbcad::ShapeHandle shape);
+    void changeHandle(dbcad::ShapeHandle shape, dbcad::Point3 p, QVector3D v);
     void setInputMode(INPUT_MODES im) { imode = im; }
     INPUT_MODES getInputMode() { return imode; }
     void setCurFile(QString s) { curFile = s; }
     QString getCurFile() { return curFile; }
     void setCurPartName(QString s) { curPartName = s; }
     QString getCurPartName() { return curPartName; }
-    ENTITY_LIST getEntityList();
-    ENTITY_LIST getSelectedEntityList();
+    dbcad::ShapeList getEntityList();
+    dbcad::ShapeList getSelectedEntityList();
     void setIsModified(bool im) { isModified = im; }
     bool getIsModified() { return isModified; }
     QImage getScreenshot();
@@ -110,6 +92,15 @@ protected:
     void setPointSize(int ps);
 
 private:
+    struct Snapshot {
+        QJsonObject geometry;
+        std::vector<int> drafts;
+        std::vector<ENTITY_TREE_ITEM> items;
+        int nextIndex=0;
+    };
+    std::vector<Snapshot> history;
+    int historyPosition=-1;
+    bool restoringHistory=false;
     MainWindow* mainWindow;
     GLWidget* glWidget;
     QTabWidget* tabWidget;
@@ -120,7 +111,7 @@ private:
     // 交互相关
     INPUT_MODES imode = INPUT_MODES::SELECTION;
     bool isInputHandle = false;
-    std::vector<SPAposition> input_handles;
+    std::vector<dbcad::Point3> input_handles;
 
     // ENTITY树相关
     QTreeWidget* treeWidget;

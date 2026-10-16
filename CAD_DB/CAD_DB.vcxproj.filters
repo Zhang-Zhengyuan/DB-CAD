@@ -1,23 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="acis.cpp" />
     <ClCompile Include="backend_api_client.cpp" />
-    <ClCompile Include="common.cpp" />
-    <ClCompile Include="access.cpp" />
-    <ClCompile Include="storage\access_save_values.cpp" />
-    <ClCompile Include="storage\access_save_surfaces.cpp" />
-    <ClCompile Include="storage\access_save_curves.cpp" />
-    <ClCompile Include="storage\access_restore_values.cpp" />
     <ClCompile Include="DbcadAPI.cpp" />
     <ClCompile Include="collab_session.cpp" />
-    <ClCompile Include="entity_graph_serializer.cpp" />
-    <ClCompile Include="entity_graph_deserializer.cpp" />
     <ClCompile Include="entity_merge_engine.cpp" />
-    <ClCompile Include="gme_dump_object.cpp" />
-    <ClCompile Include="gme_mesh.cpp" />
     <ClCompile Include="glwidget.cpp" />
-    <ClCompile Include="neo4j.cpp" />
     <ClCompile Include="pg_service.cpp" />
     <ClCompile Include="pg_store.cpp" />
     <ClCompile Include="window.cpp" />
@@ -39,17 +27,16 @@
     <ClCompile Include="ui\mainwindow_editing.cpp" />
     <ClCompile Include="ui\mainwindow_load.cpp" />
     <ClCompile Include="ui\mainwindow_save.cpp" />
-    <ClCompile Include="storage\access_graph_save.cpp" />
-    <ClCompile Include="storage\access_graph_restore.cpp" />
-    <ClCompile Include="storage\access_history_save.cpp" />
-    <ClCompile Include="storage\access_history_restore.cpp" />
-    <ClCompile Include="storage\access_parts.cpp" />
     <ClCompile Include="ui\mainwindow_config.cpp" />
     <ClCompile Include="ui\mainwindow_menus.cpp" />
     <ClCompile Include="main.cpp" />
     <QtMoc Include="window.h" />
     <QtMoc Include="glwidget.h" />
     <QtMoc Include="pg_service.h" />
+    <ClInclude Include="kernel\geometry_kernel.h" />
+    <ClInclude Include="kernel\model_types.h" />
+    <ClInclude Include="kernel\document_model.h" />
+    <ClInclude Include="kernel\legacy_storage.h" />
     <ClInclude Include="acis.hxx" />
     <ClInclude Include="backend_api_client.h" />
     <ClInclude Include="common.hxx" />
@@ -66,20 +53,5 @@
     <ClInclude Include="collab_session.h" />
     <ClInclude Include="entity_graph_serializer.h" />
     <ClInclude Include="entity_merge_engine.h" />
-    <ResourceCompile Include="images\DBCAD.rc" />
-    <None Include="backend\.env.example" />
-    <None Include="backend\app\config.py" />
-    <None Include="backend\app\crud.py" />
-    <None Include="backend\app\main.py" />
-    <None Include="backend\app\neo4j_store.py" />
-    <None Include="backend\app\schemas.py" />
-    <None Include="backend\app\sync.py" />
-    <None Include="backend\app\__init__.py" />
-    <None Include="backend\pyproject.toml" />
-    <None Include="backend\README.md" />
-    <None Include="backend\tests\test_api.py" />
-    <None Include="backend\tests\test_integration_client_perspective_live.py" />
-    <None Include="DEPLOYMENT.md" />
-    <Text Include="backend\requirements.txt" />
   </ItemGroup>
 </Project>

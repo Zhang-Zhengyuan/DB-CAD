@@ -56,11 +56,11 @@ void MainWindow::deleteEntityByIndexForCollaboration(int index) {
     if (curWindow == nullptr)
         return;
     auto &etiList = curWindow->getEntityTree();
-    ENTITY *entity = nullptr;
+    dbcad::ShapeHandle entity;
     int foundPos = -1;
     for (int i = 0; i < (int)etiList.size(); ++i) {
         if (etiList[i].index == index) {
-            entity = etiList[i].ptrEntity;
+            entity = etiList[i].shape;
             foundPos = i;
             break;
         }
@@ -72,9 +72,12 @@ void MainWindow::deleteEntityByIndexForCollaboration(int index) {
 
     // 收集下游依赖（递归）：index_base 指向 idx 的实体本身也要删，避免孤儿节点。
     std::vector<int> toRemoveIndices;
-    std::vector<ENTITY *> toRemoveEntities;
+    dbcad::ShapeList toRemoveEntities;
     std::vector<QString> toRemoveUuids;
+    QSet<int> visited;
     std::function<void(int)> collectDeps = [&](int idx) {
+        if(visited.contains(idx)) return;
+        visited.insert(idx);
         for (auto &eti : etiList) {
             bool dependsOnIdx = false;
             for (int b : eti.index_base) {
@@ -92,11 +95,11 @@ void MainWindow::deleteEntityByIndexForCollaboration(int index) {
                     break;
                 }
             }
-            if (alreadyQueued)
+            if (alreadyQueued || visited.contains(eti.index))
                 continue;
             collectDeps(eti.index);
             toRemoveIndices.push_back(eti.index);
-            toRemoveEntities.push_back(eti.ptrEntity);
+            toRemoveEntities.push_back(eti.shape);
             toRemoveUuids.push_back(QString::fromStdString(eti.uuid));
         }
     };
@@ -105,33 +108,17 @@ void MainWindow::deleteEntityByIndexForCollaboration(int index) {
     toRemoveEntities.push_back(entity);
     toRemoveUuids.push_back(QString::fromStdString(etiList[foundPos].uuid));
 
-    // 1. 记账（REMOVE）：每条都过 recordEntityRemoved 同步 entityIndexToUuid
-    for (int i = 0; i < (int)toRemoveIndices.size(); ++i) {
-        recordEntityRemoved(toRemoveIndices[i]);
+    try { dbcad::kernel().erase(toRemoveEntities); }
+    catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); return; }
+    for(auto removed:toRemoveIndices) recordEntityRemoved(removed);
+    for(auto it=etiList.begin();it!=etiList.end();) {
+        if(std::find(toRemoveIndices.begin(),toRemoveIndices.end(),it->index)!=toRemoveIndices.end()) {
+            curWindow->removeFromSelectedEntities(it->index);
+            delete it->ptrDisplayData; it=etiList.erase(it);
+        } else ++it;
     }
-
-    // 2. ACIS 真删 + entity_tree.erase：从末尾开始避免下标漂移
-    std::sort(toRemoveIndices.begin(), toRemoveIndices.end(), std::greater<int>());
-    for (int idx : toRemoveIndices) {
-        for (int j = (int)etiList.size() - 1; j >= 0; --j) {
-            if (etiList[j].index == idx) {
-                if (etiList[j].ptrEntity != nullptr) {
-                    try {
-                        API_NOP_BEGIN;
-                        api_del_entity(etiList[j].ptrEntity);
-                        API_NOP_END;
-                    } catch (const std::exception &e) {
-                        qWarning().noquote() << "[Collab] deleteEntity: api_del_entity threw:" << e.what();
-                    } catch (...) {
-                        qWarning().noquote() << "[Collab] deleteEntity: api_del_entity threw unknown";
-                    }
-                }
-                etiList.erase(etiList.begin() + j);
-                break;
-            }
-        }
-        curWindow->removeFromSelectedEntities(idx);
-    }
+    curWindow->ptrCurrentTreeItem=nullptr;
+    curWindow->setCurrentEntity({});
 
     // 3. 修正剩余 entity 的 index_base / index_support：清掉指向已删除 index 的位置
     for (auto &eti : etiList) {
@@ -165,6 +152,8 @@ void MainWindow::deleteEntityByIndexForCollaboration(int index) {
         }
         eti.index_support = std::move(newSupport);
     }
+
+    curWindow->captureHistory();
 
     // 4. 刷新 UI（tree widget 必须重绘，仅 updateMeshData 不够）
     curWindow->updateTreeWidget();

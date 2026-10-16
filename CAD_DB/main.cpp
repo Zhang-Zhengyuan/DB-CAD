@@ -16,7 +16,6 @@
 
 #include "glwidget.h"
 #include "mainwindow.h"
-#include <mgclient-1.4.2/mgclient.h>
 
 namespace {
 void configureQtPluginPath(const char* argv0) {
