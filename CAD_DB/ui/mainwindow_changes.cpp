@@ -6,8 +6,7 @@ void MainWindow::beginEntityChangeTracking() {
     pendingEntityChanges.clear();
 }
 
-void MainWindow::recordEntityAdded(const QString &uuid, const QString &name, const QString &entityType, int index,
-                                   const QString &sat) {
+void MainWindow::recordEntityAdded(const QString &uuid, const QString &name, const QString &entityType, int index) {
     if (!isTrackingEntityChanges)
         return;
     MainWindow::EntityChange change;
@@ -17,7 +16,6 @@ void MainWindow::recordEntityAdded(const QString &uuid, const QString &name, con
     change.changeType = MainWindow::EntityChangeType::ADD;
     change.entityIndex = index;
     change.timestamp = QDateTime::currentMSecsSinceEpoch();
-    change.sat = sat;
     pendingEntityChanges.append(change);
     entityIndexToUuid[index] = uuid;
 }
@@ -28,7 +26,7 @@ void MainWindow::recordEntityRemoved(int index) {
     // apply remote snapshot 期间 Window::clear() 会触发本函数，必须过滤掉，
     // 否则会把"远端 apply 时的 clear"误记成本地 REMOVE 变更。
     auto &session = CollabSession::instance();
-    if (session.isApplyingRemoteSnapshot() || session.isPublishingSnapshot()) {
+    if (session.isApplyingRemoteSnapshot()) {
         return;
     }
     QString uuid = entityIndexToUuid.value(index, "");
@@ -202,7 +200,7 @@ void MainWindow::recordEntityModified(int index) {
     if (!isTrackingEntityChanges)
         return;
     auto &session = CollabSession::instance();
-    if (session.isApplyingRemoteSnapshot() || session.isPublishingSnapshot()) {
+    if (session.isApplyingRemoteSnapshot()) {
         return;
     }
     QString uuid = entityIndexToUuid.value(index, "");
@@ -210,8 +208,14 @@ void MainWindow::recordEntityModified(int index) {
         return;
     MainWindow::EntityChange change;
     change.uuid = uuid;
-    change.name = "";
-    change.entityType = "";
+    if (curWindow) {
+        for (const auto &item : curWindow->getEntityTree()) {
+            if (item.index == index) {
+                change.name = QString::fromStdString(item.name);
+                break;
+            }
+        }
+    }
     change.changeType = MainWindow::EntityChangeType::MODIFY;
     change.entityIndex = index;
     change.timestamp = QDateTime::currentMSecsSinceEpoch();
@@ -248,11 +252,7 @@ QString MainWindow::exportEntityChangesToJson(const QList<MainWindow::EntityChan
         }
         obj["entityIndex"] = change.entityIndex;
         obj["timestamp"] = change.timestamp;
-        // ADD 变更附带该 body 的 SAT 文本；接收端用 acis_restore_entity_list 重建后 addEntity。
-        // REMOVE/MODIFY 没有 sat 段。
-        if (!change.sat.isEmpty()) {
-            obj["sat"] = change.sat;
-        }
+        // SAT lives once in the graph component; changes carry only metadata.
         changesArray.append(obj);
     }
     QJsonObject root;

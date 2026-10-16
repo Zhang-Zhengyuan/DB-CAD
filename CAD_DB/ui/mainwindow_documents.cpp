@@ -194,7 +194,7 @@ bool MainWindow::save() {
 
     ENTITY_LIST el;
     acis_get_noattrib_toplevel_active_entities(el);
-    if (el.count() == 0) {
+    if (el.count() == 0 && setModeActGroup->checkedAction() != setFASTAPIModeAct) {
         QMessageBox::warning(this, tr("DBCAD"), tr("当前无顶级活跃实体。"));
         return false;
     }

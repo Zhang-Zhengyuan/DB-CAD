@@ -6,9 +6,6 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
     curWindow = nullptr;
     fastapi_client_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
-    fastapiSyncTimer = new QTimer(this);
-    fastapiSyncTimer->setInterval(15000);
-    connect(fastapiSyncTimer, &QTimer::timeout, this, &MainWindow::requestFastAPISyncNow);
 
     fastapiHeartbeatTimer = new QTimer(this);
     fastapiHeartbeatTimer->setInterval(10000);
@@ -29,10 +26,6 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
         }
     });
 
-    fastapiPublishTimer = new QTimer(this);
-    fastapiPublishTimer->setSingleShot(true);
-    fastapiPublishTimer->setInterval(900);
-    connect(fastapiPublishTimer, &QTimer::timeout, this, &MainWindow::publishFastAPIAutoSnapshot);
 
     // PostgreSQL service — initialized once, reuses connection across all operations.
     // Note: PgService::loaded is intentionally NOT connected here.
@@ -101,26 +94,6 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
             fastapi_password = fastapiValues[2];
         }
 
-        auto bridgeValues = read_config_lines("storage_bridge_connect_info.conf", 2);
-        if (!bridgeValues.empty()) {
-            if (!bridgeValues[0].empty()) {
-                bridge_bind_host = bridgeValues[0];
-            }
-            if (!bridgeValues[1].empty()) {
-                try {
-                    bridge_bind_port = std::stoi(bridgeValues[1]);
-                } catch (...) {
-                    bridge_bind_port = 8100;
-                }
-            }
-        }
-
-        if (bridge_bind_host.empty()) {
-            bridge_bind_host = "127.0.0.1";
-        }
-        if (bridge_bind_port <= 0) {
-            bridge_bind_port = 8100;
-        }
     }
 
     mg_init();
@@ -143,7 +116,7 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
     CollabSession::instance().bindLegacyFields(
         fastapi_project_id, fastapi_model_version, fastapi_pending_remote_version, fastapiLastPublishReason,
         fastapiPendingSubmitRequestId, fastapiSubmitInFlight, fastapiLocalDirtyDuringSubmit,
-        fastapiApplyingRemoteSnapshot, fastapiPublishingSnapshot, fastapiLocalDirty);
+        fastapiApplyingRemoteSnapshot, fastapiLocalDirty);
     qDebug().noquote() << "[CollabSession] bound:" << CollabSession::instance().dump(CollabSession::Event::Bound);
     CollabSession::instance().setDebugEnabled(true);
     CollabSession::instance().setMinDumpIntervalMs(0);
@@ -158,16 +131,6 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (maybeSave()) {
         event->accept();
-        if (bridgeProcess != nullptr) {
-            bridgeStopRequested = true;
-            if (bridgeProcess->state() != QProcess::NotRunning) {
-                bridgeProcess->terminate();
-                if (!bridgeProcess->waitForFinished(3000)) {
-                    bridgeProcess->kill();
-                    bridgeProcess->waitForFinished(3000);
-                }
-            }
-        }
         disconnectFastAPISync();
         if (curWindow) {
             curWindow->close();

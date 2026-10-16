@@ -203,20 +203,8 @@ void MainWindow::createActions() {
         tr("配置FastAPI地址、作者名与连接密码，并保存到fastapi_connect_info.conf（前三行）。"));
     settingsMenu->addAction(setFastAPIConnectInfoAct);
 
-    QAction *setBridgeConnectInfoAct =
-        settingsMenu->addAction(tr("设置Bridge模式信息"), this, &MainWindow::setBridgeConnectInfo);
-    setBridgeConnectInfoAct->setStatusTip(
-        tr("配置Bridge监听地址与端口，并保存到storage_bridge_connect_info.conf（前两行）。"));
-    settingsMenu->addAction(setBridgeConnectInfoAct);
-
-    toggleBridgeModeAct = settingsMenu->addAction(tr("启动Bridge模式"), this, &MainWindow::toggleBridgeMode);
-    toggleBridgeModeAct->setCheckable(true);
-    toggleBridgeModeAct->setStatusTip(tr("以独立CAD进程启动/停止C++ Bridge服务，便于手动联调FastAPI与客户端。"));
-    settingsMenu->addAction(toggleBridgeModeAct);
-
     // ----------------------------------------------------------------
     // PostgreSQL 直存 SAT 文本（m_pgService 入口）。
-    // 不会改动 storage_bridge_service 或 saveFile() —— 走 Qt signal/slot 调
     // m_pgService (PgService wrapping PgStore/libpq)。连接配置在 pg_connect_info.conf
     // (host/port/user/password/dbname 五行)，运行时可通过"设置 PostgreSQL 连接信息"覆盖。
     // ----------------------------------------------------------------
@@ -264,112 +252,11 @@ void MainWindow::createActions() {
     collabMembersList = new QListWidget(collabBody);
     collabMembersList->setMinimumHeight(120);
     collabMembersList->setToolTip(tr("当前在线协作者列表"));
-    collabAutoFollowCheckBox = new QCheckBox(tr("自动跟随远程最新版本"), collabBody);
-    collabAutoFollowCheckBox->setChecked(true);
     collabSyncNowButton = new QPushButton(tr("刷新"), collabBody);
     collabPushButton = new QPushButton(tr("推送(Push)"), collabBody);
     collabPullButton = new QPushButton(tr("拉取(Pull)"), collabBody);
     collabReconnectButton = new QPushButton(tr("重连"), collabBody);
 
-    collabModeCombo = new QComboBox(collabBody);
-    collabModeCombo->addItem(tr("Mode0 — SAT全量"), static_cast<int>(CollabMode::Mode0));
-    collabModeCombo->addItem(tr("Mode1 — 纯JSON + Neo4j增量"), static_cast<int>(CollabMode::Mode1));
-    collabModeCombo->addItem(tr("Mode2 — PostgreSQL增量（开发中）"), static_cast<int>(CollabMode::Mode2));
-    collabModeCombo->setItemData(2, 0, Qt::UserRole - 1);
-    collabModeCombo->setCurrentIndex(static_cast<int>(collabMode));
-    collabModeCombo->setToolTip(tr("协作模式:\n"
-                                   "  • Mode0 — SAT全量：推送/拉取完整SAT文本，简单但效率低\n"
-                                   "  • Mode1 — 纯JSON + Neo4j增量：推送仅传变化Body的拓扑组件，拉取按UUID合并\n"
-                                   "  • Mode2 — PostgreSQL增量：待实现"));
-    collabModeCombo->setEnabled(true); // 可在项目打开后切换版本流，保留本地画布
-
-    connect(
-        collabModeCombo, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
-        [this](int index) {
-            const CollabMode requested = static_cast<CollabMode>(collabModeCombo->itemData(index).toInt());
-            if (requested == collabMode) {
-                return;
-            }
-
-            const bool projectOpen = !fastapi_project_id.isEmpty();
-            if (!projectOpen) {
-                collabMode = requested;
-                qDebug().noquote() << "[Collab] Mode changed to:" << static_cast<int>(collabMode);
-                return;
-            }
-
-            if (requested == CollabMode::Mode2) {
-                QMessageBox::information(
-                    this, tr("协作模式"),
-                    tr("Mode2 PostgreSQL 增量协作尚未实现，当前项目保持在 Mode%1。").arg(static_cast<int>(collabMode)));
-                QSignalBlocker blocker(collabModeCombo);
-                collabModeCombo->setCurrentIndex(static_cast<int>(collabMode));
-                return;
-            }
-
-            // A collaboration mode selects the wire/version stream. It
-            // must not discard a canvas that the user has already drawn.
-            // Resolve the target stream's head first so a Mode0 version is
-            // never reused as a Mode1 base (and vice versa).
-            const QString projectId = fastapi_project_id;
-            int targetVersion = 0;
-            BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author),
-                                    QString::fromStdString(fastapi_password));
-            if (requested == CollabMode::Mode1) {
-                const auto latest = client.getJsonDelta(projectId, 0);
-                if (latest.has_value()) {
-                    targetVersion = latest->version;
-                } else if (client.lastStatusCode() != 404) {
-                    QMessageBox::warning(this, tr("协作模式"),
-                                         tr("无法读取 Mode1 版本流，暂不切换：%1").arg(client.lastError()));
-                    QSignalBlocker blocker(collabModeCombo);
-                    collabModeCombo->setCurrentIndex(static_cast<int>(collabMode));
-                    return;
-                }
-            } else if (requested == CollabMode::Mode0) {
-                const auto latest = client.getLatestModel(projectId);
-                if (latest.has_value()) {
-                    targetVersion = latest->version;
-                } else if (client.lastStatusCode() != 404) {
-                    QMessageBox::warning(this, tr("协作模式"),
-                                         tr("无法读取 Mode0 版本流，暂不切换：%1").arg(client.lastError()));
-                    QSignalBlocker blocker(collabModeCombo);
-                    collabModeCombo->setCurrentIndex(static_cast<int>(collabMode));
-                    return;
-                }
-            }
-
-            const bool hasLocalChanges =
-                !pendingEntityChanges.isEmpty() || (curWindow != nullptr && curWindow->getIsModified());
-            collabMode = requested;
-            disconnectFastAPISync();
-            auto &session = CollabSession::instance();
-            // Keep the project identity, canvas and pendingEntityChanges.
-            // Only the version number belongs to the selected stream.
-            session.setProjectId(projectId);
-            session.setModelVersion(targetVersion);
-            session.setPendingRemoteVersion(0);
-            fastapi_model_version = targetVersion;
-            fastapi_pending_remote_version = 0;
-            reconnectFastAPISync();
-            updateCollabPanelUi();
-            if (hasLocalChanges) {
-                statusBar()->showMessage(
-                    tr("已切换到 Mode%1，保留当前画布和本地修改，可直接 Push").arg(static_cast<int>(collabMode)), 4000);
-            } else {
-                statusBar()->showMessage(tr("已切换到 Mode%1 版本流 v%2；当前画布未自动重载，请按需 Pull")
-                                             .arg(static_cast<int>(collabMode))
-                                             .arg(targetVersion),
-                                         4000);
-            }
-            qDebug().noquote() << "[Collab] Mode changed to:" << static_cast<int>(collabMode)
-                               << "targetVersion=" << targetVersion << "preservedLocalChanges=" << hasLocalChanges;
-        });
-
-    connect(collabAutoFollowCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
-        fastapiAutoFollowRemote = checked;
-        updateCollabPanelUi();
-    });
     connect(collabSyncNowButton, &QPushButton::clicked, this, &MainWindow::requestFastAPISyncNow);
     connect(collabPushButton, &QPushButton::clicked, this, &MainWindow::onCollabPushButtonClicked);
     connect(collabPullButton, &QPushButton::clicked, this, &MainWindow::onCollabPullButtonClicked);
@@ -382,13 +269,11 @@ void MainWindow::createActions() {
     collabLayout->addWidget(collabPendingLabel);
     collabLayout->addWidget(new QLabel(tr("在线协作者"), collabBody));
     collabLayout->addWidget(collabMembersList);
-    collabLayout->addWidget(collabAutoFollowCheckBox);
     collabLayout->addWidget(collabPushButton);
     collabLayout->addWidget(collabPullButton);
 
-    // 协作模式选择
-    collabLayout->addWidget(new QLabel(tr("协作模式"), collabBody));
-    collabLayout->addWidget(collabModeCombo);
+    // Unified collaboration format
+    collabLayout->addWidget(new QLabel(tr("Mode1 · JSON + SAT 组件回退"), collabBody));
 
     collabLayout->addWidget(collabSyncNowButton);
     collabLayout->addWidget(collabReconnectButton);

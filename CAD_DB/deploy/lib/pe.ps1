@@ -74,7 +74,7 @@ function Assert-ClientRuntime([string]$ExePath) {
             if (Test-Path -LiteralPath $local) { $queue.Enqueue($local); continue }
             # Qt/CAD runtime must be self-contained; system DLLs/VC runtime may
             # resolve via System32, but never via a developer's PATH.
-            if ($name -notmatch '^(Qt[56]|SpaACIS)' -and (Test-Path -LiteralPath (Join-Path "$env:WINDIR\System32" $name))) { continue }
+            if ($name -notmatch '^(Qt[56]|SpaACIS|SPAAcis)' -and (Test-Path -LiteralPath (Join-Path "$env:WINDIR\System32" $name))) { continue }
             $missing += "$name (required by $(Split-Path -Leaf $file))"
         }
     }

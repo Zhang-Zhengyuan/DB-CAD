@@ -7,7 +7,10 @@ if (-not $PackageRoot) { $PackageRoot = Join-Path $repoRoot 'dist\DBCAD-fullstac
 $release = Get-Item (Join-Path $repoRoot 'x64\Release\CAD_DB.exe')
 $debug = Get-Item (Join-Path $repoRoot 'x64\Debug\CAD_DB.exe')
 if (Test-DebugBuild $release) { throw 'Release incorrectly identified as Debug' }
-if (-not (Test-DebugBuild $debug)) { throw 'Debug incorrectly identified as Release' }
+# Debug client code uses /MD to match ACIS and therefore links Qt's release
+# runtime. Test-DebugBuild chooses the Qt deployment mode, not /Od/PDB mode.
+if (Test-DebugBuild $debug) { throw 'Debug client must use the /MD Qt release runtime' }
+if ((Get-FileHash (Join-Path $debug.DirectoryName 'SPAAcisDs.dll')).Hash -ne (Get-FileHash (Join-Path $repoRoot '_deps\acis\bin\SPAAcisDsd.dll')).Hash) { throw 'Debug output must stage the Debug ACIS DLL under its original import name' }
 Assert-ClientRuntime (Join-Path $PackageRoot 'client\CAD_DB.exe')
 $fixture = Join-Path ([System.IO.Path]::GetTempPath()) ('dbcad-runtime-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $fixture 'platforms') -Force | Out-Null

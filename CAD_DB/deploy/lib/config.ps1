@@ -1,4 +1,4 @@
-﻿# Config helpers for the fullstack launcher.
+# Config helpers for the fullstack launcher.
 function Read-EnvFile([string]$EnvFilePath) {
     $values = @{}
     if (!(Test-Path -LiteralPath $EnvFilePath)) {
@@ -48,8 +48,6 @@ function Write-EnvFile([string]$EnvFilePath, [hashtable]$Values) {
         "DBCAD_NEO4J_USER",
         "DBCAD_FASTAPI_HOST",
         "DBCAD_FASTAPI_PORT",
-        "DBCAD_BRIDGE_HOST",
-        "DBCAD_BRIDGE_PORT",
         "DBCAD_AUTHOR",
         "DBCAD_POSTGRES_DOCKER_IMAGE",
         "DBCAD_POSTGRES_DOCKER_NAME",
@@ -61,7 +59,7 @@ function Write-EnvFile([string]$EnvFilePath, [hashtable]$Values) {
 
     $lines = @(
         "# Local DBCAD deployment configuration.",
-        "# This is the single source for Docker, Bridge, FastAPI and client credentials.",
+        "# This is the single source for Docker, FastAPI and client credentials.",
         "# Do not commit this file."
     )
     foreach ($key in $orderedKeys) {

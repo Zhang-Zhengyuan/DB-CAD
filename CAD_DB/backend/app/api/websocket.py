@@ -19,10 +19,8 @@ from ..collaboration.protocol import _handle_project_ws_message
 async def ws_project_sync(websocket: WebSocket, project_id: str) -> None:
     incoming_ts = datetime.now(timezone.utc).isoformat()
     incoming_query = dict(websocket.query_params)
-    stream = str(websocket.query_params.get("stream") or "mode0").lower()
-    if stream not in {"mode0", "mode1"} or (
-        stream == "mode1" and not settings.direct_json_mode
-    ):
+    stream = str(websocket.query_params.get("stream") or "mode1").lower()
+    if stream != "mode1":
         await websocket.close(code=1008)
         return
     has_pw = bool(incoming_query.get("password"))

@@ -1,3 +1,5 @@
+> 历史规划文档。当前实现已统一为 Mode1 JSON + SAT，Mode0 与 Bridge 已删除；以 [统一协作链路说明](HYBRID_COLLABORATION.md) 为准。
+
 # 存储链路收敛与重构计划（架构取舍）
 
 > 前置文档：[ENTITY_STORAGE_TEST_PLAN.md](ENTITY_STORAGE_TEST_PLAN.md)（逐实体单元测试与 Phase 1 实测基线）。

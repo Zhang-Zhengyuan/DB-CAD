@@ -5,6 +5,8 @@ void MainWindow::loadFile(const QString &fileName) {
         addWindow();
 
     curWindow->clear();
+    pendingEntityChanges.clear();
+    entityIndexToUuid.clear();
 
     bool isRead = false;
 
@@ -89,7 +91,7 @@ void MainWindow::loadFile(const QString &fileName) {
                         QMessageBox::warning(this, tr("DBCAD"), err);
                     }
                 }
-            } else if (collabMode == CollabMode::Mode1) {
+            } else {
                 const auto jsonModel = client.getJsonDelta(project->id, 0);
                 if (!jsonModel.has_value()) {
                     QMessageBox::warning(this, tr("DBCAD"), tr("读取 Mode1 JSON 项目失败：%1").arg(client.lastError()));
@@ -106,7 +108,7 @@ void MainWindow::loadFile(const QString &fileName) {
                             QJsonDocument::fromJson(jsonModel->graphJson.toUtf8(), &graphError);
                         restored = graphError.error == QJsonParseError::NoError && graphDoc.isObject();
                         if (restored && !graphDoc.object().value("nodes").toArray().isEmpty()) {
-                            restored = pullACISEntityGraph(jsonModel->version, graphDoc.object(), QString(),
+                            restored = pullACISEntityGraph(jsonModel->version, graphDoc.object(),
                                                            jsonModel->delta, jsonModel->removedIds);
                         } else if (restored) {
                             // An intentionally empty latest snapshot is a valid project.
@@ -114,6 +116,7 @@ void MainWindow::loadFile(const QString &fileName) {
                         }
                     }
                     if (restored) {
+                        session.setModelVersion(jsonModel->version);
                         reconnectFastAPISync();
                         isRead = true;
                     } else {
@@ -126,33 +129,7 @@ void MainWindow::loadFile(const QString &fileName) {
                         QMessageBox::warning(this, tr("DBCAD"), tr("Mode1 JSON 图无法重建，请检查序列化器兼容性"));
                     }
                 }
-            } else {
-                auto model = client.getLatestModel(project->id);
-                if (!model.has_value()) {
-                    if (client.lastStatusCode() == 404) {
-                        std::fprintf(stderr, "[DEBUG] loadFile: branch=join-no-model project_id='%s'\n",
-                                     project->id.toUtf8().constData());
-                        fastapi_project_id = project->id;
-                        fastapi_project_name = fileName;
-                        CollabSession::instance().setProjectId(project->id);
-                        reconnectFastAPISync();
-                        CollabSession::instance().setModelVersion(0);
-                        setCurrentPartName(fileName);
-                        statusBar()->showMessage(tr("已加入协作项目（当前无版本，请先保存模型）"), 4000);
-                        isRead = true;
-                    } else {
-                        QMessageBox::warning(this, tr("DBCAD"), client.lastError());
-                    }
-                } else if (restoreFastAPIModelFromSat(model->sat)) {
-                    std::fprintf(stderr, "[DEBUG] loadFile: branch=restore-model project_id='%s' model_version=%d\n",
-                                 project->id.toUtf8().constData(), model->version);
-                    fastapi_project_id = project->id;
-                    fastapi_project_name = fileName;
-                    CollabSession::instance().setProjectId(project->id);
-                    reconnectFastAPISync();
-                    CollabSession::instance().setModelVersion(model->version);
-                    isRead = true;
-                }
+
             }
         }
     } else {
@@ -166,14 +143,14 @@ void MainWindow::loadFile(const QString &fileName) {
         curWindow->setIsModified(false);
         if (checkedAct == setACISModeAct) {
             disconnectFastAPISync();
-            fastapi_project_id.clear();
+            CollabSession::instance().setProjectId(QString());
             fastapi_project_name.clear();
             CollabSession::instance().setModelVersion(0);
             setCurrentFile(fileName);
             statusBar()->showMessage(tr("文件已导入"), 2000);
         } else if (checkedAct == setNEO4JModeAct) {
             disconnectFastAPISync();
-            fastapi_project_id.clear();
+            CollabSession::instance().setProjectId(QString());
             fastapi_project_name.clear();
             CollabSession::instance().setModelVersion(0);
             CollabSession::instance().setPendingRemoteVersion(0);
@@ -193,6 +170,8 @@ void MainWindow::loadFile(const QString &partName, const int generation) {
         addWindow();
 
     curWindow->clear();
+    pendingEntityChanges.clear();
+    entityIndexToUuid.clear();
 
     bool isRead = false;
 
@@ -239,14 +218,26 @@ void MainWindow::loadFile(const QString &partName, const int generation) {
                     QMessageBox::warning(this, tr("DBCAD"), err);
                 }
             } else {
-                auto model = client.getModelVersion(project->id, generation);
+                auto model = client.getJsonVersion(project->id, generation);
                 if (!model.has_value()) {
                     if (client.lastStatusCode() == 404) {
                         QMessageBox::warning(this, tr("DBCAD"), tr("协作项目存在，但指定版本不存在。"));
                     } else {
                         QMessageBox::warning(this, tr("DBCAD"), client.lastError());
                     }
-                } else if (restoreFastAPIModelFromSat(model->sat)) {
+                } else {
+                    QJsonParseError parseError;
+                    const auto doc = QJsonDocument::fromJson(model->graphJson.toUtf8(), &parseError);
+                    fastapi_project_id = project->id;
+                    if (parseError.error != QJsonParseError::NoError || !doc.isObject() ||
+                        !pullACISEntityGraph(model->version, doc.object(), false)) {
+                        QMessageBox::warning(this, tr("DBCAD"), tr("历史版本无法重建"));
+                        fastapi_project_id.clear();
+#ifndef QT_NO_CURSOR
+                        QGuiApplication::restoreOverrideCursor();
+#endif
+                        return;
+                    }
                     fastapi_project_id = project->id;
                     fastapi_project_name = partName;
                     CollabSession::instance().setProjectId(project->id);
@@ -271,7 +262,7 @@ void MainWindow::loadFile(const QString &partName, const int generation) {
                                      3000);
         } else {
             disconnectFastAPISync();
-            fastapi_project_id.clear();
+            CollabSession::instance().setProjectId(QString());
             fastapi_project_name.clear();
             CollabSession::instance().setModelVersion(0);
             CollabSession::instance().setPendingRemoteVersion(0);

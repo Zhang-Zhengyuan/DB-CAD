@@ -9,10 +9,7 @@ class Settings(BaseSettings):
     neo4j_user: str = Field(default="neo4j")
     neo4j_password: str = Field(default="")
     neo4j_database: str = Field(default="neo4j")
-    storage_bridge_url: str = Field(default="http://127.0.0.1:8100")
-    storage_bridge_timeout_seconds: float = Field(default=15.0)
     api_password: str = Field(default="")
-    direct_json_mode: bool = Field(default=False)
 
     @field_validator("storage_backend")
     @classmethod

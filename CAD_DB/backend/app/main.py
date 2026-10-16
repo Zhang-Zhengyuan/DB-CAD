@@ -9,15 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .lifecycle import LOG_FILE_PATH, lifespan
 from . import neo4j_webui
-from .api import projects, models, json_delta, entities, websocket
-
-# Compatibility imports for existing scripts; implementations have explicit owners.
-from .services.events import _model_saved_event as _model_saved_event
-from .services.events import _entity_graph_saved_event as _entity_graph_saved_event
-from .collaboration.submissions import _send_submit_rejected as _send_submit_rejected
-from .collaboration.protocol import (
-    _handle_project_ws_message as _handle_project_ws_message,
-)
+from .api import projects, models, json_delta, websocket
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
@@ -70,13 +62,11 @@ def health() -> dict[str, str | bool]:
         "status": "ok",
         "build": datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"),
         "log_file": str(LOG_FILE_PATH),
-        "collaboration_mode": "direct_json"
-        if settings.direct_json_mode
-        else "legacy_bridge",
-        "bridge_required": not settings.direct_json_mode,
+        "collaboration_mode": "hybrid_json",
+        "bridge_required": False,
     }
 
 
 # Register literal routes before parameter routes (e.g. /versions before /{version}).
-for module in (projects, models, json_delta, websocket, entities):
+for module in (projects, models, json_delta, websocket):
     app.include_router(module.router)

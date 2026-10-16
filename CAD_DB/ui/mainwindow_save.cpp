@@ -1,27 +1,63 @@
 #include "mainwindow_internal.h"
+#include <QEventLoop>
+#include <QScopeGuard>
 
 bool MainWindow::saveFile(const QString &fileName) {
     QString errorMessage;
 
-    if (setModeActGroup->checkedAction() == setFASTAPIModeAct && collabMode == CollabMode::Mode2) {
-        statusBar()->showMessage(tr("Mode2 PostgreSQL 增量协作尚未实现"), 5000);
-        return false;
-    }
-    if (setModeActGroup->checkedAction() == setFASTAPIModeAct && collabMode == CollabMode::Mode1 &&
-        !CollabSession::instance().isConnected()) {
-        statusBar()->showMessage(tr("Mode1 JSON 保存需要先连接协作通道"), 5000);
-        return false;
-    }
-    // In a live Mode1 session Ctrl+S must use the same JSON version stream as
-    // Push. A SAT save would create an unrelated model version and mislead the
-    // collaboration UI about what peers can Pull.
-    if (setModeActGroup->checkedAction() == setFASTAPIModeAct && collabMode == CollabMode::Mode1 &&
-        CollabSession::instance().isConnected()) {
-        if (pendingEntityChanges.isEmpty()) {
-            statusBar()->showMessage(tr("Mode1 没有待保存的本地修改"), 2500);
-            return true;
+    if (setModeActGroup->checkedAction() == setFASTAPIModeAct) {
+        const bool wasEnabled = isEnabled();
+        setEnabled(false);
+        const auto restoreUi = qScopeGuard([this, wasEnabled]() { setEnabled(wasEnabled); });
+        auto &session = CollabSession::instance();
+        if (fileName != fastapi_project_name || fastapi_project_id.isEmpty()) {
+            BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author),
+                                    QString::fromStdString(fastapi_password));
+            const auto project = client.getOrCreateProject(fileName);
+            if (!project) {
+                statusBar()->showMessage(client.lastError(), 6000);
+                return false;
+            }
+            const auto head = client.getJsonDelta(project->id, 0);
+            if (!head) {
+                statusBar()->showMessage(client.lastError(), 6000);
+                return false;
+            }
+            if (head->version > 0) {
+                statusBar()->showMessage(tr("目标项目已有版本，请先打开并 Pull，或使用新的项目名"), 6000);
+                return false;
+            }
+            disconnectFastAPISync();
+            fastapi_project_id = project->id;
+            fastapi_project_name = fileName;
+            session.setProjectId(project->id);
+            session.setModelVersion(0);
+            // A new project receives every local Body, including previously saved ones.
+            pendingEntityChanges.clear();
+            for (const auto &item : curWindow->getEntityTree()) {
+                const QString uuid = QString::fromStdString(item.uuid);
+                recordEntityAdded(uuid, QString::fromStdString(item.name), "body", item.index);
+            }
+            reconnectFastAPISync();
         }
-        return submitMode1JsonDelta(tr("mode1-json-save"));
+        if (!session.isConnected() && fastapiSyncSocket) {
+            QEventLoop wait;
+            QTimer timeout;
+            timeout.setSingleShot(true);
+            connect(&timeout, &QTimer::timeout, &wait, &QEventLoop::quit);
+            connect(fastapiSyncSocket, &QWebSocket::connected, &wait, &QEventLoop::quit);
+            connect(fastapiSyncSocket, &QWebSocket::errorOccurred, &wait, &QEventLoop::quit);
+            timeout.start(5000);
+            wait.exec();
+        }
+        if (!session.isConnected()) {
+            statusBar()->showMessage(tr("协作通道正在连接，请连接成功后再次保存"), 5000);
+            return false;
+        }
+        const bool saved = submitMode1JsonDelta(tr("save"));
+        if (saved)
+            setCurrentPartName(fileName);
+        return saved;
     }
 
     QGuiApplication::setOverrideCursor(Qt::WaitCursor);
@@ -67,162 +103,6 @@ bool MainWindow::saveFile(const QString &fileName) {
         } catch (const std::exception &ex) {
             errorMessage = tr("保存到neo4j失败：%1").arg(QString::fromUtf8(ex.what()));
         }
-    } else if (checkedAct == setFASTAPIModeAct) {
-        BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author),
-                                QString::fromStdString(fastapi_password));
-        if (!client.isConfigured()) {
-            errorMessage = tr("FastAPI地址未配置，请先设置fastapi_connect_info.conf");
-        } else {
-            auto project = client.getOrCreateProject(fileName);
-            if (!project.has_value()) {
-                errorMessage = client.lastError();
-            } else {
-                QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_save_XXXXXX.sat");
-                tempFile.setAutoRemove(true);
-                if (!tempFile.open()) {
-                    errorMessage = tr("无法创建临时文件用于导出SAT");
-                } else {
-                    const QString tempPath = tempFile.fileName();
-                    tempFile.close();
-
-                    FILE *f = fopen(tempPath.toStdString().c_str(), "wb");
-                    if (!f) {
-                        errorMessage = tr("无法打开临时SAT文件用于写入");
-                    } else {
-                        API_NOP_BEGIN;
-                        api_save_version(2, 0);
-                        FileInfo fileinfo;
-                        fileinfo.set_units(1.0);
-                        fileinfo.set_product_id("dbcad_fastapi");
-                        result = api_set_file_info((FileIdent | FileUnits), fileinfo);
-                        result = api_set_int_option("sequence_save_files", 1);
-                        ENTITY_LIST el;
-                        acis_get_noattrib_toplevel_active_entities(el);
-                        result = api_save_entity_list(f, true, el);
-                        API_NOP_END;
-                        fclose(f);
-
-                        QFile satFile(tempPath);
-                        if (!satFile.open(QIODevice::ReadOnly)) {
-                            errorMessage = tr("读取临时SAT文件失败");
-                        } else {
-                            const QString satContent = QString::fromUtf8(satFile.readAll());
-                            satFile.close();
-
-                            auto &session = CollabSession::instance();
-                            std::optional<int> baseVersion;
-                            if (fastapi_project_id == project->id && session.modelVersion() > 0) {
-                                baseVersion = session.modelVersion();
-                            }
-
-                            // Mode0 always persists a complete SAT snapshot.
-                            std::optional<int> newVersion = client.saveModel(project->id, satContent, baseVersion);
-                            if (!newVersion.has_value()) {
-                                if (client.lastStatusCode() == 409) {
-                                    QMessageBox msg(this);
-                                    msg.setIcon(QMessageBox::Warning);
-                                    msg.setWindowTitle(tr("协作冲突"));
-                                    msg.setText(tr("检测到版本冲突：远程已有更新。请选择处理方式。"));
-                                    QPushButton *syncRemoteBtn =
-                                        msg.addButton(tr("同步远程最新"), QMessageBox::AcceptRole);
-                                    QPushButton *forceSubmitBtn =
-                                        msg.addButton(tr("提交我的版本（基于最新重试）"), QMessageBox::ActionRole);
-                                    QPushButton *forkBtn =
-                                        msg.addButton(tr("另存为新协作项目"), QMessageBox::DestructiveRole);
-                                    QPushButton *cancelBtn = msg.addButton(QMessageBox::Cancel);
-                                    Q_UNUSED(syncRemoteBtn);
-                                    Q_UNUSED(forceSubmitBtn);
-                                    Q_UNUSED(forkBtn);
-                                    msg.exec();
-
-                                    if (msg.clickedButton() == cancelBtn) {
-                                        errorMessage = tr("已取消保存");
-                                    } else if (msg.clickedButton() == syncRemoteBtn) {
-                                        auto latest = client.getLatestModel(project->id);
-                                        if (!latest.has_value()) {
-                                            errorMessage = tr("获取远程最新版本失败：%1").arg(client.lastError());
-                                        } else {
-                                            const GLWidget::ViewState viewState = curWindow->getViewState();
-                                            curWindow->clear();
-                                            if (!restoreFastAPIModelFromSat(latest->sat)) {
-                                                errorMessage = tr("同步远程最新版本失败");
-                                            } else {
-                                                curWindow->setViewState(viewState);
-                                                fastapi_project_id = project->id;
-                                                fastapi_project_name = fileName;
-                                                session.setProjectId(project->id);
-                                                reconnectFastAPISync();
-                                                session.setModelVersion(latest->version);
-                                                session.setPendingRemoteVersion(0);
-                                                errorMessage.clear();
-                                            }
-                                        }
-                                    } else if (msg.clickedButton() == forceSubmitBtn) {
-                                        auto latest = client.getLatestModel(project->id);
-                                        if (!latest.has_value()) {
-                                            errorMessage = tr("获取远程最新版本失败：%1").arg(client.lastError());
-                                        } else {
-                                            auto retriedVersion =
-                                                client.saveModel(project->id, satContent, latest->version);
-                                            if (!retriedVersion.has_value()) {
-                                                errorMessage =
-                                                    tr("基于最新版本重试提交失败：%1").arg(client.lastError());
-                                            } else {
-                                                fastapi_project_id = project->id;
-                                                fastapi_project_name = fileName;
-                                                session.setProjectId(project->id);
-                                                reconnectFastAPISync();
-                                                session.setModelVersion(*retriedVersion);
-                                                session.setPendingRemoteVersion(0);
-                                                errorMessage.clear();
-                                            }
-                                        }
-                                    } else {
-                                        bool ok = false;
-                                        QString newProjectName = QInputDialog::getText(
-                                            this, tr("另存为新协作项目"), tr("请输入新项目名:"), QLineEdit::Normal,
-                                            fileName + tr("-fork"), &ok,
-                                            this->windowFlags() | Qt::MSWindowsFixedSizeDialogHint);
-                                        if (!ok || newProjectName.trimmed().isEmpty()) {
-                                            errorMessage = tr("已取消另存为");
-                                        } else {
-                                            auto forkProject = client.getOrCreateProject(newProjectName.trimmed());
-                                            if (!forkProject.has_value()) {
-                                                errorMessage = tr("创建新协作项目失败：%1").arg(client.lastError());
-                                            } else {
-                                                auto forkVersion =
-                                                    client.saveModel(forkProject->id, satContent, std::nullopt);
-                                                if (!forkVersion.has_value()) {
-                                                    errorMessage =
-                                                        tr("保存到新协作项目失败：%1").arg(client.lastError());
-                                                } else {
-                                                    fastapi_project_id = forkProject->id;
-                                                    fastapi_project_name = newProjectName.trimmed();
-                                                    session.setProjectId(forkProject->id);
-                                                    reconnectFastAPISync();
-                                                    session.setModelVersion(*forkVersion);
-                                                    session.setPendingRemoteVersion(0);
-                                                    errorMessage.clear();
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    errorMessage = client.lastError();
-                                }
-                            } else {
-                                fastapi_project_id = project->id;
-                                fastapi_project_name = fileName;
-                                session.setProjectId(project->id);
-                                reconnectFastAPISync();
-                                session.setModelVersion(*newVersion);
-                                session.setPendingRemoteVersion(0);
-                            }
-                        }
-                    }
-                }
-            }
-        }
     } else {
         throw std::runtime_error("Cannot find the enum");
     }
@@ -237,23 +117,15 @@ bool MainWindow::saveFile(const QString &fileName) {
 
     if (checkedAct == setACISModeAct) {
         disconnectFastAPISync();
-        fastapi_project_id.clear();
+        CollabSession::instance().setProjectId(QString());
         fastapi_project_name.clear();
         // session 状态已在 disconnectFastAPISync() → onDisconnected() 中清零
         fastapi_model_version = CollabSession::instance().modelVersion();
         setCurrentFile(fileName);
         statusBar()->showMessage(tr("文件已保存"), 2000);
-    } else if (checkedAct == setFASTAPIModeAct) {
-        auto &session = CollabSession::instance();
-        setCurrentPartName(fileName);
-        statusBar()->showMessage(tr("零件已保存(FastAPI)，版本%1").arg(session.modelVersion()), 3000);
-        if (fastapiAutoFollowRemote && session.pendingRemoteVersion() > session.modelVersion() &&
-            !curWindow->getIsModified()) {
-            applyPendingRemoteVersion();
-        }
     } else if (checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct) {
         disconnectFastAPISync();
-        fastapi_project_id.clear();
+        CollabSession::instance().setProjectId(QString());
         fastapi_project_name.clear();
         fastapi_model_version = CollabSession::instance().modelVersion();
         fastapi_pending_remote_version = CollabSession::instance().pendingRemoteVersion();

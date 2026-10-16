@@ -1,4 +1,4 @@
-﻿# Package helpers for the fullstack launcher.
+# Package helpers for the fullstack launcher.
 function Write-PackageReadme([string]$PackageRoot, [string]$LatestExePath) {
     $readme = @"
 DBCAD fullstack package
@@ -72,19 +72,18 @@ function Sync-FullstackPackage(
     [string]$FastApiUrl,
     [string]$Author,
     [string]$ApiPassword,
-    [string]$BridgeHost,
-    [int]$BridgePort,
     [string]$Neo4jHost,
     [int]$Neo4jPort,
     [string]$Neo4jUser,
     [string]$Neo4jPassword,
-    [string]$Neo4jUri,
-    [double]$StorageBridgeTimeoutSeconds,
-    [bool]$DirectJsonMode
+    [string]$Neo4jUri
 ) {
     $clientDir = Ensure-Directory (Join-Path $PackageRoot "client")
     $serverDir = Ensure-Directory (Join-Path $PackageRoot "server")
-    $bridgeDir = Ensure-Directory (Join-Path $serverDir "bridge-bin")
+    $oldBridgeDir = Join-Path $PackageRoot "bridge-bin"
+    if (Test-Path -LiteralPath $oldBridgeDir) {
+        Remove-DirectorySafe -Path $oldBridgeDir -AllowedRoot $PackageRoot
+    }
 
     if ($LatestExe.DirectoryName.TrimEnd('\') -ine $clientDir.TrimEnd('\')) {
         Clear-PackagedRuntime -Directory $clientDir -PackageRoot $PackageRoot
@@ -102,12 +101,7 @@ function Sync-FullstackPackage(
     $fastApiConfig = "$FastApiUrl`r`n$Author`r`n$ApiPassword`r`n"
     Write-TextFile -Path (Join-Path $clientDir "fastapi_connect_info.conf") -Text $fastApiConfig
 
-    Write-TextFile -Path (Join-Path $clientDir "storage_bridge_connect_info.conf") -Text "$BridgeHost`r`n$BridgePort`r`n"
 
-    Clear-PackagedRuntime -Directory $bridgeDir -PackageRoot $PackageRoot
-    Copy-DirectoryContents -Source $clientDir -Destination $bridgeDir
-    Copy-FileToPathIfDifferent -Source (Join-Path $clientDir "CAD_DB.exe") -Destination (Join-Path $bridgeDir "CAD_DB.exe")
-    Remove-LegacyCredentialFiles -Directories @($bridgeDir)
 
     $backendSource = Resolve-FullPath $BackendRoot
     $serverTarget = Resolve-FullPath $serverDir
@@ -139,14 +133,11 @@ function Sync-FullstackPackage(
     $envFile = Join-Path $serverDir ".env"
     $envText = @"
 CAD_DB_STORAGE_BACKEND=neo4j
-CAD_DB_STORAGE_BRIDGE_URL=$(if ($DirectJsonMode) { "" } else { "http://127.0.0.1:$BridgePort" })
-CAD_DB_STORAGE_BRIDGE_TIMEOUT_SECONDS=$StorageBridgeTimeoutSeconds
 CAD_DB_NEO4J_URI=$Neo4jUri
 CAD_DB_NEO4J_USER=$Neo4jUser
 CAD_DB_NEO4J_PASSWORD=$Neo4jPassword
 CAD_DB_NEO4J_DATABASE=neo4j
 CAD_DB_API_PASSWORD=$ApiPassword
-CAD_DB_DIRECT_JSON_MODE=$(if ($DirectJsonMode) { "true" } else { "false" })
 "@
     Write-TextFile -Path $envFile -Text $envText
 
@@ -156,6 +147,5 @@ CAD_DB_DIRECT_JSON_MODE=$(if ($DirectJsonMode) { "true" } else { "false" })
     return @{
         ClientDir = $clientDir
         ServerDir = $serverDir
-        BridgeDir = $bridgeDir
     }
 }

@@ -30,9 +30,6 @@ void MainWindow::updateCollabPanelUi() {
             collabPendingLabel->setText(tr("待同步版本：无"));
         }
     }
-    if (collabAutoFollowCheckBox != nullptr) {
-        collabAutoFollowCheckBox->setChecked(fastapiAutoFollowRemote);
-    }
     if (collabMembersList != nullptr) {
         collabMembersList->clear();
         for (auto it = fastapi_collaborators.constBegin(); it != fastapi_collaborators.constEnd(); ++it) {
@@ -46,12 +43,6 @@ void MainWindow::updateCollabPanelUi() {
     bool isSubmitting = fastapiSubmitInFlight;
     auto &session = CollabSession::instance();
 
-    if (collabModeCombo != nullptr) {
-        // Mode0 and Mode1 are independent version streams, so the selector
-        // must remain available while a project is connected.  Mode2 is still
-        // disabled at the item level until its PostgreSQL path is implemented.
-        collabModeCombo->setEnabled(true);
-    }
     if (collabPushButton != nullptr) {
         collabPushButton->setEnabled(connected && !isSubmitting && session.isConnected());
     }
@@ -64,12 +55,6 @@ void MainWindow::updateCollabPanelUi() {
     if (collabReconnectButton != nullptr) {
         collabReconnectButton->setEnabled(connected);
     }
-}
-
-void MainWindow::applyPendingRemoteVersion() {
-    // 已废弃：旧的 "待同步版本" 走的是 clear+restore 全量同步路径，与新的增量同步语义冲突。
-    // 保留此函数仅为兼容既有菜单项 / 信号连接，实际调用将引导用户改用 Pull 按钮。
-    statusBar()->showMessage(tr("请改用协作面板的「拉取(Pull)」按钮获取远端增量变更"), 4000);
 }
 
 void MainWindow::reconnectFastAPISync() {
@@ -122,14 +107,14 @@ void MainWindow::reconnectFastAPISync() {
     QStringList queryItems;
     queryItems << "client_id=" + QString::fromUtf8(QUrl::toPercentEncoding(fastapi_client_id));
     queryItems << "author=" + QString::fromUtf8(QUrl::toPercentEncoding(QString::fromStdString(fastapi_author)));
-    queryItems << (collabMode == CollabMode::Mode1 ? QStringLiteral("stream=mode1") : QStringLiteral("stream=mode0"));
+    queryItems << QStringLiteral("stream=mode1");
     if (!fastapi_password.empty()) {
         queryItems << "password=" +
                           QString::fromUtf8(QUrl::toPercentEncoding(QString::fromStdString(fastapi_password)));
     }
     wsPath += "?" + queryItems.join("&");
     const QUrl wsUrl(wsBaseUrl + wsPath);
-    std::fprintf(stderr, "[DEBUG] reconnectFastAPISync ws_url=%s\n", wsUrl.toString().toUtf8().constData());
+    std::fprintf(stderr, "[DEBUG] reconnectFastAPISync ws_url=%s\n", wsUrl.adjusted(QUrl::RemoveQuery).toString().toUtf8().constData());
 
     fastapiSyncSocket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
     std::fprintf(stderr, "[DEBUG] reconnectFastAPISync new QWebSocket=%p\n", (void *)fastapiSyncSocket);
@@ -200,4 +185,35 @@ void MainWindow::reconnectFastAPISync() {
     fastapiSyncSocket->open(wsUrl);
     std::fprintf(stderr, "[Collab] after open() called socket_state=%d\n", (int)fastapiSyncSocket->state());
     fflush(stderr);
+}
+
+void MainWindow::disconnectFastAPISync() {
+    std::fprintf(stderr, "[DEBUG] disconnectFastAPISync ENTER pid=%llu has_socket=%d base_url_len=%zu\n",
+                 (unsigned long long)QCoreApplication::applicationPid(), fastapiSyncSocket != nullptr ? 1 : 0,
+                 fastapi_base_url.size());
+    CollabSession::instance().onDisconnected();
+    if (fastapiHeartbeatTimer != nullptr) {
+        fastapiHeartbeatTimer->stop();
+    }
+    fastapi_collaborators.clear();
+    if (fastapiReconnectTimer != nullptr) {
+        fastapiReconnectTimer->stop();
+    }
+
+    if (fastapiSyncSocket != nullptr) {
+        std::fprintf(stderr, "[DEBUG] disconnectFastAPISync before socket.close base_url_len=%zu\n",
+                     fastapi_base_url.size());
+        fastapiSyncSocket->disconnect(this);
+        fastapiSyncSocket->close();
+        std::fprintf(stderr, "[DEBUG] disconnectFastAPISync after  socket.close base_url_len=%zu\n",
+                     fastapi_base_url.size());
+        fastapiSyncSocket->deleteLater();
+        fastapiSyncSocket = nullptr;
+    }
+    std::fprintf(stderr, "[DEBUG] disconnectFastAPISync after  setCollabConnectionState base_url_len=%zu\n",
+                 fastapi_base_url.size());
+    updateCollabPanelUi();
+    std::fprintf(stderr, "[DEBUG] disconnectFastAPISync after  updateCollabPanelUi base_url_len=%zu\n",
+                 fastapi_base_url.size());
+    std::fprintf(stderr, "[DEBUG] disconnectFastAPISync EXIT\n");
 }

@@ -54,6 +54,25 @@ def validate_graph(graph: Any) -> dict[str, Any]:
             )
         if not isinstance(props, dict):
             raise GraphValidationError(f"nodes[{index}].props must be an object")
+        if "sat_fragment" in props and (
+            not isinstance(props["sat_fragment"], str)
+            or not props["sat_fragment"].strip()
+        ):
+            raise GraphValidationError(
+                f"nodes[{index}].props.sat_fragment must be nonempty text"
+            )
+        if props.get("fallback") in ("sat_fragment", "on_failure") and not props.get(
+            "sat_fragment"
+        ):
+            raise GraphValidationError(f"nodes[{index}] requires a SAT backup")
+        if (
+            graph.get("schema") == "dbcad.entity_graph.v2"
+            and ("body" in labels or props.get("top_level"))
+            and not props.get("sat_fragment")
+        ):
+            raise GraphValidationError(
+                f"nodes[{index}] requires a SAT backup for hybrid v2"
+            )
         ids.add(node_id)
         nodes.append({"id": node_id, "labels": list(labels), "props": deepcopy(props)})
 
@@ -245,7 +264,10 @@ def merge_graph(
     old_rels = [
         rel
         for rel in base["rels"]
-        if rel["start"] in nodes_by_id and rel["end"] in nodes_by_id
+        if rel["start"] in nodes_by_id
+        and rel["end"] in nodes_by_id
+        and rel["start"] not in base_scope
+        and rel["end"] not in base_scope
     ]
     new_rels = [
         deepcopy(rel)
@@ -267,6 +289,15 @@ def merge_graph(
     for key, value in incoming.items():
         if key not in {"nodes", "rels"}:
             merged[key] = deepcopy(value)
+    # Legacy components cannot acquire a SAT backup on the server (no ACIS).
+    # Validate incoming v2 strictly above, and keep the materialized graph v1
+    # until every old root has been replaced with a hybrid component.
+    if merged.get("schema") == "dbcad.entity_graph.v2" and any(
+        ("body" in node["labels"] or node["props"].get("top_level"))
+        and not node["props"].get("sat_fragment")
+        for node in merged["nodes"]
+    ):
+        merged["schema"] = "dbcad.entity_graph.v1"
     return validate_graph(merged)
 
 

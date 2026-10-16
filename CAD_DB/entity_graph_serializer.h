@@ -4,7 +4,7 @@
  *
  * 将 ACIS 实体层级结构（BODY → LUMP → SHELL → FACE → LOOP → COEDGE → EDGE → VERTEX
  * 以及 SURFACE / CURVE / PCURVE 等几何元素）序列化为 JSON，
- * 格式与 Python neo4j_entity_store.py 完全兼容。
+ * 由 Python json_graph_store.py 按组件保存，顶级节点携带 SAT 备份。
  *
  * JSON 格式：
  * {
@@ -42,7 +42,7 @@
  *   ]
  * }
  *
- * 反序列化时，通过 access.cpp 的 api_restore_entity_list_neo4j 重建 ACIS 实体，
+ * 反序列化时复用单机几何/拓扑编码重建 ACIS 实体，失败时使用同组件 SAT，
  * 然后将实体指针映射回 ETI uuid（通过 props.uuid 字段）。
  */
 
@@ -63,16 +63,16 @@ class Window;
  *   - 遍历 Window 中的 ACIS ENTITY_LIST
  *   - 按 ETI index → uuid 映射将顶级 body 的 uuid 注入到 props
  *   - BFS 遍历 ACIS 拓扑，生成 nodes + rels JSON
- *   - 返回格式与 neo4j_entity_store.py 兼容
+ *   - 每个顶级组件写入 sat_fragment 与 fallback 策略
  *
  * deserializeACISEntityGraph():
  *   - 解析 JSON nodes + rels
- *   - 调用 access.cpp 的反序列化逻辑重建 ACIS 实体
+ *   - 按 UUID 分组件重建，全部成功才返回结果
  *   - 返回重建后的 ENTITY_LIST 以及 uuid → ENTITY* 映射
  */
 
 // 序列化：Window → JSON
-// entityIndexToUuid 来自 MainWindow::entityIndexToUuid，映射 ETI index → uuid
+// entityIndexToUuid 映射 topLevelEntities 的紧凑位置 → 稳定 uuid（不是 UI 逻辑索引）
 QJsonObject serializeACISEntityGraph(
     const QHash<int, QString>& entityIndexToUuid,
     const ENTITY_LIST& topLevelEntities
@@ -80,7 +80,7 @@ QJsonObject serializeACISEntityGraph(
 
 // 反序列化：JSON → ENTITY_LIST + uuid 映射
 // 返回 { entities, uuidToEntity }
-// uuidToEntity: key = props.uuid, value = BODY* 指针
+// uuidToEntity: key = 顶级节点 id/uuid, value = ENTITY* 指针
 struct DeserializedEntityGraph {
     ENTITY_LIST* entities;
     QHash<QString, void*> uuidToEntity;

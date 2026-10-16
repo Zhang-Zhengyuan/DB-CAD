@@ -1,6 +1,6 @@
 # DBCAD 一键部署和启动
 
-默认采用直接 JSON Mode1：启动 Neo4j 与 FastAPI，不需要 C++ Bridge。已有 SAT / Bridge 路径通过 `-LegacyBridgeMode` 保留。首次环境准备见 [新成员指南](../docs/GETTING_STARTED.md)。
+协作统一采用 Mode1 JSON + SAT 组件备份：启动 Neo4j 与 FastAPI。Mode0 / C++ Bridge 及其启动参数已移除。首次环境准备见 [新成员指南](../docs/GETTING_STARTED.md)。
 
 统一部署入口：
 
@@ -75,7 +75,7 @@ DBCAD_AUTHOR=dbcad-exe
 规则：
 
 1. Neo4j Docker 的 `NEO4J_AUTH` 使用 `DBCAD_NEO4J_USER/DBCAD_PASSWORD`。
-2. C++ Storage Bridge 使用同一个 Neo4j 用户名和密码。
+2. FastAPI 直接连接 Neo4j；服务器不需要 ACIS。
 3. FastAPI 的访问密码也使用 `DBCAD_PASSWORD`。
 4. 客户端 `fastapi_connect_info.conf` 由启动器生成，第三行写入同一个密码。
 5. 旧的 `DBCAD_NEO4J_PASSWORD`、`DBCAD_API_PASSWORD`、`neo4j_connect_info.conf`、`neo4j_connect_info.config` 不再作为密码来源。
@@ -148,7 +148,7 @@ dist\DBCAD-fullstack-package
 .\CAD_DB\deploy\start_dbcad_fullstack.cmd -PrepareOnly
 ```
 
-只启动 Docker、Bridge 和 FastAPI，不打开桌面客户端：
+只启动 Docker 和 FastAPI，不打开桌面客户端：
 
 ```powershell
 .\CAD_DB\deploy\start_dbcad_fullstack.cmd -SkipClient
@@ -206,7 +206,6 @@ http://127.0.0.1:8000/docs
 | `-ResetNeo4jDockerData` | 删除并重建本地 Neo4j Docker 容器和 `neo4j-runtime` 数据。修改 `DBCAD_PASSWORD` 后需要使用 |
 | `-SkipNeo4jDocker` | 不创建、不启动 Docker 容器。适合使用外部 Neo4j |
 | `-FastApiHost` / `-FastApiPort` | FastAPI 监听地址和端口，默认来自 `dbcad.local.env` |
-| `-BridgeHost` / `-BridgePort` | C++ Storage Bridge 监听地址和端口，默认来自 `dbcad.local.env` |
 | `-Neo4jHost` / `-Neo4jPort` | Neo4j Bolt 地址，默认来自 `dbcad.local.env` |
 | `-Neo4jUser` / `-Neo4jPassword` | Neo4j 认证信息。默认使用 `DBCAD_NEO4J_USER` 和统一的 `DBCAD_PASSWORD`。命令行参数优先级高于配置文件 |
 | `-ApiPassword` | FastAPI 访问密码。默认使用统一的 `DBCAD_PASSWORD`。不建议传空值；空 FastAPI 密码会关闭鉴权 |
@@ -214,9 +213,8 @@ http://127.0.0.1:8000/docs
 | `-ClientExePath` | 显式指定自定义构建路径，优先于 Configuration；相对路径以当前工作目录解析 |
 | `-WinDeployQtPath` | 指定 `windeployqt.exe`。不传时自动查找 `D:\Qt`、`C:\Qt`、PATH 和 qmake 所在目录 |
 | `-PackageRoot` | 指定部署包输出目录，默认 `dist\DBCAD-fullstack-package` |
-| `-PrepareOnly` | 只同步部署包和写配置，不启动 Docker、Bridge、FastAPI 或客户端 |
-| `-SkipClient` | 启动服务，不打开客户端；默认不启动 Bridge |
-| `-LegacyBridgeMode` | 启用原有 C++ Bridge + SAT 存储路径 |
+| `-PrepareOnly` | 只同步部署包和写配置，不启动 Docker、FastAPI 或客户端 |
+| `-SkipClient` | 启动服务，不打开客户端 |
 | `-ClientCount` | 启动客户端实例数量，默认 `1`。传 `-ClientCount 2` 等价于使用 `start_dbcad_two_clients.cmd` |
 | `-SkipDependencySync` | 跳过 `uv sync`，适合依赖已经安装好的快速重启 |
 | `-KeepExistingServices` | 如果 8000/8100 已有健康服务，复用现有服务。默认要求先停止旧服务，避免误用旧版本 |

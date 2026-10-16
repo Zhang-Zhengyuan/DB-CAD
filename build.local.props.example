@@ -3,7 +3,8 @@
   <!-- Copy to build.local.props. Point to the MSVC x64 kit, not Qt's parent directory. -->
   <PropertyGroup>
     <QtInstall>C:\Qt\6.8.3\msvc2022_64</QtInstall>
-    <DBCADPostgresInclude>C:\vcpkg\installed\x64-windows\include</DBCADPostgresInclude>
+    <QtMsBuild>C:\Users\YOUR_USER\AppData\Local\QtMsBuild</QtMsBuild>
+    <DBCADPostgresInclude>$(MSBuildThisFileDirectory)_deps\postgresql\include</DBCADPostgresInclude>
     <DBCADDepsRoot>$(MSBuildThisFileDirectory)_deps</DBCADDepsRoot>
   </PropertyGroup>
 </Project>

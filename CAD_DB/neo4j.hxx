@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
+#pragma push_macro("alignof")
 #include <mgclient-1.4.2/mgclient.h>
+#pragma pop_macro("alignof") // The legacy amalgamation must not redefine C++ keywords in callers.
 
 class Neo4jPart {
 public:

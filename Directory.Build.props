@@ -1,9 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <!-- Imported before Microsoft.Cpp.props so the toolset resolves to a
-       compiler that supports /std:c++23. 14.39 silently ignores that flag
-       (D9002) and falls back to C++14, breaking glaze and Qt headers. -->
-  <PropertyGroup>
-    <VCToolsVersion>14.44.35207</VCToolsVersion>
-  </PropertyGroup>
+  <!-- Use the installed v143 toolset. /std:c++latest is also supported by
+       VS 2022 versions which do not recognize /std:c++23. -->
 </Project>
