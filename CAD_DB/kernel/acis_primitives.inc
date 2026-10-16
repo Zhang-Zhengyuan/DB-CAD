@@ -310,4 +310,3 @@ static void createPrimitive(const int id, ENTITY*& ptrEntity, std::vector<std::v
     } else if (ptrEdge)
         ptrEntity = ptrEdge;
 }
-
