@@ -32,16 +32,26 @@ uv run --frozen pytest -q -m 'not integration'
 - Neo4j 管理 WebUI，包含项目、版本、图及按需查看原始提交。
 - 直接 Neo4j 与 PostgreSQL 实验功能保留。
 
+## 几何内核隔离
+
+业务/UI 通过 `GeometryKernel` 调用建模、变换、网格与存取能力，文档使用稳定 UUID 和会话 `ShapeHandle`；ACIS 原生对象、SDK 调用、许可初始化、混合 JSON/SAT 编解码集中在独立的 `DbcadAcis` 静态库。显示层仅消费坐标、索引、颜色和包围盒。
+
+当前采用编译时适配：接入其他内核需要实现接口、替换工厂与构建依赖，并处理已有 ACIS 数据的兼容读取。尚未接入第二内核，不承诺直接无损读取 SAT，也没有运行时插件加载。
+
+实现路径、对象所有权、撤销与协作流程、允许保留的专用模块，以及 [issue #4](https://github.com/Zhang-Zhengyuan/DB-CAD/issues/4) 的逐项验收状态，见 [内核隔离与替换指南](docs/KERNEL_ISOLATION.md)。当前已完成主要调用隔离；自动依赖防护、无 SDK 业务测试构建和第二内核原型仍待完成。
+
 ## 目录
 
 ```text
 CAD_DB.sln                唯一 Visual Studio 解决方案
 CAD_DB/
-  CAD_DB.vcxproj          唯一客户端构建清单
+  CAD_DB.vcxproj          客户端业务/UI 构建目标
+  DbcadAcis.vcxproj       ACIS 适配器与专用存储兼容静态库
+  kernel/                中立接口、值类型、文档记录与 ACIS 适配实现
   mainwindow.cpp         窗口初始化；其他实现位于 ui/
   ui/                    连接、协作、消息、文档、编辑
   access.cpp             SAT 文件与诊断；图存储位于 storage/
-  storage/               图保存/恢复、历史、delta、几何编码
+  storage/               旧 Neo4j 图/历史兼容、几何编码（编入适配库）
   backend/app/
     api/                 HTTP/WS 入口
     collaboration/       通知协议与版本摘要
