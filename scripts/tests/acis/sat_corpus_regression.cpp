@@ -84,6 +84,7 @@ static std::vector<std::string> canonSatLines(const std::string &path) {
         content.append(buf, n);
     fclose(f);
     size_t start = 0;
+    int headerLines = 0; // 前 3 行为文件头（版本/产品/容差），第 0 行含逐次变化的讱录字段
     // spline 块状态：1 = 子类前缀区（块头后到 "full nubs" 前），
     // 2 = 控制点区（"full nubs" 到 '#'）
     int splBlockDepth = 0;
@@ -96,8 +97,17 @@ static std::vector<std::string> canonSatLines(const std::string &path) {
             line.pop_back();
         if (line.empty())
             continue;
+        if (headerLines < 3) { headerLines++; continue; } // 跳过 3 行文件头
         if (line.rfind("Standard ACIS", 0) == 0 || line.rfind("end of ACIS", 0) == 0)
             continue;
+        // T @nn <hash> 事务标记行：哈希为逐次保存的 journal 指纹，两次落盘
+        // 必然不同——整行折叠为常量。否则真实语料上 ~50% 文件被误报
+        // 为差异（实测 136/272 纯 T 噪声误报，见论文工作区 F-1 分诊）
+        if (line.rfind("T @", 0) == 0)
+        {
+            out.push_back("T");
+            continue;
+        }
         // spline 块状态机：块头 '{' 到 "full nubs" 行之间 = 子类前缀区
         //（rulesur 的母线 straight 行/参数行），恢复为 exact 时该区为空——
         // 前缀区所有行折叠为 "profile-line"；"full nubs" 起为控制点区，
