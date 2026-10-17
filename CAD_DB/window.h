@@ -113,7 +113,7 @@ private:
     bool isInputHandle = false;
     std::vector<dbcad::Point3> input_handles;
 
-    // ENTITY树相关
+    // 实体树相关（业务实体树，非 ACIS ENTITY）
     QTreeWidget* treeWidget;
     std::vector<ENTITY_TREE_ITEM> entity_tree;
     int latest_index = 0;

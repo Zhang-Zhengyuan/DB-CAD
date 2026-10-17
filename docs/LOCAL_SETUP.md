@@ -30,7 +30,7 @@ Visual Studio 打开 `CAD_DB.sln`，选择 x64 / Debug 后 F5；已配置 QtMsBu
 - 使用本机已安装 v143 / MSVC 14.43，取消不存在的 14.44 固定版本；语言开关 `/std:c++latest`，两配置 `/MD`、`/EHa`、4MB 栈及 `SPA_NO_AUTO_LINK`。
 - Debug 客户端使用 Qt Release DLL（同为 `/MD`），仍保留 `/Od`、完整 PDB 和 Debug ACIS 库；避免 Qt Debug `/MDd` 与 ACIS `/MD` 混用导致启动堆损坏。打包模式按实际 Qt 导入库选择。
 - 官方 Debug 导入库内部仍引用 `SPAAcisDs.dll`；`build.ps1` 将 Debug DLL 在 `x64/Debug` 中按原导入名暂存。仅将库重命名为 `SPAAcisDsd.lib` 不会改变其导入的 DLL 名称。
-- PostgreSQL/libpq 18.6、OpenSSL 3.5.9 LTS、GLFW 3.5.1；头文件、导入库和运行时取自同一官方配套包。公开依赖安装脚本：`python scripts/prepare-public-deps.py`，来源与 SHA-256 固定在脚本内。
+- PostgreSQL/libpq 18.6、OpenSSL 3.5.9 LTS、GLFW 3.5.1；头文件、导入库和运行时取自同一官方配套包。公开依赖安装脚本：`python scripts/prepare-public-deps.py`，来源与 SHA-256 固定在脚本内；`scripts/build.ps1` 检测到固定命名的链接库缺失时会自动调用该脚本（可用 `-SkipDependencyProvision` 禁止），各机器无需手工预装即可收敛到同一套件。
 - Glaze 5.5.2 与项目定制 mgclient 保留；对 mgclient 的 `alignof` 宏污染在包含边界做隔离。
 - 旧 ACIS 保存在 `artifacts/acis-migration-2026-10-15-*/acis`，其他原依赖保存在 `artifacts/dependency-audit/original-deps`；备份和第三方包均不入库。
 

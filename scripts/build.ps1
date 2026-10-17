@@ -4,7 +4,10 @@ param(
     [string]$QtMsBuildPath = $env:QtMsBuild,
     [string]$DepsRoot = $env:DBCAD_DEPS_ROOT,
     [string]$PostgresInclude = $env:DBCAD_POSTGRES_INCLUDE,
-    [string]$RuntimeDir = $env:DBCAD_RUNTIME_DIR
+    [string]$RuntimeDir = $env:DBCAD_RUNTIME_DIR,
+    # Public dependencies are provisioned automatically when missing; pass
+    # -SkipDependencyProvision to build strictly against what is already there.
+    [switch]$SkipDependencyProvision
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -22,6 +25,31 @@ if (-not $DepsRoot) { $DepsRoot = Join-Path $repoRoot '_deps' }
 if (-not $PostgresInclude) { $PostgresInclude = Join-Path $DepsRoot 'postgresql\include' }
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'CAD_DB\spatial_license.h'))) {
     throw 'Missing CAD_DB/spatial_license.h. Download the matching 2026 license header from your authorized Spatial account or obtain it from your license administrator. See docs/LOCAL_SETUP.md.'
+}
+# Keep every machine on the same pinned public kit (see docs/DEPENDENCIES.md):
+# the linker references these exact names, and older hand-assembled kits only
+# carry historical names such as libssl64MD.lib. Provision on demand instead
+# of failing with LNK1181 on machines that never ran the installer.
+$requiredLinkLibs = @(
+    'openssl\lib\libssl.lib',
+    'openssl\lib\libcrypto.lib',
+    'postgresql\lib\libpq.lib',
+    'glfw\lib\glfw3_64.lib'
+)
+$missingLinkLibs = @($requiredLinkLibs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $DepsRoot $_)) })
+if ($missingLinkLibs) {
+    if ($SkipDependencyProvision) {
+        throw "Missing pinned link libraries under $DepsRoot : $($missingLinkLibs -join ', '). Run 'python scripts/prepare-public-deps.py' or drop -SkipDependencyProvision."
+    }
+    Write-Host "Missing pinned link libraries: $($missingLinkLibs -join ', ')"
+    Write-Host 'Provisioning the pinned public dependency kit (downloads are checksum-verified; existing files are kept, originals are backed up).'
+    $provisionScript = Join-Path $repoRoot 'scripts\prepare-public-deps.py'
+    $provisionPython = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $provisionPython) { throw 'python not found in PATH; run scripts/prepare-public-deps.py manually. See docs/DEPENDENCIES.md.' }
+    & $provisionPython $provisionScript
+    if ($LASTEXITCODE -ne 0) { throw "prepare-public-deps.py failed with exit code $LASTEXITCODE. See docs/DEPENDENCIES.md." }
+    $stillMissing = @($requiredLinkLibs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $DepsRoot $_)) })
+    if ($stillMissing) { throw "Public dependency kit installed but still missing: $($stillMissing -join ', ')." }
 }
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $msbuildCommand = Get-Command MSBuild.exe -ErrorAction SilentlyContinue
