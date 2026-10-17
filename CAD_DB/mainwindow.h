@@ -7,56 +7,11 @@
 #include <QString>
 #include <QtGlobal>
 #include <memory>
-#include "access.hxx"
+#include <QColor>
+#include "kernel/model_types.h"
 #include "pg_service.h"
 
-enum OPERATOR_TYPES { OPERATOR_IMPORT = 0, OPERATOR_CONSTRUCTOR, OPERATOR_INTERSECTOR, OPERATOR_BOOLEAN, OPERATOR_DEFEATURE, OPERATOR_UNKNOWN, OPERATOR_SPERATOR = 999 };
-enum DEFEATURE_TYPES { DEFEATURE_UNREPEAT = 0, DEFEATURE_REMOVE_SMALL, DEFEATURE_SHELL, DEFEATURE_SPLIT, DEFEATURE_ENVELOPE, DEFEATURE_BREP2CSG };
-enum INPUT_MODES { SELECTION, INPUT_SPLINE };
-// 注意：BASIC_ENTITIES中非样条基本体需放在BSPLINE_CTRLPTS之前
-// 否则将导致进行变换时未修改ENTITY_TREE_ITEM的trans。
-enum BASIC_ENTITIES {
-    E_CUBE = 0,         // 立方体
-    E_SPHERE,           // 球体
-    E_CYLINDER,         // 圆柱体
-    E_TORUS,            // 圆环体
-    E_CONE,             // 圆锥体
-    E_PRISM,            // 多棱锥
-    E_PYRAMID,          // 金字塔
-    E_WIGGLE,           // 摆动体
-    E_PLANE,            // 矩形面
-    E_PPLANE,           // 平行四边形面
-    E_CPLANE,           // 圆形面
-    E_SPHERES,          // 球面
-    E_PSPHERES,         // 部分球面
-    E_CONIC_SIDE,       // 圆锥面
-    E_CYLINDER_SIDE,    // 圆柱面
-    E_PCONIC,           // 部分圆锥面
-    E_TORUSS,           // 完整圆环面
-    E_PTORUSS,          // 部分圆环面
-    E_LAWS,             // 公式面
-    E_LINE,             // 直线
-    E_ARC,              // 圆弧
-    E_ELLIPSE,          // 椭圆
-    E_CONIC,            // 二次线
-    E_HELIX,            // 螺旋线
-    E_SPIRAL,           // 阿基米德螺旋线
-    E_SPRING,           // 弹簧线
-    E_LAWC,             // 方程线
-    E_BSPLINE_CTRLPTS,  // 控制点b样条
-    E_BSPLINE_FIT,      // 拟合b样条
-    E_BSPLINE_INTRP,    // 插值b样条
-    E_BEZIER,           // 贝塞尔
-    E_BSPLINE           // b样条
-};
-
-class ENTITY_LIST;
-class AcisOptions;
-class outcome;
 class Window;
-class HISTORY_STREAM;
-class DELTA_STATE;
-class BULLETIN_BOARD;
 class QWebSocket;
 class QProcess;
 class QTimer;
@@ -66,15 +21,6 @@ class QCheckBox;
 class QPushButton;
 class QDockWidget;
 class QComboBox;
-
-typedef outcome(*GME_fp)(ENTITY_LIST&, AcisOptions*);
-
-struct menu_map {
-    std::string name;
-    int value;
-};
-
-extern std::unordered_map<std::string, std::vector<menu_map>> menus_example;
 
 const QStringList colorNames = QColor::colorNames();
 
@@ -96,46 +42,36 @@ public:
         EntityChangeType changeType;
         int entityIndex;
         qint64 timestamp;
-        // 仅 ADD 变更有效：把该 body 单独序列化的 SAT 文本，供接收端 acis_restore_entity_list 后 addEntity。
-        QString sat;
+        // Geometry belongs to the component graph; this record carries metadata only.
+
     };
 
     // 增量协作方法
     void beginEntityChangeTracking();
-    void recordEntityAdded(const QString& uuid, const QString& name, const QString& entityType, int index, const QString& sat = QString());
+    void recordEntityAdded(const QString& uuid, const QString& name, const QString& entityType, int index);
     void recordEntityRemoved(int index);
     void recordEntityModified(int index);
     QList<EntityChange> endEntityChangeTracking();
     void clearEntityChanges();
-    // 协作友好的本地删除：UI 右键删除按钮调用，ACIS 真删 + 记账 + 调度 Push
+    // 协作友好的本地删除：UI 右键删除按钮调用，内核删除、变更记账
     void deleteEntityByIndexForCollaboration(int index);
     QString exportEntityChangesToJson(const QList<EntityChange>& changes);
 
     // Legacy WebSocket delta apply, retained for old project history.
-    bool applyRemoteIncrementalDelta(const QJsonObject& remoteContent, QString* errorMessage);
 
-    // Bridge-free Mode1: ACIS serialization stays on the client; server merges JSON.
+    // Component encoding stays on the client; the server merges opaque JSON.
     bool submitMode1JsonDelta(const QString& reason);
     void pullMode1JsonDelta();
 
-    // 拉取：用 entity_graph JSON（拓扑/UUID）+ content.sat（restore 用）做合并
-    // 用户在协作面板选择 "JSON 反序列化" 模式时调用此路径。
-    // 优先尝试纯 JSON 反序列化（deserializeACISEntityGraph），失败则 fallback 到 SAT restore。
-    // 不调用 Window::clear()，避免破坏 restore 出来的 body。
-    bool pullACISEntityGraph(int version, const QJsonObject& entityGraphJson, const QString& satContent, bool deltaGraph = false, const QStringList& removedIds = {}, const QHash<QString, QString>& remoteNames = {});
-    // SAT restore + UUID 对齐辅助函数（EntityGraph fallback 路径）
-    bool restoreSatWithUuidAlignment(
-        const QString& satContent,
-        const QJsonObject& entityGraphJson,
-        ENTITY_LIST& outBodies,
-        QHash<QString, void*>& outUuidToBody
-    );
+    // Reconstruct through the kernel codec, then merge by stable document UUID.
+    bool pullEntityGraph(int version, const QJsonObject& graph, bool deltaGraph = false,
+                         const QStringList& removedIds = {}, const QHash<QString, QString>& remoteNames = {});
 
     // ========== 其他 public 方法 ==========
     void setCurWindow(Window* w) { curWindow = w; }
     void showMessage(const QString s, int duration = -1);
     void notifyModelChangedForCollaboration();
-    void buildTreeFromHistroy(HISTORY_STREAM* hs = nullptr);
+
 
 protected:
     void loadFile(const QString& fileName);
@@ -157,8 +93,6 @@ private slots:
     void incrementalTest();
     void setNEO4JConnectInfo();
     void setFastAPIConnectInfo();
-    void setBridgeConnectInfo();
-    void toggleBridgeMode(bool checked);
     void pgSaveCurrentToDatabase();
     void pgLoadFromDatabaseToCurrent();
     void pgListPartsInDatabase();
@@ -191,8 +125,6 @@ private:
     void createStatusBar();
     bool maybeSave();
     bool saveFile(const QString& fileName);
-    bool restoreFastAPIModelFromSat(const QString& satContent);
-    bool applyRemoteSatSnapshot(const QString& satContent, const QString& reason);
     void updateCollabPanelUi();
     void setCollabConnectionState(const QString& stateText);
     void reconnectFastAPISync();
@@ -200,17 +132,9 @@ private:
     void handleFastAPISyncMessage(const QString& message);
     void handlePresenceAndAckEvent(const QJsonObject& root, const QString& messageType);
     void handleDeltaSyncEvent(const QJsonObject& root, const QString& messageType);
-    void handleEntityGraphSyncEvent(const QJsonObject& root, const QString& messageType);
-    void handleModelSyncEvent(const QJsonObject& root, const QString& messageType);
     void handleFastAPISyncMessageImpl(const QString& message);
     void requestFastAPISyncNow();
     void updateFastAPICollaboratorsStatus();
-    void applyPendingRemoteVersion();
-    void scheduleFastAPIAutoPublish(const QString& reason);
-    void publishFastAPIAutoSnapshot();
-    bool publishFastAPIModelSnapshot(bool interactiveConflict);
-    bool submitFastAPIModelOverSocket(const QString& satContent, const QString& reason, bool interactiveConflict);
-    bool exportCurrentModelToSat(QString* satContent, QString* errorMessage);
     void setCurrentFile(const QString& fileName);
     void setCurrentPartName(const QString& partName);
     void onCollabPushButtonClicked();
@@ -221,12 +145,7 @@ private:
     QAction* setNEO4JModeAct;
     QAction* setNEO4JIncrementalModeAct;
     QAction* setFASTAPIModeAct;
-    QAction* toggleBridgeModeAct = nullptr;
     QActionGroup* setModeActGroup;
-    QProcess* bridgeProcess = nullptr;
-    bool bridgeStopRequested = false;
-    std::string bridge_bind_host;
-    int bridge_bind_port = 8100;
     std::string neo4jdb_host;
     int neo4jdb_port_bolt;
     std::string neo4jdb_username;
@@ -241,27 +160,16 @@ private:
     int fastapi_model_version = 0;
     int fastapi_pending_remote_version = 0;
     bool fastapiApplyingRemoteSnapshot = false;
-    bool fastapiPublishingSnapshot = false;
     bool fastapiSubmitInFlight = false;
     bool fastapiLocalDirtyDuringSubmit = false;
     bool fastapiLocalDirty = false;
     QString fastapiLastPublishReason;
     QString fastapiPendingSubmitRequestId;
-    // submit_accepted 里的 requestId，用于 model_saved 时识别本端推送。
-    // 因为 SAT fallback 路径 entity_graph ack 先到清空 submitRequestId，所以独立保存。
-    QString fastapiLastAcceptedRequestId;
-    // 协作基础设施（非状态，不归 CollabSession 管）
-    // Conflict resolution 备份：submit_rejected 时备份本地 SAT 内容，Pull 后 offer 给用户恢复。
-    QString fastapiConflictLocalSatBackup;
-    // 防止 Pull 期间重复弹出 merge 对话框。
-    bool isShowingConflictMergeDialog = false;
+    // Presence and WebSocket infrastructure.
     QHash<QString, QString> fastapi_collaborators;
     QWebSocket* fastapiSyncSocket = nullptr;
-    QTimer* fastapiSyncTimer = nullptr;
     QTimer* fastapiHeartbeatTimer = nullptr;
     QTimer* fastapiReconnectTimer = nullptr;
-    QTimer* fastapiPublishTimer = nullptr;
-    bool fastapiAutoFollowRemote = true;
 
     QDockWidget* collabDock = nullptr;
     QLabel* collabConnectionLabel = nullptr;
@@ -269,32 +177,12 @@ private:
     QLabel* collabVersionLabel = nullptr;
     QLabel* collabPendingLabel = nullptr;
     QListWidget* collabMembersList = nullptr;
-    QCheckBox* collabAutoFollowCheckBox = nullptr;
     QPushButton* collabSyncNowButton = nullptr;
     QPushButton* collabPushButton = nullptr;
     QPushButton* collabPullButton = nullptr;
     QPushButton* collabReconnectButton = nullptr;
-    QComboBox* collabModeCombo = nullptr;
-    QComboBox* collabPullModeCombo = nullptr;
 
-    // 协作模式（对应技术文档的 mode0/mode1/mode2）
-    // Mode0: SAT 全量 push/pull（WebSocket sync_now）
-    // Mode1: Neo4j 增量 push/pull（HTTP delta API）
-    // Mode2: PostgreSQL 增量 push/pull（待实现）
-    enum class CollabMode {
-        Mode0 = 0,  // SAT 全量 WebSocket 路径
-        Mode1 = 1,  // Neo4j 增量 HTTP 路径
-        Mode2 = 2,  // PostgreSQL 增量（待实现）
-    };
-    CollabMode collabMode = CollabMode::Mode0;
 
-    // Pull 合并模式（用于 Mode0 WebSocket 路径下的合并策略选择）
-    enum class CollabPullMode {
-        IncrementalDelta = 0,  // UUID 去重增量合并
-        FullSat = 1,           // 全量 SAT 替换
-        EntityGraph = 2          // JSON entity_graph 反序列化
-    };
-    CollabPullMode collabPullMode = CollabPullMode::IncrementalDelta;
     std::unique_ptr<PgService> m_pgService;
     // PG menu actions — kept as members so they can be enabled/disabled
     // based on m_pgService->isInitialized().
@@ -310,6 +198,4 @@ private:
     QList<EntityChange> pendingEntityChanges;
     bool isTrackingEntityChanges = false;
     qint64 entityChangeTrackingStartTime = 0;
-    // Access 模块增量 delta 追踪（Push 时计算 delta，Pull 时做 UUID 去重）
-    IncrementalContext collabCtx;
 };

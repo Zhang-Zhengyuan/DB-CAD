@@ -43,9 +43,9 @@ std::vector<menu_struct> menus_entities = {
 std::vector<menu_struct> menus_operators = {
     {"求交", "intersector", false, OPERATOR_TYPES::OPERATOR_INTERSECTOR, 0},
     {"分割线", "separate", false, OPERATOR_TYPES::OPERATOR_SPERATOR, 0},
-    {"布尔并", "union", false, OPERATOR_TYPES::OPERATOR_BOOLEAN, UNION},
-    {"布尔交", "intersection", false, OPERATOR_TYPES::OPERATOR_BOOLEAN, INTERSECTION},
-    {"布尔差", "subtraction", false, OPERATOR_TYPES::OPERATOR_BOOLEAN, SUBTRACTION},
+    {"布尔并", "union", false, OPERATOR_TYPES::OPERATOR_BOOLEAN, static_cast<int>(dbcad::BooleanOperation::Unite)},
+    {"布尔交", "intersection", false, OPERATOR_TYPES::OPERATOR_BOOLEAN, static_cast<int>(dbcad::BooleanOperation::Intersect)},
+    {"布尔差", "subtraction", false, OPERATOR_TYPES::OPERATOR_BOOLEAN, static_cast<int>(dbcad::BooleanOperation::Subtract)},
     {"分割线", "separate", false, OPERATOR_TYPES::OPERATOR_SPERATOR, 0},
     {"去重", "unrepeat", false, OPERATOR_TYPES::OPERATOR_DEFEATURE, DEFEATURE_UNREPEAT},
 };

@@ -309,7 +309,7 @@ static void run_solid_group(BODY *orig, const char *tag, double volRelTol) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
-    int run_upto = (argc > 1) ? atoi(argv[1]) : 17;
+    int run_upto = (argc > 1) ? atoi(argv[1]) : 18;
     if (!initialize_base()) { printf("FAIL base\n"); return 1; }
     outcome r = api_start_modeller(0);
     if (!r.ok()) { printf("FAIL modeller\n"); return 1; }
@@ -391,7 +391,7 @@ int main(int argc, char **argv) {
         graph_rt(top, 1, rt);
         {
             // 诊断：落盘本组 JSON，便于核对边 range / 锥面字段
-            FILE *jf = fopen("G4_graph.json", "wb");
+            FILE *jf = fopen("artifacts/G4_graph.json", "wb");
             if (jf) {
                 QByteArray js = QJsonDocument(rt.json).toJson(QJsonDocument::Indented);
                 fwrite(js.constData(), 1, js.size(), jf);
@@ -856,7 +856,7 @@ int main(int argc, char **argv) {
         for (const QJsonValue &v : nodesOf(rt.json)) {
             QJsonObject n = v.toObject();
             if (n.value("labels").toArray()[0].toString() == "body" &&
-                n.value("props").toObject().contains("sat_fragment"))
+                n.value("props").toObject().value("fallback").toString() == "sat_fragment")
                 hasFrag = true;
         }
         check(hasFrag, "G14 sweepsur body carries sat_fragment");
@@ -974,10 +974,10 @@ int main(int argc, char **argv) {
         for (const QJsonValue &v : nodesOf(rt2.json)) {
             QJsonObject n = v.toObject();
             if (n.value("labels").toArray()[0].toString() == "body" &&
-                n.value("props").toObject().contains("sat_fragment"))
+                n.value("props").toObject().value("fallback").toString() == "sat_fragment")
                 frag2 = true;
         }
-        check(!frag2, "G14 clean block has NO sat_fragment (stays fine-grained)");
+        check(!frag2, "G14 clean block has NO forced SAT (stays fine-grained)");
         check(rt2.deserOk, "G14 block deserialize ok (graph path)");
         if (rt2.body)
             compare_bodies(blk, rt2.body, "G14 block(fine-grained)", 1e-9);
@@ -1020,10 +1020,10 @@ int main(int argc, char **argv) {
         for (const QJsonValue &v : nodesOf(rt.json)) {
             QJsonObject n = v.toObject();
             if (n.value("labels").toArray()[0].toString() == "body" &&
-                n.value("props").toObject().contains("sat_fragment"))
+                n.value("props").toObject().value("fallback").toString() == "sat_fragment")
                 frag = true;
         }
-        check(!frag, "G15 no sat_fragment (analytic definitions stay fine-grained)");
+        check(!frag, "G15 no forced SAT (analytic definitions stay fine-grained)");
         check(rt.deserOk, "G15 deserialize ok");
         if (rt.body) {
             compare_bodies(res, rt.body, "G15 cyl-intersect", 1e-9);
@@ -1114,10 +1114,10 @@ int main(int argc, char **argv) {
             bool frag = false;
             for (const QJsonValue &v : nodesOf(rt.json)) {
                 QJsonObject n = v.toObject();
-                if (n.value("props").toObject().contains("sat_fragment"))
+                if (n.value("props").toObject().value("fallback").toString() == "sat_fragment")
                     frag = true;
             }
-            snprintf(buf, sizeof(buf), "G16(%s) no sat_fragment (44 fine-grained)", profTags[pi]);
+            snprintf(buf, sizeof(buf), "G16(%s) no forced SAT (44 fine-grained)", profTags[pi]);
             check(!frag, buf);
             check(rt.deserOk, "G16 deserialize ok");
             // 恢复面：子类保持 rot_spl_sur（44，非 exactsur NURBS）
@@ -1216,7 +1216,7 @@ int main(int argc, char **argv) {
         for (const QJsonValue &v : nodesOf(rt.json)) {
             QJsonObject n = v.toObject();
             if (n.value("labels").toArray()[0].toString() == "body" &&
-                n.value("props").toObject().contains("sat_fragment"))
+                n.value("props").toObject().value("fallback").toString() == "sat_fragment")
                 frag = true;
         }
         printf("    [G17] sat_fragment triggered = %d\n", (int)frag);
@@ -1225,6 +1225,135 @@ int main(int argc, char **argv) {
             compare_bodies(ext, rt.body, "G17 extrude", 1e-9);
         free_rt(rt, true);
         api_del_entity(ext);
+    }
+
+
+    if (++g_id > run_upto) goto finish;
+    printf("== G18 hybrid fallback and stable standalone roots ==\n");
+    {
+        BODY *original = nullptr;
+        check(api_make_cuboid(3, 4, 5, original).ok(), "G18 make cube");
+        QHash<int, QString> ids{{0, "hybrid-cube"}};
+        auto graph = serializeACISEntityGraph(ids, ENTITY_LIST(original));
+        auto nodes = graph.value("nodes").toArray();
+        bool backup = false;
+        for (auto value : nodes) {
+            auto node = value.toObject();
+            if (node.value("id").toString() == "hybrid-cube") {
+                auto props = node.value("props").toObject();
+                backup = !props.value("sat_fragment").toString().isEmpty() &&
+                         props.value("fallback").toString() == "on_failure";
+            }
+        }
+        check(backup, "G18 supported cube has on_failure SAT backup");
+        // Remove SAT from a supported component to prove the JSON path works.
+        auto fine = graph;
+        auto fineNodes = nodes;
+        for (int i = 0; i < fineNodes.size(); ++i) {
+            auto node = fineNodes[i].toObject();
+            if (node.value("id").toString() != "hybrid-cube") continue;
+            auto props = node.value("props").toObject();
+            props.remove("sat_fragment"); props.remove("fallback");
+            node.insert("props", props); fineNodes[i] = node;
+        }
+        fine.insert("nodes", fineNodes);
+        DeserializedEntityGraph fineDecoded{nullptr, {}};
+        QString fineError;
+        bool fineOk = deserializeACISEntityGraph(fine, &fineDecoded, &fineError);
+        check(fineOk, "G18 supported cube reconstructs without SAT");
+        if (fineOk) { api_del_entity_list(*fineDecoded.entities); delete fineDecoded.entities; }
+
+
+        auto truncated = graph;
+        truncated.insert("rels", QJsonArray{});
+        DeserializedEntityGraph truncDecoded{nullptr, {}};
+        QString truncError;
+        bool truncOk = deserializeACISEntityGraph(truncated, &truncDecoded, &truncError);
+        check(truncOk, "G18 incomplete topology triggers SAT instead of empty Body");
+        if (truncOk) {
+            compare_bodies(original, (BODY *)truncDecoded.uuidToEntity.value("hybrid-cube"), "G18 truncated topology", 1e-9);
+            api_del_entity_list(*truncDecoded.entities); delete truncDecoded.entities;
+        }
+        // Unsupported fine geometry must use the component's SAT backup.
+        bool sabotaged = false;
+        for (int i = 0; i < nodes.size(); ++i) {
+            auto node = nodes[i].toObject();
+            if (!sabotaged && node.value("labels").toArray().contains("face")) {
+                auto props = node.value("props").toObject();
+                props.insert("geometry", QJsonObject{{"type", "unknown_surface"}});
+                node.insert("props", props); nodes[i] = node; sabotaged = true;
+            }
+        }
+        graph.insert("nodes", nodes);
+        DeserializedEntityGraph decoded{nullptr, {}};
+        QString error;
+        bool ok = deserializeACISEntityGraph(graph, &decoded, &error);
+        check(ok && decoded.uuidToEntity.contains("hybrid-cube"), "G18 JSON failure restores same UUID from SAT");
+        if (ok) {
+            compare_bodies(original, (BODY *)decoded.uuidToEntity.value("hybrid-cube"), "G18 SAT retry", 1e-9);
+            api_del_entity_list(*decoded.entities); delete decoded.entities;
+        }
+        for (int i = 0; i < nodes.size(); ++i) {
+            auto node = nodes[i].toObject();
+            if (node.value("id").toString() == "hybrid-cube") {
+                auto props = node.value("props").toObject();
+                props.remove("sat_fragment"); props.remove("fallback");
+                node.insert("props", props); nodes[i] = node;
+            }
+        }
+        graph.insert("nodes", nodes);
+        ok = deserializeACISEntityGraph(graph, &decoded, &error);
+        check(!ok && !decoded.entities && decoded.uuidToEntity.isEmpty(), "G18 no backup rejects incomplete JSON");
+        // Known-risk SAT failure must not silently return a partial skeleton.
+        for (int i = 0; i < nodes.size(); ++i) {
+            auto node = nodes[i].toObject();
+            if (node.value("id").toString() == "hybrid-cube") {
+                auto props = node.value("props").toObject();
+                props.insert("sat_fragment", "not a SAT file"); props.insert("fallback", "sat_fragment");
+                node.insert("props", props); nodes[i] = node;
+            }
+        }
+        graph.insert("nodes", nodes);
+        ok = deserializeACISEntityGraph(graph, &decoded, &error);
+        check(!ok && !decoded.entities, "G18 invalid mandatory SAT is rejected");
+        BODY *second = nullptr;
+        api_make_cuboid(1, 2, 3, second);
+        ENTITY_LIST pair; pair.add(original); pair.add(second);
+        auto pairGraph = serializeACISEntityGraph(QHash<int, QString>{{0, "good"}, {1, "bad"}}, pair);
+        auto pairNodes = pairGraph.value("nodes").toArray();
+        for (int i = 0; i < pairNodes.size(); ++i) {
+            auto node = pairNodes[i].toObject();
+            if (node.value("id").toString() != "bad") continue;
+            auto props = node.value("props").toObject();
+            props.insert("sat_fragment", "invalid SAT"); props.insert("fallback", "sat_fragment");
+            node.insert("props", props); pairNodes[i] = node;
+        }
+        pairGraph.insert("nodes", pairNodes);
+        ok = deserializeACISEntityGraph(pairGraph, &decoded, &error);
+        check(!ok && !decoded.entities && decoded.uuidToEntity.isEmpty(), "G18 two roots fail atomically without partial output");
+        api_del_entity(second);
+
+        api_del_entity(original);
+
+        EDGE *edge = nullptr;
+        straight line(SPAposition(1, 2, 3), SPAunit_vector(0, 0, 1));
+        line.limit(SPAinterval(0, 6));
+        check(api_make_edge_from_curve(&line, edge).ok(), "G18 standalone edge");
+        graph = serializeACISEntityGraph(QHash<int, QString>{{0, "standalone-edge"}}, ENTITY_LIST(edge));
+        ok = deserializeACISEntityGraph(graph, &decoded, &error);
+        check(ok && decoded.uuidToEntity.contains("standalone-edge") &&
+              is_EDGE((ENTITY *)decoded.uuidToEntity.value("standalone-edge")), "G18 standalone edge SAT preserves type and UUID");
+        if (ok) { api_del_entity_list(*decoded.entities); delete decoded.entities; }
+        api_del_entity(edge);
+        FACE *face = nullptr;
+        check(api_make_planar_disk(SPAposition(2, 3, 4), SPAunit_vector(0, 0, 1), 5, face).ok(), "G18 standalone face");
+        graph = serializeACISEntityGraph(QHash<int, QString>{{0, "standalone-face"}}, ENTITY_LIST(face));
+        ok = deserializeACISEntityGraph(graph, &decoded, &error);
+        check(ok && decoded.uuidToEntity.contains("standalone-face") &&
+              is_FACE((ENTITY *)decoded.uuidToEntity.value("standalone-face")), "G18 standalone face SAT preserves type and UUID");
+        if (ok) { api_del_entity_list(*decoded.entities); delete decoded.entities; }
+        api_del_entity(face);
+
     }
 
 finish:

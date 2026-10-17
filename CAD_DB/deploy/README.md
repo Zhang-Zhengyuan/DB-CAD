@@ -77,9 +77,9 @@ CREATE TABLE IF NOT EXISTS dbcad_pg_demo (
 
 ### 主流程是否受影响？
 
-**几乎是零侵入。** `pg_demo.cpp`、`pg_store.*`、`build_pg_demo.ps1`、`start_pg_demo.ps1`、`start_pg_with_pgadmin.ps1`、`start_dbcad_with_pg.cmd` 都没有被加入 `CAD_DB.vcxproj`；`start_dbcad_fullstack.cmd` 默认行为完全没改。`dbcad.local.env` 与 `start_dbcad_fullstack.ps1` 里仅以"白名单字段"形式 append 了 `DBCAD_POSTGRES_*`，Neo4j / FastAPI / Bridge 路径代码字节级未触动。
+**几乎是零侵入。** `pg_demo.cpp`、`pg_store.*`、`build_pg_demo.ps1`、`start_pg_demo.ps1`、`start_pg_with_pgadmin.ps1`、`start_dbcad_with_pg.cmd` 都没有被加入 `CAD_DB.vcxproj`；`start_dbcad_fullstack.cmd` 默认行为完全没改。`dbcad.local.env` 与 `start_dbcad_fullstack.ps1` 里仅以"白名单字段"形式 append 了 `DBCAD_POSTGRES_*`，PostgreSQL 功能独立于当前统一协作链路。
 
-唯一被修改的主流程文件是 `mainwindow.cpp` / `mainwindow.h` —— 加了一个独立的顶级菜单 **"PostgreSQL(P)"** 与 4 个 slot，slot 实现**完全不碰** `saveFile()`、`loadFile()`、`storage_bridge_service`、`backend_api_client`、FastAPI 路由。
+唯一被修改的主流程文件是 `mainwindow.cpp` / `mainwindow.h` —— 加了一个独立的顶级菜单 **"PostgreSQL(P)"** 与 4 个 slot，slot 实现**完全不碰** `saveFile()`、`loadFile()`、`backend_api_client`、FastAPI 路由。
 
 ### 接入 GUI（一键体验）
 
@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS dbcad_pg_demo (
 ### 后续
 
 如果老师认可本 demo，下一步可以：
-1. 把 `pg_store.*` 的接口挂到 `storage_bridge_service.cpp`，让 Bridge 在 `CAD_DB_STORAGE_BACKEND=postgres` 时切换；
+1. 如需扩展协作数据库，需为统一组件版本链实现存储适配器；当前没有 PostgreSQL 协作后端。
 2. 把 FastAPI 的 `CAD_DB_STORAGE_BACKEND` env 加上 `postgres` 分支；
 3. 增加 `face_count`、`bbox` 等列，用 SQL 查询替代 Neo4j 的 Cypher。
 

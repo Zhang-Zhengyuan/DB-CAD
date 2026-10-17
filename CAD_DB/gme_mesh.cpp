@@ -2,6 +2,14 @@
 
 #include <cassert>
 #include <cstdio>
+// Per-call mesh diagnostics. Off by default: traces on stderr break
+// run-client-regression.ps1 on Windows PowerShell 5.1 and pollute test logs.
+// Build with /DGME_MESH_TRACE (or -DGME_MESH_TRACE) to re-enable.
+#ifdef GME_MESH_TRACE
+#define MESH_TRACE(...) std::fprintf(stderr, __VA_ARGS__)
+#else
+#define MESH_TRACE(...) ((void)0)
+#endif
 #include "acis/include/acistype.hxx"
 #include "acis/include/body.hxx"
 #include "acis/include/edge.hxx"
@@ -126,7 +134,7 @@ static void get_triangles_from_faceted_faces(ENTITY_LIST& faces, std::vector<Gme
         std::vector<int> temp_triangles;
         std::vector<float> temp_normalCoords;
         get_triangles_from_faceted_face(face, temp_coords, temp_triangles, temp_normalCoords);
-        std::fprintf(stderr, "[CreateMeshFromEntity] face=%p mesh_vertices=%zu mesh_triangles=%zu serializable=%s\n",
+        MESH_TRACE("[CreateMeshFromEntity] face=%p mesh_vertices=%zu mesh_triangles=%zu serializable=%s\n",
                      (void*)face, temp_coords.size() / 3, temp_triangles.size() / 3,
                      GetSerializableMesh(face) ? "yes" : "no");
         if (!GetSerializableMesh(face)) {
@@ -135,12 +143,13 @@ static void get_triangles_from_faceted_faces(ENTITY_LIST& faces, std::vector<Gme
             int pcurves = 0;
             for (LOOP* loop = face->loop(); loop; loop = loop->next()) {
                 ++loops;
-                for (COEDGE* co = loop->start(); co; co = co->next()) {
+                int guard = 0;
+                for (COEDGE* co = loop->start(); co && guard++ < 10000; co = co->next()) {
                     ++coedges;
                     if (co->geometry()) ++pcurves;
                 }
             }
-            std::fprintf(stderr,
+            MESH_TRACE(
                          "[CreateMeshFromEntity] face=%p geometry=%p loop_count=%d coedges=%d pcurves=%d sides=%d cont=%d sense=%d\n",
                          (void*)face, (void*)face->geometry(), loops, coedges, pcurves,
                          face->sides() ? 1 : 0, (int)face->cont(), (int)face->sense());
@@ -164,15 +173,16 @@ static void get_triangles_from_faceted_faces(ENTITY_LIST& faces, std::vector<Gme
             }
         }
         logical found = FALSE;
-        outcome out = api_rh_get_entity_rgb(ent, faceData[nF].color, TRUE, found);
+        rgb_color nativeColor;
+        outcome out = api_rh_get_entity_rgb(ent, nativeColor, TRUE, found);
+        faceData[nF].color = dbcad::Color(nativeColor.red(), nativeColor.green(), nativeColor.blue());
         if (!out.ok() || !found)
         {
-            faceData[nF].color = rgb_color(1., 1., 1.);
+            faceData[nF].color = dbcad::Color(1., 1., 1.);
         }
         faceData[nF].numIndices = (unsigned int)temp_triangles.size();
         faceData[nF].baseIndex = (unsigned int)nI;
         faceData[nF].baseVertex = (unsigned int)nV;
-        faceData[nF].ptrFace = face;
 
         nI += (unsigned int)temp_triangles.size();
         nV += (unsigned int)temp_coords.size();
@@ -217,14 +227,15 @@ static void get_polylines_from_faceted_edges(ENTITY_LIST& edges, std::vector<Gme
         ACIS_DELETE[] pos;
         pos = nullptr;
         logical found = FALSE;
-        out = api_rh_get_entity_rgb(ent, edgeData[nE].color, TRUE, found);
+        rgb_color nativeColor;
+        out = api_rh_get_entity_rgb(ent, nativeColor, TRUE, found);
+        edgeData[nE].color = dbcad::Color(nativeColor.red(), nativeColor.green(), nativeColor.blue());
         if (!out.ok() || !found)
         {
-            edgeData[nE].color = rgb_color(0., 0., 0.);
+            edgeData[nE].color = dbcad::Color(0., 0., 0.);
         }
         edgeData[nE].numIndices = 3 * nP;
         edgeData[nE].baseVertex = nV;
-        edgeData[nE].ptrEdge = edge;
         nV += 3 * nP;
         nE++;
     }
@@ -286,96 +297,12 @@ bool CreateMeshFromEntityList(ENTITY_LIST& el, GmeMesh::DisplayData& dd) {
     API_NOP_END
     return success;
 }
-// old
-/* 
-bool CreateMeshFromEntity(ENTITY* e, GmeMesh::DisplayData& dd) {
-    // API_BEGIN;
-    if (nullptr == e) {
-        return false;
-    }
-    {
-        if (is_VERTEX(e)) {
-            GmeMesh::VertexMesh vm = GmeMesh::VertexMesh();
-            vm.numIndices = 0;
-            vm.ptrVertex = (VERTEX*)e;
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().x());
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().y());
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().z());
-            dd.vertexMesh.push_back(vm);
-            return true;
-        }
-    }
-    {
-        outcome out;
-        out = api_facet_entity(e);
-        if (!out.ok()) {
-            return false;
-        }
-        {
-            if (is_VERTEX(e))
-            {
-                GmeMesh::VertexMesh vm = GmeMesh::VertexMesh();
-                vm.numIndices = 0;
-                vm.ptrVertex = (class VERTEX*)e;
-                dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().x());
-                dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().y());
-                dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().z());
-                dd.vertexMesh.push_back(vm);
-                return true;
-            }
-        }
-        {
-            outcome out;
-            out = api_facet_entity(e);
-            if (!out.ok())
-            {
-                return false;
-            }
-        }
-        ENTITY_LIST faces;
-        {
-            if (!is_EDGE(e))
-            {
-                outcome out = api_get_faces(e, faces);
-                if (!out.ok())
-                {
-                    return false;
-                }
-            }
-        }
-        int numFaces = faces.iteration_count();
-        dd.faceMesh.resize(numFaces);
-
-        ENTITY_LIST edges;
-        {
-            outcome out = api_get_edges(e, edges);
-            if (!out.ok())
-            {
-                return false;
-            }
-        }
-        int numEdges = edges.iteration_count();
-        dd.edgeMesh.resize(numEdges);
-
-        if (0 == numEdges + numFaces)
-        {
-            return false;
-        }
-
-        get_triangles_from_faceted_faces(faces, dd.faceMesh, dd.faceCoords, dd.triangles, dd.normalCoords);
-        get_polylines_from_faceted_edges(edges, dd.edgeMesh, dd.edgeCoords);
-
-
-    return true;
-    // API_END;
-}
-*/
 bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
     bool success = false;
     API_NOP_BEGIN
     {
         if (nullptr == e) {
-            std::fprintf(stderr, "[CreateMeshFromEntity] e==nullptr\n");
+            MESH_TRACE("[CreateMeshFromEntity] e==nullptr\n");
             success = false;
             goto exit;
         }
@@ -386,15 +313,16 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
         else if (is_FACE(e)) ek = "FACE";
         else if (is_EDGE(e)) ek = "EDGE";
         else if (is_VERTEX(e)) ek = "VERTEX";
-        std::fprintf(stderr, "[CreateMeshFromEntity] e=%s\n", ek);
+        MESH_TRACE("[CreateMeshFromEntity] e=%s\n", ek);
         if (is_VERTEX(e)) {
-            std::fprintf(stderr, "[CreateMeshFromEntity] e is VERTEX\n");
+            MESH_TRACE("[CreateMeshFromEntity] e is VERTEX\n");
             GmeMesh::VertexMesh vm = GmeMesh::VertexMesh();
             vm.numIndices = 0;
-            vm.ptrVertex = (VERTEX *)e;
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().x());
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().y());
-            dd.vertexCoords.push_back(vm.ptrVertex->geometry()->coords().z());
+            SPAposition position=((VERTEX*)e)->geometry()->coords();
+            position*=get_owner_transf(e);
+            dd.vertexCoords.push_back(static_cast<float>(position.x()));
+            dd.vertexCoords.push_back(static_cast<float>(position.y()));
+            dd.vertexCoords.push_back(static_cast<float>(position.z()));
             dd.vertexMesh.push_back(vm);
             success = true;
             goto exit;
@@ -402,7 +330,7 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
         // facet 该 entity；NOP scope 结束后 facet 数据会被丢弃，但 get_triangles_from_faceted_faces
         // 仍能拿到本次 scope 内生成的 mesh 数据。
         outcome out = api_facet_entity(e);
-        std::fprintf(stderr, "[CreateMeshFromEntity] api_facet_entity ok=%d err#=%d\n",
+        MESH_TRACE("[CreateMeshFromEntity] api_facet_entity ok=%d err#=%d\n",
                      out.ok() ? 1 : 0, (int)out.error_number());
         if (!out.ok()) {
             success = false;
@@ -433,7 +361,7 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
                 // unbounded amount of time trying to compute derived curves,
                 // freezing the Qt UI. The planar fallback below is bounded
                 // and keeps Pull responsive while the topology is diagnosed.
-                std::fprintf(stderr, "[CreateMeshFromEntity] missing face meshes; using bounded planar fallback\n");
+                MESH_TRACE("[CreateMeshFromEntity] missing face meshes; using bounded planar fallback\n");
                 // A curved analytic face without a faceter mesh is not safe to
                 // traverse through ACIS facet edge APIs on the GUI thread.
                 // Keep the restored BODY in the entity tree (topology remains
@@ -458,24 +386,24 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
                     nFaces += f.iteration_count();
                 }
             }
-            std::fprintf(stderr, "[CreateMeshFromEntity] direct topology: lumps=%d shells=%d faces=%d\n",
+            MESH_TRACE("[CreateMeshFromEntity] direct topology: lumps=%d shells=%d faces=%d\n",
                          nLumps, nShells, nFaces);
             ENTITY_LIST directFaces;
             api_get_faces(body, directFaces, PAT_IGNORE);
-            std::fprintf(stderr, "[CreateMeshFromEntity] PAT_IGNORE faces=%d\n",
+            MESH_TRACE("[CreateMeshFromEntity] PAT_IGNORE faces=%d\n",
                          directFaces.iteration_count());
         } else if (is_LUMP(e)) {
             LUMP* lump = (LUMP*)e;
             int nShells = 0;
             for (SHELL* shell = lump->shell(); shell; shell = shell->next()) ++nShells;
-            std::fprintf(stderr, "[CreateMeshFromEntity] direct LUMP: shells=%d\n", nShells);
+            MESH_TRACE("[CreateMeshFromEntity] direct LUMP: shells=%d\n", nShells);
         }
         // ====== 诊断结束 ======
 
         ENTITY_LIST faces;
         if (!is_EDGE(e)) {
             out = api_get_faces(e, faces);
-            std::fprintf(stderr, "[CreateMeshFromEntity] api_get_faces ok=%d numFaces=%d\n",
+            MESH_TRACE("[CreateMeshFromEntity] api_get_faces ok=%d numFaces=%d\n",
                          out.ok() ? 1 : 0, faces.iteration_count());
             if (!out.ok()) {
                 success = false;
@@ -487,7 +415,7 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
 
         ENTITY_LIST edges;
         out = api_get_edges(e, edges);
-        std::fprintf(stderr, "[CreateMeshFromEntity] api_get_edges ok=%d numEdges=%d\n",
+        MESH_TRACE("[CreateMeshFromEntity] api_get_edges ok=%d numEdges=%d\n",
                      out.ok() ? 1 : 0, edges.iteration_count());
         if (!out.ok()) {
             success = false;
@@ -497,14 +425,14 @@ bool CreateMeshFromEntity(ENTITY *e, GmeMesh::DisplayData &dd) {
         dd.edgeMesh.resize(numEdges);
 
         if (0 == numEdges + numFaces) {
-            std::fprintf(stderr, "[CreateMeshFromEntity] numFaces+numEdges==0\n");
+            MESH_TRACE("[CreateMeshFromEntity] numFaces+numEdges==0\n");
             success = false;
             goto exit;
         }
 
         get_triangles_from_faceted_faces(faces, dd.faceMesh, dd.faceCoords, dd.triangles, dd.normalCoords);
         get_polylines_from_faceted_edges(edges, dd.edgeMesh, dd.edgeCoords);
-        std::fprintf(stderr, "[CreateMeshFromEntity] after fill: faceCoords.size=%zu triangles.size=%zu edgeCoords.size=%zu\n",
+        MESH_TRACE("[CreateMeshFromEntity] after fill: faceCoords.size=%zu triangles.size=%zu edgeCoords.size=%zu\n",
                      dd.faceCoords.size(), dd.triangles.size(), dd.edgeCoords.size());
         success = true;
     }

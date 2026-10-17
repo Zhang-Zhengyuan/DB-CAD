@@ -1,4 +1,11 @@
-from app.json_collab import conflicting_ids, graph_component, graph_diff, graph_hash, merge_graph, validate_graph
+from app.json_collab import (
+    conflicting_ids,
+    graph_component,
+    graph_diff,
+    graph_hash,
+    merge_graph,
+    validate_graph,
+)
 from app.json_graph_store import split_graph_components
 
 
@@ -14,7 +21,12 @@ def graph(body="b", child="f", value=1):
 
 def test_validate_rejects_unknown_relationship_endpoint():
     try:
-        validate_graph({"nodes": [{"id": "a"}], "rels": [{"type": "x", "start": "a", "end": "missing"}]})
+        validate_graph(
+            {
+                "nodes": [{"id": "a"}],
+                "rels": [{"type": "x", "start": "a", "end": "missing"}],
+            }
+        )
     except ValueError as exc:
         assert "unknown node" in str(exc)
     else:
@@ -24,13 +36,17 @@ def test_validate_rejects_unknown_relationship_endpoint():
 def test_merge_replaces_complete_topology_component():
     base = graph(child="old-face", value=1)
     incoming = graph(child="new-face", value=2)
-    merged = merge_graph(base, incoming, changes=[{"uuid": "b", "changeType": "MODIFY"}])
+    merged = merge_graph(
+        base, incoming, changes=[{"uuid": "b", "changeType": "MODIFY"}]
+    )
     assert {node["id"] for node in merged["nodes"]} == {"b", "new-face"}
     assert merged["rels"][0]["end"] == "new-face"
 
 
 def test_merge_remove_body_removes_topology():
-    merged = merge_graph(graph(), {"nodes": [], "rels": []}, changes=[], removed_ids=["b"])
+    merged = merge_graph(
+        graph(), {"nodes": [], "rels": []}, changes=[], removed_ids=["b"]
+    )
     assert merged["nodes"] == []
     assert merged["rels"] == []
 
@@ -93,3 +109,12 @@ def test_storage_components_are_content_addressed_per_body():
     assert {component["root_uuid"] for component in components} == {"b1", "b2"}
     assert len({component["component_hash"] for component in components}) == 2
     assert relations == []
+
+
+def test_modify_reusing_child_ids_replaces_relations_without_duplicates():
+    base = graph()
+    base["rels"][0]["props"] = {"old": True}
+    incoming = graph(value=2)
+    for _ in range(3):
+        base = merge_graph(base, incoming, changes=[{"uuid": "b"}])
+        assert base["rels"] == incoming["rels"]

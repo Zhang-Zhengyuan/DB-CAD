@@ -48,6 +48,7 @@ def split_graph_components(
         node["id"]
         for node in canonical["nodes"]
         if "body" in {str(label).lower() for label in node.get("labels", [])}
+        or node.get("props", {}).get("top_level") is True
     ]
     components: list[dict[str, Any]] = []
     owner: set[str] = set()
@@ -308,7 +309,9 @@ class JsonGraphStore:
         delta_content = {
             "changes": content.get("changes", []),
             "removed_ids": content.get("removed_ids", []),
-            "schema": content.get("schema", "dbcad.entity_graph.v1"),
+            "schema": graph.get(
+                "schema", content.get("schema", "dbcad.entity_graph.v1")
+            ),
             "serializer_build": graph.get("serializer_build", ""),
             "storage_mode": "component_manifest_v1",
             "graph_hash": content.get("graph_hash", ""),
@@ -373,6 +376,7 @@ class JsonGraphStore:
                 "version: $version, author: $author, created_at: $created_at, "
                 "delta_json: $content_json, request_json: $request_json, "
                 "graph_hash: $graph_hash, storage_mode: 'component_manifest_v1'}) "
+                "SET p.updated_at = $created_at "
                 "CREATE (p)-[:HAS_JSON_GRAPH_VERSION]->(v) "
                 "RETURN v{.id, .project_id, .version, .author, .created_at, .delta_json} AS v",
                 id=str(uuid4()),

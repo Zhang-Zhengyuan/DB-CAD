@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <QMatrix4x4>
 #include <QtOpenGL/QOpenGLBuffer>
@@ -7,8 +7,6 @@
 #include <QtOpenGL/QOpenGLVertexArrayObject>
 #include <QtOpenGLWidgets/QOpenGLWidget>
 
-#include "acis/include/lists.hxx"
-#include "acis/include/position.hxx"
 #include "gme_mesh.hxx"
 
 QT_FORWARD_DECLARE_CLASS(QOpenGLShaderProgram)
@@ -42,8 +40,8 @@ public:
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
 
-    void setPickedEntity(ENTITY* ptrEntity) { ptrPickedEntity = ptrEntity; }
-    void setPickedHandle(SPAposition p) { pickedHandle = p; }
+    void setPickedEntity(dbcad::ShapeHandle shape) { pickedShape = shape; }
+    void setPickedHandle(dbcad::Point3 p) { pickedHandle = p; }
     void setSurfaceAlpha(double sa) {
         surface_alpha = sa;
         update();
@@ -109,8 +107,8 @@ private:
     GLfloat posZ = 0.0;
     bool updateMove_local = false;
     double scale = 1.0;
-    ENTITY* ptrPickedEntity = nullptr;
-    SPAposition pickedHandle;
+    dbcad::ShapeHandle pickedShape{};
+    dbcad::Point3 pickedHandle;
     bool isPickedHandle = false;
     bool addPickedHandle = false;
     bool updateMove_handle = false;

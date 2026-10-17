@@ -1,13 +1,56 @@
-﻿param(
+param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
     [string]$QtRoot = $env:DBCAD_QT_ROOT,
     [string]$QtMsBuildPath = $env:QtMsBuild,
     [string]$DepsRoot = $env:DBCAD_DEPS_ROOT,
     [string]$PostgresInclude = $env:DBCAD_POSTGRES_INCLUDE,
-    [string]$RuntimeDir = $env:DBCAD_RUNTIME_DIR
+    [string]$RuntimeDir = $env:DBCAD_RUNTIME_DIR,
+    # Public dependencies are provisioned automatically when missing; pass
+    # -SkipDependencyProvision to build strictly against what is already there.
+    [switch]$SkipDependencyProvision
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$localProps = Join-Path $repoRoot 'build.local.props'
+if (Test-Path -LiteralPath $localProps) {
+    [xml]$settings = Get-Content -LiteralPath $localProps -Raw
+    foreach ($group in $settings.Project.PropertyGroup) {
+        if (-not $QtRoot -and $group.QtInstall) { $QtRoot = [string]$group.QtInstall }
+        if (-not $QtMsBuildPath -and $group.QtMsBuild) { $QtMsBuildPath = [string]$group.QtMsBuild }
+        if (-not $DepsRoot -and $group.DBCADDepsRoot) { $DepsRoot = ([string]$group.DBCADDepsRoot).Replace('$(MSBuildThisFileDirectory)', "$repoRoot\") }
+        if (-not $PostgresInclude -and $group.DBCADPostgresInclude) { $PostgresInclude = ([string]$group.DBCADPostgresInclude).Replace('$(MSBuildThisFileDirectory)', "$repoRoot\") }
+    }
+}
+if (-not $DepsRoot) { $DepsRoot = Join-Path $repoRoot '_deps' }
+if (-not $PostgresInclude) { $PostgresInclude = Join-Path $DepsRoot 'postgresql\include' }
+if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'CAD_DB\spatial_license.h'))) {
+    throw 'Missing CAD_DB/spatial_license.h. Download the matching 2026 license header from your authorized Spatial account or obtain it from your license administrator. See docs/LOCAL_SETUP.md.'
+}
+# Keep every machine on the same pinned public kit (see docs/DEPENDENCIES.md):
+# the linker references these exact names, and older hand-assembled kits only
+# carry historical names such as libssl64MD.lib. Provision on demand instead
+# of failing with LNK1181 on machines that never ran the installer.
+$requiredLinkLibs = @(
+    'openssl\lib\libssl.lib',
+    'openssl\lib\libcrypto.lib',
+    'postgresql\lib\libpq.lib',
+    'glfw\lib\glfw3_64.lib'
+)
+$missingLinkLibs = @($requiredLinkLibs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $DepsRoot $_)) })
+if ($missingLinkLibs) {
+    if ($SkipDependencyProvision) {
+        throw "Missing pinned link libraries under $DepsRoot : $($missingLinkLibs -join ', '). Run 'python scripts/prepare-public-deps.py' or drop -SkipDependencyProvision."
+    }
+    Write-Host "Missing pinned link libraries: $($missingLinkLibs -join ', ')"
+    Write-Host 'Provisioning the pinned public dependency kit (downloads are checksum-verified; existing files are kept, originals are backed up).'
+    $provisionScript = Join-Path $repoRoot 'scripts\prepare-public-deps.py'
+    $provisionPython = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $provisionPython) { throw 'python not found in PATH; run scripts/prepare-public-deps.py manually. See docs/DEPENDENCIES.md.' }
+    & $provisionPython $provisionScript
+    if ($LASTEXITCODE -ne 0) { throw "prepare-public-deps.py failed with exit code $LASTEXITCODE. See docs/DEPENDENCIES.md." }
+    $stillMissing = @($requiredLinkLibs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $DepsRoot $_)) })
+    if ($stillMissing) { throw "Public dependency kit installed but still missing: $($stillMissing -join ', ')." }
+}
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $msbuildCommand = Get-Command MSBuild.exe -ErrorAction SilentlyContinue
 $msbuildPath = if ($msbuildCommand) { $msbuildCommand.Source } elseif (Test-Path -LiteralPath $vswhere) {
@@ -29,14 +72,20 @@ if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 # Qt DLLs/plugins are packaged by windeployqt in the deployment launcher.
 if (-not $DepsRoot) { $DepsRoot = Join-Path $repoRoot '_deps' }
 $outputDir = Join-Path $repoRoot "x64\$Configuration"
-$runtimeCandidates = @((Join-Path $DepsRoot 'acis\bin'), (Join-Path $DepsRoot 'openssl\bin'), (Join-Path $DepsRoot 'postgresql\bin'), (Join-Path $DepsRoot 'libpqxx-7.10.1\bin'))
+$runtimeCandidates = @((Join-Path $DepsRoot 'acis\bin'), (Join-Path $DepsRoot 'openssl\bin'), (Join-Path $DepsRoot 'postgresql\bin'))
 if ($RuntimeDir) { $runtimeCandidates += $RuntimeDir }
 foreach ($sourceDir in $runtimeCandidates) {
     if (Test-Path -LiteralPath $sourceDir) {
         Get-ChildItem -LiteralPath $sourceDir -Filter '*.dll' -File | Copy-Item -Destination $outputDir -Force
     }
 }
-foreach ($required in @('libpq.dll', 'libssl-3-x64.dll', 'libcrypto-3-x64.dll', $(if ($Configuration -eq 'Debug') { 'SPAAcisDsd.dll' } else { 'SPAAcisDs.dll' }))) {
+# The official Debug import library still imports SPAAcisDs.dll internally.
+# Renaming the .lib does not change that import name. Stage the matching DLL
+# under its original name in each configuration's separate output directory.
+if ($Configuration -eq 'Debug') {
+    Copy-Item -LiteralPath (Join-Path $DepsRoot 'acis\bin\SPAAcisDsd.dll') -Destination (Join-Path $outputDir 'SPAAcisDs.dll') -Force
+}
+foreach ($required in @('libpq.dll', 'libssl-3-x64.dll', 'libcrypto-3-x64.dll', 'SPAAcisDs.dll')) {
     if (-not (Test-Path -LiteralPath (Join-Path $outputDir $required))) { throw "Build succeeded but runtime DLL is missing: $required. Supply -RuntimeDir or the dependency kit; see docs/DEPENDENCIES.md." }
 }
 Write-Host "[OK] Client build and non-Qt runtime staging complete: $outputDir"

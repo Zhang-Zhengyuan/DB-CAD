@@ -33,6 +33,7 @@ CAD_DB/Release/
 # Keep source-controlled launcher scripts despite the executable ignore rules.
 !CAD_DB/deploy/*.cmd
 !CAD_DB/deploy/*.ps1
+!start-test.cmd
 !_deps/**/*.dll
 !_deps/**/*.lib
 

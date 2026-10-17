@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from fastapi import FastAPI
-from . import crud, neo4j_entity_store, neo4j_webui
+from . import crud, neo4j_webui
 from .json_graph_store import shutdown_json_graph_store
 
 logger = logging.getLogger(__name__)
@@ -45,5 +45,4 @@ async def lifespan(app: FastAPI):
     finally:
         crud.shutdown_backend()
         shutdown_json_graph_store()
-        neo4j_entity_store.shutdown_entity_store()
         neo4j_webui._close_driver()

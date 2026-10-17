@@ -6,9 +6,6 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
     curWindow = nullptr;
     fastapi_client_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
-    fastapiSyncTimer = new QTimer(this);
-    fastapiSyncTimer->setInterval(15000);
-    connect(fastapiSyncTimer, &QTimer::timeout, this, &MainWindow::requestFastAPISyncNow);
 
     fastapiHeartbeatTimer = new QTimer(this);
     fastapiHeartbeatTimer->setInterval(10000);
@@ -29,10 +26,6 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
         }
     });
 
-    fastapiPublishTimer = new QTimer(this);
-    fastapiPublishTimer->setSingleShot(true);
-    fastapiPublishTimer->setInterval(900);
-    connect(fastapiPublishTimer, &QTimer::timeout, this, &MainWindow::publishFastAPIAutoSnapshot);
 
     // PostgreSQL service — initialized once, reuses connection across all operations.
     // Note: PgService::loaded is intentionally NOT connected here.
@@ -54,8 +47,9 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
     // Initial menu state is refreshed after createActions() runs and the menu
     // actions exist; see updatePgMenuState() invocation at end of createActions().
 
-    if (0 == initialize_acis()) {
-        QMessageBox::warning(this, tr("异常"), tr("ACIS初始化失败"));
+    try { dbcad::kernel(); } catch (const std::exception&) {
+        QMessageBox::warning(this, tr("异常"), tr("几何内核初始化失败"));
+        throw;
     }
 
     createActions();
@@ -70,8 +64,7 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
     // option_header* delete_forward_states_option = find_option("delete_forward_states");
     // delete_forward_states_option->push(FALSE);
 
-    HISTORY_STREAM *new_hs = new HISTORY_STREAM();
-    set_default_stream(new_hs);
+
 
     {
         auto neo4jValues = read_config_lines("neo4j_connect_info.conf", 4);
@@ -101,49 +94,14 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
             fastapi_password = fastapiValues[2];
         }
 
-        auto bridgeValues = read_config_lines("storage_bridge_connect_info.conf", 2);
-        if (!bridgeValues.empty()) {
-            if (!bridgeValues[0].empty()) {
-                bridge_bind_host = bridgeValues[0];
-            }
-            if (!bridgeValues[1].empty()) {
-                try {
-                    bridge_bind_port = std::stoi(bridgeValues[1]);
-                } catch (...) {
-                    bridge_bind_port = 8100;
-                }
-            }
-        }
-
-        if (bridge_bind_host.empty()) {
-            bridge_bind_host = "127.0.0.1";
-        }
-        if (bridge_bind_port <= 0) {
-            bridge_bind_port = 8100;
-        }
     }
 
-    mg_init();
-
-    // 彻底重置历史系统
-    HISTORY_STREAM *hs = get_default_stream(false);
-    if (hs) {
-        // 删除所有 delta states，但保留流对象
-        delete_all_delta_states(hs, true); // true 表示保留流
-        hs->clear();                       // 清空流内容
-    } else {
-        hs = get_default_stream(true); // 创建新流
-    }
-    // 重置全局历史管理器状态
-    initialize_delta_states();
-    // 确保根状态为空（便于后续记录）
-    DELTA_STATE *root_state = nullptr;
-    api_ensure_empty_root_state(hs, root_state);
+    dbcad::initializeStorage();
 
     CollabSession::instance().bindLegacyFields(
         fastapi_project_id, fastapi_model_version, fastapi_pending_remote_version, fastapiLastPublishReason,
         fastapiPendingSubmitRequestId, fastapiSubmitInFlight, fastapiLocalDirtyDuringSubmit,
-        fastapiApplyingRemoteSnapshot, fastapiPublishingSnapshot, fastapiLocalDirty);
+        fastapiApplyingRemoteSnapshot, fastapiLocalDirty);
     qDebug().noquote() << "[CollabSession] bound:" << CollabSession::instance().dump(CollabSession::Event::Bound);
     CollabSession::instance().setDebugEnabled(true);
     CollabSession::instance().setMinDumpIntervalMs(0);
@@ -157,23 +115,11 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (maybeSave()) {
+        if(curWindow && !curWindow->close()) { event->ignore(); return; }
         event->accept();
-        if (bridgeProcess != nullptr) {
-            bridgeStopRequested = true;
-            if (bridgeProcess->state() != QProcess::NotRunning) {
-                bridgeProcess->terminate();
-                if (!bridgeProcess->waitForFinished(3000)) {
-                    bridgeProcess->kill();
-                    bridgeProcess->waitForFinished(3000);
-                }
-            }
-        }
         disconnectFastAPISync();
-        if (curWindow) {
-            curWindow->close();
-        }
-        mg_finalize();
-        terminate_acis(2);
+        dbcad::shutdownStorage();
+        dbcad::shutdownKernel();
     } else {
         event->ignore();
     }

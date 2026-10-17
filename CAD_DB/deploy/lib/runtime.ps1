@@ -1,4 +1,4 @@
-﻿# Runtime helpers for the fullstack launcher.
+# Runtime helpers for the fullstack launcher.
 function ConvertTo-LocalHealthHost([string]$HostAddress) {
     if ([string]::IsNullOrWhiteSpace($HostAddress)) {
         return "127.0.0.1"
@@ -72,8 +72,8 @@ function Get-WinDeployQtPath([string]$ExplicitPath) {
 }
 
 function Test-DebugBuild([System.IO.FileInfo]$Exe) {
-    # Inspect the exe itself: stale Debug DLLs beside a Release exe are not
-    # evidence of its configuration.
+    # Select Qt deployment mode from actual imports, not the build folder.
+    # The /MD Debug client uses release Qt while retaining PDBs/Debug ACIS.
     return @(Get-PeImports $Exe.FullName) -contains 'Qt6Cored.dll'
 }
 

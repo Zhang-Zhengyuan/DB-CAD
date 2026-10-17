@@ -25,32 +25,40 @@ uv run --frozen pytest -q -m 'not integration'
 ## 功能与模式
 
 - ACIS 几何创建、曲线/曲面、布尔运算、渲染、文件存取与撤销/重做。
-- Mode0：SAT 全量版本，保留 C++ Storage Bridge 路径。
-- Mode1：客户端序列化实体图，JSON delta Push/Pull，服务端直接写 Neo4j；默认启动不需要 Bridge。
-- WebSocket 通知、在线成员、重连及按模式隔离的同步通道。
+- 唯一协作链路 Mode1：JSON 组件携带 SAT 备份，HTTP Push/Pull、保存和历史版本共用 Neo4j 版本链。
+- 支持的组件优先 JSON 重建，失败按 UUID 使用 SAT；已知有损组件直接走 SAT。
+- WebSocket 只提供版本通知、在线成员和重连；Mode0 与 C++ Bridge 已移除。
 - base_version 冲突检查、稳定 UUID、增量拓扑组件合并和本地未提交修改保护。
 - Neo4j 管理 WebUI，包含项目、版本、图及按需查看原始提交。
 - 直接 Neo4j 与 PostgreSQL 实验功能保留。
+
+## 几何内核隔离
+
+业务/UI 通过 `GeometryKernel` 调用建模、变换、网格与存取能力，文档使用稳定 UUID 和会话 `ShapeHandle`；ACIS 原生对象、SDK 调用、许可初始化、混合 JSON/SAT 编解码集中在独立的 `DbcadAcis` 静态库。显示层仅消费坐标、索引、颜色和包围盒。
+
+当前采用编译时适配：接入其他内核需要实现接口、替换工厂与构建依赖，并处理已有 ACIS 数据的兼容读取。尚未接入第二内核，不承诺直接无损读取 SAT，也没有运行时插件加载。
+
+实现路径、对象所有权、撤销与协作流程、允许保留的专用模块，以及 [issue #4](https://github.com/Zhang-Zhengyuan/DB-CAD/issues/4) 的逐项验收状态，见 [内核隔离与替换指南](docs/KERNEL_ISOLATION.md)。当前已完成主要调用隔离；自动依赖防护、无 SDK 业务测试构建和第二内核原型仍待完成。
 
 ## 目录
 
 ```text
 CAD_DB.sln                唯一 Visual Studio 解决方案
 CAD_DB/
-  CAD_DB.vcxproj          唯一客户端构建清单
+  CAD_DB.vcxproj          客户端业务/UI 构建目标
+  DbcadAcis.vcxproj       ACIS 适配器与专用存储兼容静态库
+  kernel/                中立接口、值类型、文档记录与 ACIS 适配实现
   mainwindow.cpp         窗口初始化；其他实现位于 ui/
   ui/                    连接、协作、消息、文档、编辑
   access.cpp             SAT 文件与诊断；图存储位于 storage/
-  storage/               图保存/恢复、历史、delta、几何编码
+  storage/               旧 Neo4j 图/历史兼容、几何编码（编入适配库）
   backend/app/
     api/                 HTTP/WS 入口
-    services/            版本写入与事件
-    collaboration/       协议、快照、提交
+    collaboration/       通知协议与版本摘要
     neo4j_webui/          管理 API
     static/webui/         HTML/CSS/JS
   backend/tests/         回归与集成检查
   deploy/lib/            配置、Docker、进程、打包
-  assignments/           后端教学练习
 scripts/                 环境检查与便携构建
 docs/                   上手、依赖、架构、验证记录
 ```
@@ -67,3 +75,5 @@ docs/                   上手、依赖、架构、验证记录
 服务默认提供 `/health`、`/docs`、`/webui`，端口 8000。参数和密码管理见 [部署说明](CAD_DB/DEPLOYMENT.md)。重置会删除数据，正常启动无需重置。
 
 [架构](docs/ARCHITECTURE.md) · [贡献说明](CONTRIBUTING.md) · [后端说明](CAD_DB/backend/README.md) · [验证记录](docs/REFACTOR_VALIDATION.md)
+
+本轮设计与测试入口见 [统一协作链路说明](docs/HYBRID_COLLABORATION.md)。

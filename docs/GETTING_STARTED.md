@@ -1,6 +1,6 @@
 # 新成员复现与部署
 
-当前支持 Windows x64 桌面客户端。后端为 FastAPI，数据库为 Neo4j。默认启动方式启用纯 JSON Mode1；已有 SAT Mode0、C++ Storage Bridge、直接 Neo4j 和 PostgreSQL 实验入口保留。
+当前支持 Windows x64 桌面客户端。后端为 FastAPI，数据库为 Neo4j。协作只使用 Mode1 JSON + SAT 备份；单机 Neo4j、ACIS 文件和 PostgreSQL 菜单保留。
 
 ## 1. 获取源码与工具
 
@@ -64,13 +64,13 @@ Pop-Location
 .\CAD_DB\deploy\stop_dbcad_fullstack.cmd
 ```
 
-已有 C++ Bridge 流程使用 `-LegacyBridgeMode`。它增加 8100 端口的本地存储服务，保留 SAT 几何存取。纯 JSON Mode1 不启动 C++ Bridge。
+Mode0 和 C++ Bridge 已移除；不再使用 `-LegacyBridgeMode`。
 
 **重置会删除数据。** 正常启动不需要 `-ResetNeo4jDockerData`。备份后才能执行重置脚本。Neo4j 初始化后的密码变更需按部署文档处理。
 
 ## 6. 功能验收
 
-两客户端打开同名项目；A 新建几何体并 Push，B Pull 后显示相同模型；B 修改并 Push，A Pull 验证。再检查删除、重连、本地未提交编辑、过期版本冲突、SAT Mode0、撤销/重做与文件存取。维护者记录实际结果，不能以编译通过替代完整 GUI 验收。
+两客户端打开同名项目；A 新建几何体并 Push，B Pull 后显示相同模型；B 修改并 Push，A Pull 验证。再检查删除、重连、本地未提交编辑、过期版本冲突、JSON 重建失败时的 SAT 回退、撤销/重做与文件存取。维护者记录实际结果，不能以编译通过替代完整 GUI 验收。
 
 跨机器时在客户端连接设置中填服务器 IP 和 API 密码，确认 8000 端口可达。正式部署需要按组织网络环境设置防火墙和访问控制。
 

@@ -1,4 +1,4 @@
-﻿# Processes helpers for the fullstack launcher.
+# Processes helpers for the fullstack launcher.
 function Stop-StartedProcess([object]$Process, [string]$Name) {
     if ($null -eq $Process) {
         return
@@ -15,9 +15,8 @@ function Stop-StartedProcess([object]$Process, [string]$Name) {
 
 function Stop-PackageProcesses([string]$PackageRoot) {
     $clientDir = Join-Path $PackageRoot "client"
-    $bridgeDir = Join-Path $PackageRoot "server\bridge-bin"
+    $exePaths = @($clientDir)
 
-    $exePaths = @($clientDir, $bridgeDir)
     $stoppedCount = 0
 
     foreach ($dir in $exePaths) {
@@ -75,54 +74,18 @@ function Stop-ProcessByPort([int]$Port, [string]$Protocol = "TCP") {
     return $stoppedCount
 }
 
-function Start-StorageBridge(
-    [string]$ExePath,
-    [string]$WorkingDirectory,
-    [string]$BridgeHost,
-    [int]$BridgePort,
-    [string]$Neo4jHost,
-    [int]$Neo4jPort,
-    [string]$Neo4jUser,
-    [string]$Neo4jPassword,
-    [string]$LogDir
-) {
-    $args = @(
-        "--storage-bridge",
-        "--bridge-host", $BridgeHost,
-        "--bridge-port", "$BridgePort",
-        "--neo4j-host", $Neo4jHost,
-        "--neo4j-port", "$Neo4jPort",
-        "--neo4j-user", $Neo4jUser
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($Neo4jPassword)) {
-        $args += @("--neo4j-password", $Neo4jPassword)
-    }
-
-    $stdout = Join-Path $LogDir "bridge.out.log"
-    $stderr = Join-Path $LogDir "bridge.err.log"
-    return Start-Process -FilePath $ExePath -ArgumentList $args -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-}
-
 function Start-FastApi(
     [string]$ServerDir,
     [string]$HostAddress,
     [int]$Port,
-    [string]$BridgeUrl,
-    [double]$BridgeTimeoutSeconds,
     [string]$ApiPassword,
-    [bool]$DirectJsonMode,
     [bool]$SkipDependencySync,
-    [bool]$SkipBridgeHealthCheck,
     [string]$LogDir
 ) {
     if (!(Test-Path -LiteralPath (Join-Path $ServerDir "app\main.py")) -or !(Test-Path -LiteralPath (Join-Path $ServerDir "pyproject.toml"))) {
         throw "Backend package is incomplete. Expected app/main.py and pyproject.toml in $ServerDir"
     }
 
-    if (-not $SkipBridgeHealthCheck -and -not (Test-ServiceHealth "$BridgeUrl/health")) {
-        throw "Storage bridge health check failed before starting FastAPI: $BridgeUrl/health"
-    }
 
     $uv = Ensure-Uv
 
@@ -139,11 +102,7 @@ function Start-FastApi(
         Write-Host "[INFO] Skip dependency sync (-SkipDependencySync)."
     }
 
-    $effectiveBridgeUrl = if ($DirectJsonMode) { "" } else { $BridgeUrl }
-    [Environment]::SetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_URL", $effectiveBridgeUrl, "Process")
-    [Environment]::SetEnvironmentVariable("CAD_DB_STORAGE_BRIDGE_TIMEOUT_SECONDS", [string]$BridgeTimeoutSeconds, "Process")
     [Environment]::SetEnvironmentVariable("CAD_DB_API_PASSWORD", $ApiPassword, "Process")
-    [Environment]::SetEnvironmentVariable("CAD_DB_DIRECT_JSON_MODE", $(if ($DirectJsonMode) { "true" } else { "false" }), "Process")
 
     $args = @(
         "run",

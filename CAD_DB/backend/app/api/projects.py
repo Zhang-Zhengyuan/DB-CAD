@@ -45,7 +45,9 @@ def get_project_meta(
     _: None = Depends(verify_api_password),
 ) -> dict[str, Any]:
     crud.get_project_or_404(project_id)
-    latest = crud.get_latest_version_or_none(project_id)
+    from ..json_graph_store import get_json_graph_store
+
+    latest = get_json_graph_store().latest(project_id)
     return {
         "project_id": project_id,
         "latest_version": latest.version if latest else None,

@@ -72,7 +72,7 @@ async function loadOverview() {
         <div class="sub">Project / BridgeProject / DBCADProject</div>
       </div>
       <div class="stat-card mode0">
-        <div class="label">Mode0 全量版本</div>
+        <div class="label">旧 Mode0 历史</div>
         <div class="value">${data.total_mode0_versions.toLocaleString()}</div>
         <div class="sub">BridgeVersion（完整 SAT）</div>
       </div>

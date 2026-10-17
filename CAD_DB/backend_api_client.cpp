@@ -261,256 +261,6 @@ std::optional<BackendApiClient::ProjectInfo> BackendApiClient::getOrCreateProjec
     return std::nullopt;
 }
 
-std::optional<int> BackendApiClient::saveModel(const QString& projectId, const QString& sat, std::optional<int> baseVersion) {
-    errorMessage.clear();
-
-    QJsonObject content;
-    content.insert("sat", sat);
-
-    QJsonObject payload;
-    payload.insert("author", author.isEmpty() ? QString::fromUtf8("dbcad-exe") : author);
-    payload.insert("content", content);
-    if (baseVersion.has_value()) {
-        payload.insert("base_version", *baseVersion);
-    } else {
-        payload.insert("base_version", QJsonValue::Null);
-    }
-
-    HttpResult response = sendJsonRequest(
-        "POST",
-        QString("/projects/%1/models").arg(projectId),
-        QJsonDocument(payload).toJson(QJsonDocument::Compact));
-
-    if (!response.error.isEmpty() && response.statusCode <= 0) {
-        errorMessage = response.error;
-        return std::nullopt;
-    }
-
-    if (response.statusCode == 409) {
-        errorMessage = QString::fromUtf8("远程版本冲突，请先重新加载最新模型后再保存");
-        return std::nullopt;
-    }
-
-    if (response.statusCode != 201) {
-        errorMessage = formatHttpErrorMessage(QString::fromUtf8("保存模型失败"), response.statusCode, response.body);
-        return std::nullopt;
-    }
-
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        errorMessage = QString::fromUtf8("保存模型返回数据格式错误");
-        return std::nullopt;
-    }
-
-    const int version = doc.object().value("version").toInt(0);
-    if (version <= 0) {
-        errorMessage = QString::fromUtf8("保存模型返回版本号无效");
-        return std::nullopt;
-    }
-    return version;
-}
-
-std::optional<BackendApiClient::ModelPayload> BackendApiClient::getLatestModel(const QString& projectId) {
-    errorMessage.clear();
-    HttpResult response = sendJsonRequest("GET", QString("/projects/%1/models/latest").arg(projectId));
-
-    if (!response.error.isEmpty() && response.statusCode <= 0) {
-        errorMessage = response.error;
-        return std::nullopt;
-    }
-
-    if (response.statusCode != 200) {
-        errorMessage = formatHttpErrorMessage(QString::fromUtf8("获取最新模型失败"), response.statusCode, response.body);
-        return std::nullopt;
-    }
-
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        errorMessage = QString::fromUtf8("获取最新模型返回数据格式错误");
-        return std::nullopt;
-    }
-
-    const QJsonObject root = doc.object();
-    const QJsonObject content = root.value("content").toObject();
-
-    ModelPayload payload;
-    payload.projectId = root.value("project_id").toString();
-    payload.version = root.value("version").toInt(0);
-    payload.sat = content.value("sat").toString();
-
-    if (payload.projectId.isEmpty() || payload.version <= 0 || payload.sat.isEmpty()) {
-        errorMessage = QString::fromUtf8("获取最新模型返回数据缺少必要字段");
-        return std::nullopt;
-    }
-
-    return payload;
-}
-
-std::optional<BackendApiClient::ModelPayload> BackendApiClient::getModelVersion(const QString& projectId, int version) {
-    errorMessage.clear();
-    HttpResult response = sendJsonRequest("GET", QString("/projects/%1/models/%2").arg(projectId).arg(version));
-
-    if (!response.error.isEmpty() && response.statusCode <= 0) {
-        errorMessage = response.error;
-        return std::nullopt;
-    }
-
-    if (response.statusCode != 200) {
-        errorMessage = formatHttpErrorMessage(QString::fromUtf8("获取指定版本模型失败"), response.statusCode, response.body);
-        return std::nullopt;
-    }
-
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        errorMessage = QString::fromUtf8("获取指定版本模型返回数据格式错误");
-        return std::nullopt;
-    }
-
-    const QJsonObject root = doc.object();
-    const QJsonObject content = root.value("content").toObject();
-
-    ModelPayload payload;
-    payload.projectId = root.value("project_id").toString();
-    payload.version = root.value("version").toInt(0);
-    payload.sat = content.value("sat").toString();
-    // 把整个 content 序列化为 JSON 字符串，便于上游调用方走 entity_graph 增量合并路径
-    // 而不是 clear+restore 全量替换。
-    payload.contentJson = QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Compact));
-
-    if (payload.projectId.isEmpty() || payload.version <= 0 || payload.sat.isEmpty()) {
-        errorMessage = QString::fromUtf8("获取指定版本模型返回数据缺少必要字段");
-        return std::nullopt;
-    }
-
-    return payload;
-}
-
-// ---------------------------------------------------------------------------
-// Neo4j Entity Graph Storage
-// ---------------------------------------------------------------------------
-
-std::optional<int> BackendApiClient::saveEntityGraph(
-    const QString& projectId,
-    const QString& author,
-    const QString& entityGraphJson,
-    std::optional<int> baseVersion
-) {
-    errorMessage.clear();
-
-    // 构造 EntityVersionCreate 兼容的 payload
-    // { "author": "...", "entity_graph": {...}, "base_version": ... }
-    QJsonParseError parseError;
-    const QJsonDocument egDoc = QJsonDocument::fromJson(entityGraphJson.toUtf8(), &parseError);
-    if (parseError.error != QJsonParseError::NoError) {
-        errorMessage = QString::fromUtf8("entity_graph JSON 格式错误: %1").arg(parseError.errorString());
-        return std::nullopt;
-    }
-    if (!egDoc.isObject()) {
-        errorMessage = QString::fromUtf8("entity_graph 根必须是对象");
-        return std::nullopt;
-    }
-
-    QJsonObject payload;
-    payload.insert("author", author.isEmpty() ? QString::fromUtf8("dbcad-exe") : author);
-    payload.insert("entity_graph", egDoc.object());
-    if (baseVersion.has_value()) {
-        payload.insert("base_version", *baseVersion);
-    } else {
-        payload.insert("base_version", QJsonValue::Null);
-    }
-
-    HttpResult response = sendJsonRequest(
-        "POST",
-        QString("/projects/%1/entities").arg(projectId),
-        QJsonDocument(payload).toJson(QJsonDocument::Compact)
-    );
-
-    if (!response.error.isEmpty() && response.statusCode <= 0) {
-        errorMessage = response.error;
-        return std::nullopt;
-    }
-
-    if (response.statusCode == 409) {
-        errorMessage = QString::fromUtf8("Entity graph 版本冲突（base_version 与服务端最新版本不匹配）");
-        return std::nullopt;
-    }
-
-    if (response.statusCode != 201) {
-        errorMessage = formatHttpErrorMessage(QString::fromUtf8("保存 entity graph 失败"), response.statusCode, response.body);
-        return std::nullopt;
-    }
-
-    const QJsonDocument respDoc = QJsonDocument::fromJson(response.body, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !respDoc.isObject()) {
-        errorMessage = QString::fromUtf8("保存 entity graph 返回数据格式错误");
-        return std::nullopt;
-    }
-
-    const int version = respDoc.object().value("version").toInt(0);
-    if (version <= 0) {
-        errorMessage = QString::fromUtf8("保存 entity graph 返回版本号无效");
-        return std::nullopt;
-    }
-    return version;
-}
-
-std::optional<BackendApiClient::EntityGraphPayload> BackendApiClient::getEntityVersion(
-    const QString& projectId,
-    int version
-) {
-    errorMessage.clear();
-
-    HttpResult response = sendJsonRequest(
-        "GET",
-        QString("/projects/%1/entities/%2").arg(projectId).arg(version)
-    );
-
-    if (!response.error.isEmpty() && response.statusCode <= 0) {
-        errorMessage = response.error;
-        return std::nullopt;
-    }
-
-    if (response.statusCode == 404) {
-        return std::nullopt;
-    }
-
-    if (response.statusCode != 200) {
-        errorMessage = formatHttpErrorMessage(QString::fromUtf8("获取 entity graph 版本失败"), response.statusCode, response.body);
-        return std::nullopt;
-    }
-
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        errorMessage = QString::fromUtf8("获取 entity graph 返回数据格式错误");
-        return std::nullopt;
-    }
-
-    const QJsonObject root = doc.object();
-
-    EntityGraphPayload result;
-    result.version = root.value("version").toInt(0);
-    result.author = root.value("author").toString();
-    const QString createdAtStr = root.value("created_at").toString();
-    if (!createdAtStr.isEmpty()) {
-        QDateTime dt = QDateTime::fromString(createdAtStr, Qt::ISODate);
-        result.createdAt = dt.isValid() ? dt.toMSecsSinceEpoch() : 0;
-    }
-
-    // 直接保留 nodes 数组（原序），调用方需要时按 id 自行索引
-    result.nodes = root.value("nodes").toArray();
-    result.rels = root.value("rels").toArray();
-
-    if (result.version <= 0) {
-        errorMessage = QString::fromUtf8("获取 entity graph 版本号无效");
-        return std::nullopt;
-    }
-    return result;
-}
-
 std::optional<int> BackendApiClient::saveJsonDelta(
     const QString& projectId,
     const QString& author,
@@ -596,5 +346,21 @@ std::optional<BackendApiClient::JsonGraphPayload> BackendApiClient::getJsonDelta
     result.delta = root.value("delta").toBool(false);
     result.graphHash = root.value("graph_hash").toString();
     if (result.version < 0 || result.graphJson.isEmpty()) { errorMessage = QString::fromUtf8("获取 JSON delta 版本无效"); return std::nullopt; }
+    return result;
+}
+
+std::optional<BackendApiClient::JsonGraphPayload> BackendApiClient::getJsonVersion(const QString &projectId, int version) {
+    const auto response = sendJsonRequest("GET", QString("/projects/%1/models/%2").arg(projectId).arg(version));
+    if (response.statusCode != 200) { errorMessage = formatHttpErrorMessage("读取历史版本失败", response.statusCode, response.body); return std::nullopt; }
+    QJsonParseError error;
+    const auto doc = QJsonDocument::fromJson(response.body, &error);
+    const auto content = doc.object().value("content").toObject();
+    if (error.error != QJsonParseError::NoError || !content.value("entity_graph").isObject()) {
+        errorMessage = "历史版本缺少实体图"; return std::nullopt;
+    }
+    JsonGraphPayload result;
+    result.version = doc.object().value("version").toInt();
+    result.graphJson = QString::fromUtf8(QJsonDocument(content.value("entity_graph").toObject()).toJson(QJsonDocument::Compact));
+    result.changesJson = QString::fromUtf8(QJsonDocument(content.value("changes").toArray()).toJson(QJsonDocument::Compact));
     return result;
 }

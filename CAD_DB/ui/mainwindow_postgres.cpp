@@ -84,54 +84,9 @@ void MainWindow::pgSaveCurrentToDatabase() {
     if (!ok || name.trimmed().isEmpty())
         return;
 
-    // Export current ACIS model to a SAT string via temp file.
-    QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_pg_save_XXXXXX.sat");
-    tempFile.setAutoRemove(true);
-    if (!tempFile.open()) {
-        QMessageBox::warning(this, tr("DBCAD"), tr("无法创建临时 SAT 文件。"));
-        return;
-    }
-    const QString tempPath = tempFile.fileName();
-    FILE *f = nullptr;
-#ifdef _MSC_VER
-    f = _wfopen(reinterpret_cast<const wchar_t *>(tempPath.utf16()), L"wb");
-#else
-    f = fopen(tempPath.toStdString().c_str(), "wb");
-#endif
-    if (!f) {
-        tempFile.close();
-        QMessageBox::warning(this, tr("DBCAD"), tr("无法写入临时 SAT 文件。"));
-        return;
-    }
-    {
-        API_NOP_BEGIN;
-        api_save_version(2, 0);
-        FileInfo fileinfo;
-        fileinfo.set_units(1.0);
-        fileinfo.set_product_id("dbcad_pg_save");
-        outcome result = api_set_file_info((FileIdent | FileUnits), fileinfo);
-        result = api_set_int_option("sequence_save_files", 1);
-        ENTITY_LIST el;
-        acis_get_noattrib_toplevel_active_entities(el);
-        result = api_save_entity_list(f, true, el);
-        API_NOP_END;
-        fclose(f);
-        if (!result.ok()) {
-            tempFile.close();
-            QMessageBox::warning(this, tr("DBCAD"), tr("导出当前模型为 SAT 失败。"));
-            return;
-        }
-    }
-    tempFile.close();
-
-    // Read SAT text into memory (avoid a second temp-file round-trip).
-    QFile satFile(tempPath);
-    if (!satFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QMessageBox::warning(this, tr("DBCAD"), tr("无法读取导出的 SAT 文件。"));
-        return;
-    }
-    const QString satText = QString::fromUtf8(satFile.readAll());
-    satFile.close();
+    QString satText;
+    try { satText=QString::fromUtf8(dbcad::kernel().writeNative(curWindow->getEntityList())); }
+    catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); return; }
 
     m_pgService->saveSat(name, satText);
     statusBar()->showMessage(tr("正在保存到 PostgreSQL..."), 3000);
@@ -150,66 +105,28 @@ void MainWindow::pgLoadFromDatabaseToCurrent() {
     if (!ok || name.trimmed().isEmpty())
         return;
 
-    // Connect the loaded signal once; disconnect after first emission.
+    // Scope only the per-request callbacks; retain the permanent error handler.
+    auto requestContext=new QObject(this);
     connect(
-        m_pgService.get(), &PgService::loaded, this,
-        [this, name](const QString &satText) {
-            disconnect(m_pgService.get(), &PgService::loaded, this, nullptr);
-            disconnect(m_pgService.get(), &PgService::loadFailed, this, nullptr);
+        m_pgService.get(), &PgService::loaded, requestContext,
+        [this, name, requestContext](const QString &satText) {
+            requestContext->deleteLater();
 
             if (curWindow == nullptr)
                 addWindow();
+            dbcad::ShapeList shapes;
+            try { shapes=dbcad::kernel().readNative(satText.toUtf8()); }
+            catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); return; }
             curWindow->clear();
-
-            QTemporaryFile tempFile(QDir::tempPath() + "/dbcad_pg_load_XXXXXX.sat");
-            tempFile.setAutoRemove(true);
-            if (!tempFile.open()) {
-                QMessageBox::warning(this, tr("DBCAD"), tr("无法创建临时 SAT 文件。"));
-                return;
-            }
-            const QString tempPath = tempFile.fileName();
-            tempFile.write(satText.toUtf8());
-            tempFile.close();
-
-            FILE *f = nullptr;
-#ifdef _MSC_VER
-            f = _wfopen(reinterpret_cast<const wchar_t *>(tempPath.utf16()), L"r");
-#else
-            f = fopen(tempPath.toStdString().c_str(), "r");
-#endif
-            if (!f) {
-                QMessageBox::warning(this, tr("DBCAD"), tr("无法读取已下载的临时 SAT 文件。"));
-                return;
-            }
-            {
-                ENTITY_LIST el;
-                API_BEGIN;
-                api_save_version(2, 0);
-                outcome result = api_restore_entity_list(f, true, el);
-                API_END;
-                fclose(f);
-                if (!result.ok()) {
-                    QMessageBox::warning(this, tr("DBCAD"), tr("ACIS 解析 SAT 失败。"));
-                    return;
-                }
-                for (int i = 0; i < el.count(); i++) {
-                    curWindow->addEntity(el[i], tr("PG 导入实体%1").arg(i).toStdString(), -1);
-                }
-            }
+            for(size_t i=0;i<shapes.size();++i) curWindow->addEntity(shapes[i],tr("PG 导入实体%1").arg(i).toStdString(),-1);
+            curWindow->resetDocumentHistory();
             QMessageBox::information(this, tr("DBCAD"), tr("已从 PostgreSQL 加载:\n%1").arg(name));
             statusBar()->showMessage(tr("已从 PostgreSQL 加载: %1").arg(name), 3000);
         },
         Qt::SingleShotConnection);
 
-    connect(
-        m_pgService.get(), &PgService::loadFailed, this,
-        [this](const QString &err) {
-            disconnect(m_pgService.get(), &PgService::loaded, this, nullptr);
-            disconnect(m_pgService.get(), &PgService::loadFailed, this, nullptr);
-            QMessageBox::warning(this, tr("DBCAD"), tr("从 PostgreSQL 加载失败:\n%1").arg(err));
-            statusBar()->showMessage(tr("从 PostgreSQL 加载失败"), 4000);
-        },
-        Qt::SingleShotConnection);
+    connect(m_pgService.get(), &PgService::loadFailed, requestContext,
+            [requestContext](const QString&) { requestContext->deleteLater(); }, Qt::SingleShotConnection);
 
     m_pgService->loadSat(name);
 }

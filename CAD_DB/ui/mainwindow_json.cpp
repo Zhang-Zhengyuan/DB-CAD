@@ -1,3 +1,4 @@
+#include <QScopeGuard>
 #include "mainwindow_internal.h"
 
 bool MainWindow::submitMode1JsonDelta(const QString &reason) {
@@ -10,109 +11,64 @@ bool MainWindow::submitMode1JsonDelta(const QString &reason) {
         statusBar()->showMessage(tr("没有未推送的本地修改"), 2000);
         return true;
     }
+    QHash<QString, EntityChange> lastChange;
+    for (const auto &change : pendingEntityChanges)
+        lastChange.insert(change.uuid, change);
+    QSet<QString> liveIds;
+    for(const auto& item:curWindow->getEntityTree()) liveIds.insert(QString::fromStdString(item.uuid));
+    for(auto it=lastChange.begin();it!=lastChange.end();++it)
+        if(!liveIds.contains(it.key())) it->changeType=EntityChangeType::REMOVE;
+    const QList<EntityChange> submittedChanges = lastChange.values();
     const auto decision = session.tryBeginSubmit(reason);
     if (decision.kind != CollabSession::SubmitDecision::Allow) {
         statusBar()->showMessage(decision.reason, 4000);
         return false;
     }
 
-    const ENTITY_LIST &entities = curWindow->getEntityList();
-    // ENTITY_LIST uses compact vector positions, while entityIndexToUuid is
-    // keyed by the monotonic ENTITY_TREE_ITEM::index. They diverge after a
-    // deletion, so translate positions explicitly before serializing.
-    QHash<int, QString> serializerUuidByPosition;
-    const auto &entityTreeForSerialization = curWindow->getEntityTree();
-    for (int position = 0; position < static_cast<int>(entityTreeForSerialization.size()); ++position) {
-        const int logicalIndex = entityTreeForSerialization[static_cast<size_t>(position)].index;
-        const QString uuid = entityIndexToUuid.value(logicalIndex).trimmed();
-        if (!uuid.isEmpty())
-            serializerUuidByPosition.insert(position, uuid);
-    }
-    const QJsonObject graphObject = serializeACISEntityGraph(serializerUuidByPosition, entities);
-    // Only transmit complete topology components rooted at changed stable
-    // body UUIDs. The server expands these components into its canonical
-    // snapshot; unchanged bodies never cross the network on this request.
+    // Serialize only changed top-level entities. Stable UUIDs are keyed by
+    // compact positions in this list, not by the canvas' monotonic indices.
     QSet<QString> changedRoots;
-    for (const auto &change : pendingEntityChanges) {
-        const QString id = change.uuid.trimmed();
-        if (!id.isEmpty() && change.changeType != EntityChangeType::REMOVE)
-            changedRoots.insert(id);
-    }
-    const QSet<QString> topologyTypes = {
-        QStringLiteral("body_lump"),      QStringLiteral("body_wire"),       QStringLiteral("body_transform"),
-        QStringLiteral("lump_shell"),     QStringLiteral("lump_next"),       QStringLiteral("lump_body"),
-        QStringLiteral("shell_next"),     QStringLiteral("shell_face"),      QStringLiteral("shell_wire"),
-        QStringLiteral("shell_lump"),     QStringLiteral("wire_coedge"),     QStringLiteral("wire_next"),
-        QStringLiteral("wire_owner"),     QStringLiteral("face_loop"),       QStringLiteral("face_next"),
-        QStringLiteral("face_shell"),     QStringLiteral("loop_face"),       QStringLiteral("loop_start"),
-        QStringLiteral("loop_next"),      QStringLiteral("coedge_next"),     QStringLiteral("coedge_previous"),
-        QStringLiteral("coedge_partner"), QStringLiteral("coedge_edge"),     QStringLiteral("coedge_owner"),
-        QStringLiteral("edge_start"),     QStringLiteral("edge_end"),        QStringLiteral("edge_coedge"),
-        QStringLiteral("vertex_edge"),    QStringLiteral("edge_vertex"),     QStringLiteral("face_geometry"),
-        QStringLiteral("edge_geometry"),  QStringLiteral("vertex_geometry"), QStringLiteral("body_face"),
-        QStringLiteral("body_edge"),      QStringLiteral("body_vertex")};
-    QHash<QString, QSet<QString>> adjacency;
-    const QJsonArray graphRels = graphObject.value("rels").toArray();
-    for (const QJsonValue &value : graphRels) {
-        const QJsonObject rel = value.toObject();
-        const QString relType = rel.value("type").toString().toLower();
-        if (!topologyTypes.contains(relType) && !relType.endsWith(QStringLiteral("_ptr")))
+    for (const auto &change : submittedChanges)
+        if (change.changeType != EntityChangeType::REMOVE)
+            changedRoots.insert(change.uuid);
+    dbcad::ShapeList entities;
+    QHash<int, QString> serializerUuidByPosition;
+    for (const auto &item : curWindow->getEntityTree()) {
+        const QString uuid = QString::fromStdString(item.uuid);
+        if (!changedRoots.contains(uuid))
             continue;
-        const QString start = rel.value("start").toString();
-        const QString end = rel.value("end").toString();
-        if (!start.isEmpty() && !end.isEmpty()) {
-            adjacency[start].insert(end);
-            adjacency[end].insert(start);
-        }
-    }
-    QSet<QString> componentIds;
-    QList<QString> pendingRoots = changedRoots.values();
-    while (!pendingRoots.isEmpty()) {
-        const QString current = pendingRoots.takeLast();
-        if (componentIds.contains(current))
-            continue;
-        componentIds.insert(current);
-        for (const QString &neighbour : adjacency.value(current))
-            pendingRoots.append(neighbour);
+        serializerUuidByPosition.insert(static_cast<int>(entities.size()), uuid);
+        entities.push_back(item.shape);
     }
     QJsonObject deltaGraph;
-    QJsonArray deltaNodes;
-    for (const QJsonValue &value : graphObject.value("nodes").toArray()) {
-        const QJsonObject node = value.toObject();
-        if (componentIds.contains(node.value("id").toString()))
-            deltaNodes.append(node);
+    try {
+        deltaGraph = dbcad::kernel().encodeGraph(serializerUuidByPosition, entities);
+    } catch (const std::exception &ex) {
+        session.rollbackSubmit();
+        statusBar()->showMessage(tr("序列化失败：%1").arg(QString::fromUtf8(ex.what())), 6000);
+        return false;
     }
-    QJsonArray deltaRels;
-    for (const QJsonValue &value : graphRels) {
-        const QJsonObject rel = value.toObject();
-        if (componentIds.contains(rel.value("start").toString()) &&
-            componentIds.contains(rel.value("end").toString())) {
-            deltaRels.append(rel);
-        }
+    QHash<QString, QString> rootNames;
+    for (const auto &item : curWindow->getEntityTree())
+        rootNames.insert(QString::fromStdString(item.uuid), QString::fromStdString(item.name));
+    QJsonArray namedNodes = deltaGraph.value("nodes").toArray();
+    for (int i = 0; i < namedNodes.size(); ++i) {
+        auto node = namedNodes[i].toObject();
+        const QString id = node.value("id").toString();
+        if (!rootNames.contains(id))
+            continue;
+        auto props = node.value("props").toObject();
+        props.insert("display_name", rootNames.value(id));
+        node.insert("props", props);
+        namedNodes[i] = node;
     }
-    deltaGraph.insert("nodes", deltaNodes);
-    deltaGraph.insert("rels", deltaRels);
-    for (auto it = graphObject.constBegin(); it != graphObject.constEnd(); ++it) {
-        if (it.key() != QStringLiteral("nodes") && it.key() != QStringLiteral("rels")) {
-            deltaGraph.insert(it.key(), it.value());
-        }
-    }
+    deltaGraph.insert("nodes", namedNodes);
     const QString graphJson = QString::fromUtf8(QJsonDocument(deltaGraph).toJson(QJsonDocument::Compact));
-    const QString changesJson = exportEntityChangesToJson(pendingEntityChanges);
+    const QString changesJson = exportEntityChangesToJson(submittedChanges);
     QJsonParseError changesError;
     const QJsonDocument changesDoc = QJsonDocument::fromJson(changesJson.toUtf8(), &changesError);
     const QJsonArray changes = changesDoc.object().value("changes").toArray();
-    // Pure JSON Mode1 never sends SAT. The client serializes ACIS into the
-    // entity graph; SAT is legacy fallback data and must not leak into the
-    // JSON delta metadata or Neo4j snapshots.
-    QJsonArray jsonOnlyChanges;
-    for (const QJsonValue &value : changes) {
-        QJsonObject item = value.toObject();
-        item.remove("sat");
-        jsonOnlyChanges.append(item);
-    }
-    const QString jsonOnlyChangesText =
-        QString::fromUtf8(QJsonDocument(jsonOnlyChanges).toJson(QJsonDocument::Compact));
+    const QString jsonOnlyChangesText = QString::fromUtf8(QJsonDocument(changes).toJson(QJsonDocument::Compact));
     QStringList removedIds;
     for (const QJsonValue &value : changes) {
         const QJsonObject change = value.toObject();
@@ -126,11 +82,16 @@ bool MainWindow::submitMode1JsonDelta(const QString &reason) {
     BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author),
                             QString::fromStdString(fastapi_password));
     const int base = session.modelVersion();
+    const bool wasEnabled = isEnabled();
+    setEnabled(false);
     const auto result = client.saveJsonDelta(session.projectId(), QString::fromStdString(fastapi_author), graphJson,
                                              jsonOnlyChangesText, removedIds,
                                              base > 0 ? std::optional<int>(base) : std::nullopt, fastapi_client_id);
+    setEnabled(wasEnabled);
     if (!result.has_value()) {
         session.rollbackSubmit();
+        if (client.lastStatusCode() == 409)
+            requestFastAPISyncNow();
         statusBar()->showMessage(tr("Mode1 JSON Push 失败：%1").arg(client.lastError()), 6000);
         return false;
     }
@@ -138,7 +99,6 @@ bool MainWindow::submitMode1JsonDelta(const QString &reason) {
     const int version = *result;
     session.onSubmitAccepted(version);
     session.setPushedVersion(version);
-    api_advance_delta_since(collabCtx);
     pendingEntityChanges.clear();
     if (curWindow != nullptr)
         curWindow->setIsModified(false);
@@ -158,6 +118,11 @@ void MainWindow::pullMode1JsonDelta() {
     const int base = session.modelVersion();
     BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author),
                             QString::fromStdString(fastapi_password));
+    // BackendApiClient runs a nested Qt event loop. Prevent edits and repeated
+    // Pull clicks until the response has been merged into this same document.
+    const bool wasEnabled = isEnabled();
+    setEnabled(false);
+    const auto restoreUi = qScopeGuard([this, wasEnabled]() { setEnabled(wasEnabled); });
     const auto result = client.getJsonDelta(session.projectId(), base);
     if (!result.has_value()) {
         statusBar()->showMessage(tr("Mode1 JSON Pull 失败：%1").arg(client.lastError()), 6000);
@@ -177,7 +142,8 @@ void MainWindow::pullMode1JsonDelta() {
     QSet<QString> remoteChangedIds;
     for (const QJsonValue &value : graphDoc.object().value("nodes").toArray()) {
         const QJsonObject node = value.toObject();
-        if (node.value("labels").toArray().contains(QJsonValue(QStringLiteral("body")))) {
+        if (node.value("labels").toArray().contains(QJsonValue(QStringLiteral("body"))) ||
+            node.value("props").toObject().value("top_level").toBool()) {
             const QString id = node.value("id").toString().trimmed();
             if (!id.isEmpty())
                 remoteChangedIds.insert(id);
@@ -206,14 +172,15 @@ void MainWindow::pullMode1JsonDelta() {
             return;
         }
     }
-    QString graphError;
-    if (!pullACISEntityGraph(result->version, graphDoc.object(), QString(), result->delta, result->removedIds,
-                             remoteNames)) {
+    if (!pullEntityGraph(result->version, graphDoc.object(), true, result->removedIds, remoteNames)) {
         statusBar()->showMessage(tr("Mode1 JSON Pull 重建 ACIS 失败"), 6000);
         return;
     }
     session.onRemoteApplied(result->version);
     session.setPushedVersion(result->version);
+    if (!pendingEntityChanges.isEmpty())
+        session.onUserEdit();
+    curWindow->setIsModified(!pendingEntityChanges.isEmpty());
     fastapi_model_version = session.modelVersion();
     fastapi_pending_remote_version = session.pendingRemoteVersion();
     updateCollabPanelUi();

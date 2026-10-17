@@ -36,7 +36,7 @@ class ProjectSyncManager:
         websocket: WebSocket,
         client_id: str,
         author: str,
-        stream: str = "mode0",
+        stream: str = "mode1",
     ) -> None:
         await websocket.accept()
         async with self._lock:

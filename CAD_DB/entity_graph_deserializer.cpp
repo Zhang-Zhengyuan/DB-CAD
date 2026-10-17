@@ -1,5 +1,7 @@
+#include <QScopeGuard>
 // JSON graph restoration: skeletons, geometry and topology retain their original order.
 #include "entity_graph_serializer.h"
+#include "kernel/acis_sat_io.hxx"
 
 #include <acis/include/api.hxx>
 #include <acis/include/cstrapi.hxx>
@@ -515,7 +517,7 @@ static curve *parseCurve(const QJsonObject &gj, QString *error) {
  * @param errorMessage 错误信息
  * @return 成功返回 true
  */
-bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntityGraph *outResult,
+static bool deserializeACISEntityGraphComponent(const QJsonObject &graphJson, DeserializedEntityGraph *outResult,
                                 QString *errorMessage) {
     using namespace JsonDeserialize;
 
@@ -547,6 +549,17 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
 
     // id → ENTITY* 映射（用于后续阶段）
     QHash<QString, ENTITY *> idToEntity;
+    bool reconstructionCommitted = false;
+    const auto cleanupFailedBuild = qScopeGuard([&]() {
+        if (reconstructionCommitted) return;
+        ENTITY_LIST allocated;
+        if (outResult->entities) allocated.add(*outResult->entities);
+        for (auto *entity : idToEntity) if (entity) allocated.add(entity);
+        if (allocated.count()) api_del_entity_list(allocated);
+        delete outResult->entities;
+        outResult->entities = nullptr;
+        outResult->uuidToEntity.clear();
+    });
     // loop 分类（loop_type）：pass1 建 LOOP 时无 face/拓扑，set_classification
     // 依赖 lt_surf_ptr——推迟到拓扑链接完成后应用（信任序列化字段，
     // 不重算：api_loop_type 对部分结构会过度推断 periphery）
@@ -557,7 +570,7 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
     // SAT 片段回退（fail-safe 的恢复端）：body 节点带 props.sat_fragment 的
     // 组件整体走内核 SAT 读回（100% 一致，含 ATTRIB/过程曲面定义/边参数化），
     // 该组件全部节点跳过 pass1/2/3（内核已完整重建，避免二次 set_* 损坏）。
-    // 片段恢复失败则该组件回退普通图重建（不劣于现状）。
+    // 已知风险片段恢复失败必须拒绝；on_failure 组件由外层先尝试 JSON。
     // =========================================================================
     QSet<QString> fragmentIds;
     int fragmentBodies = 0;
@@ -572,61 +585,45 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
         for (const QJsonValue &nv : nodes) {
             const QJsonObject node = nv.toObject();
             const QJsonArray labels = node.value("labels").toArray();
-            if (labels.isEmpty() || labels[0].toString() != "body")
+            if (labels.isEmpty() || (labels[0].toString() != "body" && !node.value("props").toObject().value("top_level").toBool()))
                 continue;
             const QString id = node.value("id").toString();
             const QString frag = node.value("props").toObject().value("sat_fragment").toString();
-            if (frag.isEmpty())
+            if (frag.isEmpty() || node.value("props").toObject().value("fallback").toString("sat_fragment") != "sat_fragment")
                 continue;
             bool ok = false;
-            FILE *tf = tmpfile();
-            if (tf) {
-                const QByteArray bytes = frag.toLatin1();
-                if (fwrite(bytes.constData(), 1, (size_t)bytes.size(), tf) == (size_t)bytes.size()) {
-                    rewind(tf);
-                    ENTITY_LIST lst;
-                    if (api_restore_entity_list(tf, TRUE, lst).ok()) {
-                        BODY *rb = nullptr;
-                        for (ENTITY *en = lst.first(); en; en = lst.next())
-                            if (!rb && is_BODY(en))
-                                rb = (BODY *)en;
-                        if (rb) {
-                            for (ENTITY *en = lst.first(); en; en = lst.next())
-                                outResult->entities->add(en);
-                            outResult->uuidToEntity[id] = (void *)rb;
-                            fragmentBodies++;
-                            // 组件闭包全部跳过图重建
-                            QSet<QString> seen{id};
-                            QQueue<QString> q;
-                            q.enqueue(id);
-                            while (!q.isEmpty()) {
-                                const QString cur = q.dequeue();
-                                fragmentIds.insert(cur);
-                                for (const QString &nb : adj.value(cur))
-                                    if (!seen.contains(nb)) {
-                                        seen.insert(nb);
-                                        q.enqueue(nb);
-                                    }
-                            }
-                            fprintf(stderr,
-                                    "[Collab] deserialize: sat_fragment restored body=%s entities=%d (skips graph rebuild)\n",
-                                    id.toUtf8().constData(), lst.count());
-                            ok = true;
-                        } else {
-                            // 无 BODY（异常片段）：清掉已恢复实体，回退图重建
-                            for (ENTITY *en = lst.first(); en; en = lst.next())
-                                api_del_entity(en);
-                        }
-                    }
+            ENTITY_LIST restored;
+            try {
+                dbcad::acis_detail::readSat(frag.toLatin1(),restored);
+                ENTITY* root=nullptr;
+                // A component backup must contain exactly one matching top-level root.
+                if(restored.count()==1) {
+                    auto entity=restored[0];
+                    if(QString::fromLatin1(entity->type_name()).toLower()==labels[0].toString()) root=entity;
                 }
-                fclose(tf);
+                if(root) {
+                    outResult->entities->add(root);
+                    outResult->uuidToEntity[id]=root;
+                    ++fragmentBodies;
+                    QSet<QString> seen{id}; QQueue<QString> pending; pending.enqueue(id);
+                    while(!pending.isEmpty()) {
+                        const auto current=pending.dequeue(); fragmentIds.insert(current);
+                        for(const auto& next:adj.value(current)) if(!seen.contains(next)) { seen.insert(next); pending.enqueue(next); }
+                    }
+                    ok=true;
+                }
+            } catch(const std::exception& error) {
+                fprintf(stderr,"[Collab] SAT restore failed: %s\n",error.what());
             }
-            if (!ok)
-                qWarning() << "[Collab] deserialize: sat_fragment restore FAILED for body" << id
-                           << "- falling back to graph rebuild";
+            if(!ok && restored.count()) api_del_entity_list(restored);
+            if (!ok) {
+                if (errorMessage) *errorMessage = QStringLiteral("Required SAT fragment could not be restored: ") + id;
+                return false;
+            }
         }
     }
 
+    bool reconstructionFailed = false;
     // 统计
     int createdBody = 0, createdLump = 0, createdShell = 0, createdWire = 0, createdFace = 0, createdLoop = 0,
         createdCoedge = 0, createdSubshell = 0, createdEdge = 0, createdVertex = 0, createdTransform = 0, skippedUnknown = 0;
@@ -854,7 +851,8 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                         splineFaces.insert(id);
                 }
                 API_END;
-                if (surf == nullptr && !geom.isEmpty()) {
+                if (surf == nullptr) {
+                    reconstructionFailed = true;
                     qWarning().noquote() << "[Collab] deserialize face geometry:" << err;
                 }
             } else if (label == "coedge") {
@@ -881,6 +879,7 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
                 }
                 API_END;
                 if (crv == nullptr && !geom.isEmpty()) {
+                    reconstructionFailed = true;
                     qWarning().noquote() << "[Collab] deserialize edge geometry:" << err;
                 }
             } else if (label == "wire") {
@@ -1008,6 +1007,8 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
 
         ENTITY *startEnt = idToEntity.value(startId);
         ENTITY *endEnt = idToEntity.value(endId);
+        if (fragmentIds.contains(startId) && fragmentIds.contains(endId))
+            continue;
         if (!startEnt || !endEnt) {
             linkFail++;
             continue;
@@ -1201,5 +1202,109 @@ bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntity
     // attempt when it builds the mesh and has a planar fallback for faces that
     // remain unfaceted.
     fprintf(stderr, "[Collab] deserialize: structure-only complete; faceting deferred to display\n");
-    return outResult->entities->count() > 0;
+    if (reconstructionFailed || skippedUnknown || linkFail || idToEntity.size() + fragmentIds.size() != nodes.size()) {
+        if (errorMessage) *errorMessage = QStringLiteral("Incomplete geometry or topology reconstruction");
+        return false;
+    }
+    reconstructionCommitted = outResult->entities->count() > 0;
+    return reconstructionCommitted;
+}
+
+
+// Decode one top-level component at a time so an unsupported component cannot replace other
+// bodies or dirty local work. Both representations belong to the same version.
+bool deserializeACISEntityGraph(const QJsonObject &graphJson, DeserializedEntityGraph *outResult,
+                                QString *errorMessage) {
+    if (!outResult) return false;
+    outResult->entities = nullptr;
+    outResult->uuidToEntity.clear();
+    if (errorMessage) errorMessage->clear();
+    const QJsonArray nodes = graphJson.value("nodes").toArray();
+    const QJsonArray rels = graphJson.value("rels").toArray();
+    QHash<QString, QSet<QString>> adjacency;
+    QSet<QString> bodyIds;
+    for (const auto &value : nodes) {
+        const auto node = value.toObject();
+        if (node.value("labels").toArray().contains(QJsonValue(QStringLiteral("body"))) ||
+            node.value("props").toObject().value("top_level").toBool())
+            bodyIds.insert(node.value("id").toString());
+    }
+    for (const auto &value : rels) {
+        const auto rel = value.toObject();
+        const QString type = rel.value("type").toString();
+        // Design dependencies across bodies are not topology ownership.
+        if (!(type.startsWith("body_") || type.startsWith("lump_") || type.startsWith("shell_") ||
+              type.startsWith("subshell_") || type.startsWith("wire_") || type.startsWith("face_") ||
+              type.startsWith("loop_") || type.startsWith("coedge_") || type.startsWith("edge_") ||
+              type.startsWith("vertex_"))) continue;
+        const QString start = rel.value("start").toString(), end = rel.value("end").toString();
+        adjacency[start].insert(end);
+        adjacency[end].insert(start);
+    }
+    ENTITY_LIST *combined = new ENTITY_LIST();
+    auto discard = [](DeserializedEntityGraph &result) {
+        if (result.entities) { api_del_entity_list(*result.entities); delete result.entities; result.entities = nullptr; }
+        result.uuidToEntity.clear();
+    };
+    for (const auto &value : nodes) {
+        const QJsonObject root = value.toObject();
+        const QString id = root.value("id").toString();
+        if (!bodyIds.contains(id)) continue;
+        QSet<QString> scope{id};
+        QList<QString> pending{id};
+        while (!pending.isEmpty()) {
+            const QString current = pending.takeLast();
+            for (const QString &next : adjacency.value(current)) {
+                if (scope.contains(next) || (bodyIds.contains(next) && next != id)) continue;
+                scope.insert(next); pending.append(next);
+            }
+        }
+        QJsonArray componentNodes, componentRels;
+        for (const auto &nv : nodes)
+            if (scope.contains(nv.toObject().value("id").toString())) componentNodes.append(nv);
+        for (const auto &rv : rels) {
+            const auto r = rv.toObject();
+            if (scope.contains(r.value("start").toString()) && scope.contains(r.value("end").toString()))
+                componentRels.append(rv);
+        }
+        QJsonObject component{{"nodes", componentNodes}, {"rels", componentRels}};
+        DeserializedEntityGraph decoded{nullptr, {}};
+        QString detail;
+        bool ok = false;
+        const auto expected = root.value("props").toObject();
+        const bool complete =
+            (!expected.contains("topology_node_count") || expected.value("topology_node_count").toInt() == componentNodes.size()) &&
+            (!expected.contains("topology_rel_count") || expected.value("topology_rel_count").toInt() == componentRels.size());
+        try {
+            if (complete) ok = deserializeACISEntityGraphComponent(component, &decoded, &detail);
+            else detail = QStringLiteral("Incomplete topology component");
+        }
+        catch (const std::exception &ex) { detail = QString::fromUtf8(ex.what()); }
+        catch (...) { detail = QStringLiteral("ACIS reconstruction exception"); }
+        if (!ok) {
+            discard(decoded);
+            const auto props = root.value("props").toObject();
+            if (!props.value("sat_fragment").toString().isEmpty()) {
+                // Reuse the existing kernel fragment decoder; never align by body order.
+                QJsonObject satRoot = root, satProps = props;
+                satProps.insert("fallback", "sat_fragment"); satRoot.insert("props", satProps);
+                QJsonObject fallback{{"nodes", QJsonArray{satRoot}}, {"rels", QJsonArray{}}};
+                try { ok = deserializeACISEntityGraphComponent(fallback, &decoded, &detail); }
+                catch (...) { ok = false; }
+            }
+        }
+        if (!ok || decoded.uuidToEntity.size() != 1 || !decoded.uuidToEntity.contains(id)) {
+            discard(decoded);
+            api_del_entity_list(*combined); delete combined;
+            outResult->uuidToEntity.clear();
+            if (errorMessage) *errorMessage = QStringLiteral("Component %1: %2").arg(id, detail);
+            return false;
+        }
+        combined->add(*decoded.entities);
+        outResult->uuidToEntity.insert(id, decoded.uuidToEntity.value(id));
+        delete decoded.entities;
+    }
+    if (bodyIds.isEmpty()) { delete combined; if (errorMessage) *errorMessage = "No top-level roots"; return false; }
+    outResult->entities = combined;
+    return true;
 }

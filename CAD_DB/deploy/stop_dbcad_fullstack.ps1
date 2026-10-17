@@ -108,7 +108,6 @@ if ($null -ne $data.client_pids) {
     Stop-Pid -PidValue $data.client_pid -Name "client"
 }
 Stop-Pid -PidValue $data.backend_pid -Name "FastAPI"
-Stop-Pid -PidValue $data.bridge_pid -Name "storage bridge"
 
 Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
 if (-not $Quiet) {

@@ -33,21 +33,8 @@ void MainWindow::handleFastAPISyncMessageImpl(const QString &message) {
 
     const QJsonObject root = document.object();
     const QString messageType = root.value("type").toString();
-    if (collabMode == CollabMode::Mode1 &&
-        (messageType == QStringLiteral("model_saved") || messageType == QStringLiteral("entity_graph_saved") ||
-         messageType == QStringLiteral("submit_delta")))
-        return;
-    if (collabMode == CollabMode::Mode0 && messageType == QStringLiteral("json_delta_saved"))
-        return;
-    qDebug().noquote() << "[Collab] handleFastAPISyncMessage type=" << messageType
-                       << "hasTrigger=" << root.value("trigger").toString();
-    // Every message has one owner. Stream filtering above remains the common gate.
-    if (messageType == "submit_delta" || messageType == "json_delta_saved") {
+    if (messageType == "json_delta_saved") {
         handleDeltaSyncEvent(root, messageType);
-    } else if (messageType == "entity_graph_saved") {
-        handleEntityGraphSyncEvent(root, messageType);
-    } else if (messageType == "model_saved") {
-        handleModelSyncEvent(root, messageType);
     } else {
         handlePresenceAndAckEvent(root, messageType);
     }

@@ -5,7 +5,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from .. import schemas
-from ..config import settings
 from ..sync import sync_manager
 from ..json_collab import (
     GraphValidationError,
@@ -29,16 +28,12 @@ async def save_json_delta(
     request: Request,
     _: None = Depends(verify_api_password),
 ) -> dict[str, Any]:
-    """Mode1 pure JSON path.
+    """Unified hybrid graph path.
 
     The client serializes ACIS locally.  FastAPI validates the graph, loads the
     base snapshot, applies an entity/component delta, and persists one complete
-    canonical snapshot.  No C++ bridge or SAT is involved.
+    canonical snapshot. SAT backups are opaque Body properties in this same graph.
     """
-    if not settings.direct_json_mode:
-        raise HTTPException(
-            status_code=503, detail="Direct JSON collaboration is disabled"
-        )
     request_json = (await request.body()).decode("utf-8")
     try:
         incoming = validate_graph(payload.entity_graph)
@@ -72,13 +67,11 @@ async def save_json_delta(
 
     async with sync_manager.write_lock(project_id):
         store = get_json_graph_store()
-        # JSON graph versions have their own namespace.  A SAT/legacy version
-        # must not silently become the base of a pure JSON graph stream.
+        # The only writable collaboration history is JsonGraphVersion.
         latest = store.latest(project_id)
         latest_version = latest.version if latest else None
         base_version = payload.base_version
-        # The JSON stream has its own version namespace. A client joining an
-        # existing SAT project must Pull or start from an empty JSON version.
+        # Existing projects require an explicit base for optimistic locking.
         if latest_version is None:
             if base_version not in (None, 0):
                 raise HTTPException(
@@ -118,15 +111,23 @@ async def save_json_delta(
             "entity_graph": merged,
             "changes": payload.changes,
             "removed_ids": payload.removed_ids,
-            "schema": "dbcad.entity_graph.v1",
+            "schema": merged.get("schema", "dbcad.entity_graph.v1"),
             "graph_hash": graph_hash(merged),
             "_audit": {
                 "payload_format": "json",
-                "contains_sat": False,
+                "contains_sat": any(
+                    bool(n["props"].get("sat_fragment")) for n in incoming["nodes"]
+                ),
                 "request_bytes": len(request_json.encode("utf-8")),
                 "request_json": request_json,
             },
         }
+        if not payload.changes:
+            content["changes"] = [
+                {"uuid": n["id"]}
+                for n in incoming["nodes"]
+                if "body" in n["labels"] or n["props"].get("top_level")
+            ]
         version = store.create(project_id, payload.author, content, base_version)
         await sync_manager.broadcast(
             project_id,
@@ -163,10 +164,6 @@ def get_json_delta(
     _: None = Depends(verify_api_password),
 ) -> dict[str, Any]:
     """Return changed body components since the requested JSON version."""
-    if not settings.direct_json_mode:
-        raise HTTPException(
-            status_code=503, detail="Direct JSON collaboration is disabled"
-        )
     store = get_json_graph_store()
     latest = store.latest(project_id)
     if latest is None:

@@ -6,7 +6,7 @@
 
 获取授权 SDK、编译契约与 2026 行为差异的完整说明见 [ACIS 2026 迁移指南](ACIS_2026_MIGRATION.md)。
 
-自 2025-10 重构起，客户端使用**未经修改的官方 3D ACIS Modeler 2026.1.0.1**（`SPAAcisDs` 组件化发行），
+自 2026-10-14 迁移起，客户端使用**未经修改的官方 3D ACIS Modeler 2026.1.0.1**（`SPAAcisDs` 组件化发行），
 不再使用任何改头文件（`gme_` 扩展）的教学定制 SDK。所有几何读写均通过公有 API 完成。
 旧 2021 定制 SDK 已于迁移验收后移除，如需回溯请从迁移前的 git 提交（`4044a69` 之前）获取。
 
@@ -22,12 +22,10 @@ _deps/
   glaze-5.5.2/include/glaze/
   glfw/lib/glfw3_64.lib
   mgclient-1.4.2/mgclient.h
-  openssl/lib/libssl64MD.lib
-  openssl/lib/libcrypto64MD.lib
-  openssl/lib/libssl64MDd.lib
-  openssl/lib/libcrypto64MDd.lib
+  openssl/lib/libssl.lib
+  openssl/lib/libcrypto.lib
   openssl/bin/                  # 配套 DLL
-  libpqxx-7.10.1/lib/libpq.lib  # 保留原依赖包布局；源码实际使用 libpq
+  postgresql/lib/libpq.lib      # libpq 18.6，配套 OpenSSL 3.5.9 LTS
   postgresql/include/           # libpq-fe.h 及其配套头文件
   postgresql/bin/               # libpq.dll 与完整传递依赖
 ```
@@ -51,3 +49,5 @@ PostgreSQL 头文件也可通过 `DBCAD_POSTGRES_INCLUDE` 指向 vcpkg 的 inclu
 Qt 固定以 6.8.3 MSVC2022 x64 验证（本机 6.9.0 亦可构建），C++ 使用 v143 与 C++23。Qt 路径可配置；运行时由对应 kit 的 `windeployqt` 收集。给其他机器分发使用 Release，并安装 Microsoft Visual C++ 2015–2022 x64 Redistributable。
 
 Python 使用 `CAD_DB/backend/pyproject.toml` 与 `uv.lock`。`requirements.txt` 仅保留直接依赖兼容入口，不承诺传递依赖版本一致；可复现环境统一使用 `uv sync --frozen`。
+
+本机迁移配置、启动入口及实际测试限制见 [本机环境说明](LOCAL_SETUP.md)。Debug 与 Release 都使用 /MD Qt 运行时，Debug 仍保留完整符号及禁用优化。

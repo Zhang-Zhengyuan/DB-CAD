@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+***************************************************************************************************
+ Copyright (C) 2023 The Qt Company Ltd.
+ SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+***************************************************************************************************
+-->
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{EBBE07A9-F1B3-479B-AC5F-9E9A6832CC46}</ProjectGuid>
+    <Keyword>QtVS_v304</Keyword>
+    <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">10.0.22621.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">10.0.22621.0</WindowsTargetPlatformVersion>
+    <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Condition="Exists('$(QtMsBuild)\qt_defaults.props')">
+    <Import Project="$(QtMsBuild)\qt_defaults.props" />
+  </ImportGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
+    <QtInstall>6.8.3_msvc2022_64</QtInstall>
+    <QtModules>core</QtModules>
+    <!-- ACIS requires /MD in both configurations. Use Qt's /MD release
+         binaries too; Qt debug DLLs use /MDd and corrupt cross-CRT allocations.
+         Client code retains /Od and full debug symbols below. -->
+    <QtBuildConfig>release</QtBuildConfig>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
+    <QtInstall>6.8.3_msvc2022_64</QtInstall>
+    <QtModules>core</QtModules>
+    <QtBuildConfig>release</QtBuildConfig>
+  </PropertyGroup>
+  <Import Project="$(MSBuildProjectDirectory)\..\build.local.props" Condition="Exists('$(MSBuildProjectDirectory)\..\build.local.props')" />
+  <PropertyGroup>
+    <DBCADDepsRoot Condition="'$(DBCADDepsRoot)' == ''">$(MSBuildProjectDirectory)\..\_deps</DBCADDepsRoot>
+  </PropertyGroup>
+  <PropertyGroup>
+    <DBCADPostgresInclude Condition="'$(DBCADPostgresInclude)' == ''">$(DBCADDepsRoot)\postgresql\include</DBCADPostgresInclude>
+  </PropertyGroup>
+  <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
+    <Error Text="Qt VS Tools not found. Install the extension or pass /p:QtMsBuild=the-directory-containing-qt.targets." />
+  </Target>
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="$(QtMsBuild)\Qt.props" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="$(QtMsBuild)\Qt.props" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(MSBuildProjectDirectory)\storage;$(DBCADPostgresInclude);$(DBCADDepsRoot);$(DBCADDepsRoot)/glaze-5.5.2/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- ACIS 官方要求：调用方必须用 /MD（即使 Debug 构建）。SPAAcisDsd.dll 自身链接
+           Release 动态 CRT，若调用方使用 /MDd，跨边界传递 FILE*/内存会在运行时崩溃
+           （已实证：ftelli64 触发 0xC0000409）。见 docs/ACIS_2026_MIGRATION.md。 -->
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <!-- ACIS 官方要求：链接 ACIS 的代码必须用 /EHa（异步异常），官方 scm/sample 工程均为 Async。 -->
+      <ExceptionHandling>Async</ExceptionHandling>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SPAAcisDsd.lib;ws2_32.lib;openssl\lib\libssl.lib;openssl\lib\libcrypto.lib;postgresql\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- ACIS 官方要求：栈保留 4MB（深度递归的几何算法），对应链接器 /STACK:4194304。 -->
+      <StackReserveSize>4194304</StackReserveSize>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(MSBuildProjectDirectory)\storage;$(DBCADPostgresInclude);$(DBCADDepsRoot);$(DBCADDepsRoot)/glaze-5.5.2/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ExceptionHandling>Async</ExceptionHandling>
+      <AdditionalOptions>/utf-8</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;acis\lib\SPAAcisDs.lib;ws2_32.lib;openssl\lib\libssl.lib;openssl\lib\libcrypto.lib;postgresql\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
+      <StackReserveSize>4194304</StackReserveSize>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
+    <ClCompile>
+      <TreatWChar_tAsBuiltInType>true</TreatWChar_tAsBuiltInType>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <Optimization>Disabled</Optimization>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="Configuration">
+    <ClCompile>
+      <TreatWChar_tAsBuiltInType>true</TreatWChar_tAsBuiltInType>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DebugInformationFormat>None</DebugInformationFormat>
+      <Optimization>MaxSpeed</Optimization>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="kernel\acis_sat_io.hxx" />
+    <ClCompile Include="kernel\acis_kernel.cpp" />
+    <ClCompile Include="acis.cpp" />
+    <ClCompile Include="access.cpp" />
+    <ClCompile Include="common.cpp" />
+    <ClCompile Include="entity_graph_serializer.cpp" />
+    <ClCompile Include="entity_graph_deserializer.cpp" />
+    <ClCompile Include="gme_dump_object.cpp" />
+    <ClCompile Include="gme_mesh.cpp" />
+    <ClCompile Include="neo4j.cpp" />
+    <ClCompile Include="storage\access_save_values.cpp" />
+    <ClCompile Include="storage\access_save_surfaces.cpp" />
+    <ClCompile Include="storage\access_save_curves.cpp" />
+    <ClCompile Include="storage\access_restore_values.cpp" />
+    <ClCompile Include="storage\access_graph_save.cpp" />
+    <ClCompile Include="storage\access_graph_restore.cpp" />
+    <ClCompile Include="storage\access_history_save.cpp" />
+    <ClCompile Include="storage\access_history_restore.cpp" />
+    <ClCompile Include="storage\access_parts.cpp" />
+  </ItemGroup>
+  <!-- Use the same output for solution builds and direct project builds. -->
+  <PropertyGroup>
+    <OutDir>$(MSBuildProjectDirectory)\..\x64\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildProjectDirectory)\..\x64\obj\DbcadAcis\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup><TargetName>DbcadAcis</TargetName></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
+    <Import Project="$(QtMsBuild)\qt.targets" />
+  </ImportGroup>
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

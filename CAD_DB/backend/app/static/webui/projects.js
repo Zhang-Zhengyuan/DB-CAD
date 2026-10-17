@@ -17,7 +17,7 @@ async function loadProjects() {
         <div class="sub">Project / BridgeProject / DBCADProject</div>
       </div>
       <div class="stat-card mode0">
-        <div class="label">Mode0 总版本</div>
+        <div class="label">旧 Mode0 历史</div>
         <div class="value">${totalMode0.toLocaleString()}</div>
         <div class="sub">累计完整 SAT 版本</div>
       </div>
@@ -147,7 +147,7 @@ function renderDetail(d, el) {
     </div>
     <div id="neo4j-state-${cssEscape(d.project.id)}"></div>
     <div class="detail-grid">
-      ${renderModeCol('mode0', 'Mode 0', 'SAT 全量版本', d.mode0_versions, totalM0, 'mode0')}
+      ${renderModeCol('mode0', '旧 Mode 0', '只读历史记录', d.mode0_versions, totalM0, 'mode0')}
       ${renderModeCol('mode1', 'Mode 1', 'JSON 图版本', d.mode1_json_versions, totalM1, 'mode1')}
       ${renderModeCol('eg', 'Entity Graph', '图版本', d.entity_graph_versions, totalEG, 'eg')}
     </div>

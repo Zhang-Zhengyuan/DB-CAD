@@ -1,3 +1,4 @@
+#include <stdexcept>
 /**
  * entity_graph_serializer.cpp
  *
@@ -15,6 +16,7 @@
  */
 
 #include "entity_graph_serializer.h"
+#include "kernel/acis_sat_io.hxx"
 
 #include <acis/include/api.hxx>
 #include <acis/include/cstrapi.hxx>
@@ -1208,8 +1210,8 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
     //   2) 已访问实体挂有 ATTRIB 属性链（拓扑 BFS 结构性不可见 → 否则静默丢失）
     //   3) 样条面子类 ∉ {37,60 exactsur, 63 rulesur}（过程曲面，NURBS 仅拟合）
     //   4) pcurve/intcurve 无 bs2/bs3（nobs2/nobs3 标记）
-    // 恢复端见片段即整组件走内核 SAT 读回（100% 一致）；实体节点照常发射，
-    // 查询/合并粒度不受影响。旧客户端忽略该字段，协议向后兼容。
+    // 每个顶级组件均附 SAT：已知风险标记 sat_fragment，其他组件 on_failure。
+    // 恢复端逐 UUID 选择细粒度或内核备份；版本、查询和合并共用该组件。
     // 细化路线：每攻掉一类触发条件即从此处移除，粗粒度集合单调收缩。
     // =========================================================================
     {
@@ -1297,8 +1299,10 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
         };
         int fragCount = 0;
         for (const auto &pr : orderedNodes) {
-            if (pr.second.label != "body")
-                continue;
+            int rootPosition = -1;
+            for (int i = 0; i < topLevelEntities.count(); ++i)
+                if ((const void *)topLevelEntities[i] == pr.first) { rootPosition = i; break; }
+            if (rootPosition < 0) continue;
             const QString bodyId = pr.second.id;
             // body 连通闭包
             QVector<QString> closure;
@@ -1314,43 +1318,38 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                         q.enqueue(nb);
                     }
             }
-            bool risky = false;
+            bool risky = pr.second.label != "body";
             for (const QString &cid : closure)
                 if (const IntNode *cn = nodeById.value(cid, nullptr); cn && nodeRisky(*cn)) {
                     risky = true;
                     break;
                 }
-            if (!risky)
-                continue;
             // 闭包实体表 → SAT 文本片段（内核权威格式）
+            // Save the root only; ACIS owns its entire topology/attribute closure.
             ENTITY_LIST lst;
-            for (const QString &cid : closure)
-                if (ENTITY *en = idToEnt.value(cid, nullptr))
-                    lst.add(en);
+            lst.add(idToEnt.value(bodyId));
             QString frag;
-            FILE *tf = tmpfile();
-            if (tf && api_save_entity_list(tf, TRUE, lst).ok()) {
-                fseek(tf, 0, SEEK_END);
-                long sz = ftell(tf);
-                rewind(tf);
-                if (sz > 0) {
-                    std::string buf((size_t)sz, '\0');
-                    if (fread(&buf[0], 1, (size_t)sz, tf) == (size_t)sz)
-                        frag = QString::fromLatin1(buf.data(), (int)buf.size());
-                }
-            }
-            if (tf)
-                fclose(tf);
-            if (frag.isEmpty()) {
-                fprintf(stderr, "[Collab] serialize: sat_fragment WRITE FAILED body=%s (component stays fine-grained)\n",
-                        bodyId.toUtf8().constData());
-                continue;
+            try {
+                const auto bytes=dbcad::acis_detail::writeSat(lst);
+                frag=QString::fromLatin1(bytes);
+            } catch(const std::exception& error) {
+                throw std::runtime_error("Cannot serialize SAT backup for body " + bodyId.toStdString() + ": " + error.what());
             }
             fragCount++;
             for (auto &pr2 : orderedNodes) {
                 if (pr2.second.id == bodyId) {
                     pr2.second.props["sat_fragment"] = frag;
-                    pr2.second.props["fallback"] = QStringLiteral("sat_fragment");
+                    pr2.second.props["topology_node_count"] = (int)closure.size();
+                    int relationCount = 0;
+                    for (const auto &value : relsJson) {
+                        const auto rel = value.toObject();
+                        if (seen.contains(rel.value("start").toString()) && seen.contains(rel.value("end").toString()))
+                            ++relationCount;
+                    }
+                    pr2.second.props["topology_rel_count"] = relationCount;
+                    // Known lossy codecs must use SAT even if a skeleton can be created.
+                    pr2.second.props["fallback"] = risky ? QStringLiteral("sat_fragment")
+                                                        : QStringLiteral("on_failure");
                     break;
                 }
             }
@@ -1361,6 +1360,27 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
             fprintf(stderr, "[Collab] serialize: no fallback needed (all components fine-grained)\n");
     }
 
+    QHash<QString, QString> rootRenames;
+    for (auto &entry : orderedNodes) {
+        for (int i = 0; i < topLevelEntities.count(); ++i) {
+            if (entry.first != (const void *)topLevelEntities[i]) continue;
+            const QString uuid = entityIndexToUuid.value(i);
+            if (!uuid.isEmpty() && uuid != entry.second.id) {
+                rootRenames.insert(entry.second.id, uuid);
+                entry.second.id = uuid;
+            }
+            entry.second.props["top_level"] = true;
+            entry.second.props["uuid"] = entry.second.id;
+        }
+    }
+    for (int i = 0; i < relsJson.size(); ++i) {
+        QJsonObject rel = relsJson[i].toObject();
+        for (const QString &key : {QStringLiteral("start"), QStringLiteral("end")}) {
+            const QString old = rel.value(key).toString();
+            if (rootRenames.contains(old)) rel.insert(key, rootRenames.value(old));
+        }
+        relsJson[i] = rel;
+    }
     // 构建最终 JSON
     fprintf(stderr, "[Collab] serializeACISEntityGraph: nodes total=%zu\n", orderedNodes.size());
     int bodyIdx = 0;
@@ -1385,6 +1405,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
     }
 
     QJsonObject root;
+    root["schema"] = "dbcad.entity_graph.v2";
     root["nodes"] = nodesJson;
     root["rels"] = relsJson;
     root["serializer_build"] = QStringLiteral("uvsafe-topology-v5-bounded");

@@ -50,11 +50,11 @@
 #include <sys/types.h>
 #endif
 
-// 把诊断日志同时写到 stderr 和 CAD_DB/log/bridge.err.log，方便跨进程收集
+// 把诊断日志同时写到 stderr 和 CAD_DB/log/storage.log，方便跨进程收集
 namespace diaglog {
 inline std::mutex g_log_mutex;
 inline const char *kLogDir = "CAD_DB/log";
-inline const char *kLogPath = "CAD_DB/log/bridge.err.log";
+inline const char *kLogPath = "CAD_DB/log/storage.log";
 inline void ensure_dir() {
 #ifdef _WIN32
     _mkdir("CAD_DB");
@@ -93,21 +93,6 @@ inline void clear_log() {
         diaglog::write(buf);                                                                                           \
     } while (0)
 
-// 生成一个 mode1 delta 用的 SAT 临时文件路径。
-// 用 std::filesystem::temp_directory_path() + 进程内单调递增计数，避免 tmpnam_s 的安全性警告。
-namespace mode1_temp {
-inline std::atomic<int> g_seq{0};
-inline std::string make_delta_temp_path(const char *tag) {
-    int idx = g_seq.fetch_add(1);
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    fs::path dir = fs::temp_directory_path(ec);
-    if (ec)
-        dir = fs::current_path();
-    std::string name = std::string(tag) + "_" + std::to_string(idx) + ".sat";
-    return (dir / name).string();
-}
-} // namespace mode1_temp
 
 class Node {
   public:
