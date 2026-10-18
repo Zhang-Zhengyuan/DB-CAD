@@ -1,5 +1,10 @@
 // GlbWriter 实现：手写最小 glTF 2.0 JSON + BIN 拼装，无第三方 JSON 依赖
 // （core 引入 nlohmann 是 P6 的事，见 V3_PLAN.md）。
+//
+// 布局规则（mesh_tests 结构校验依赖）：按 positions | normals | indices |
+// edgePositions | edgeIndices 的固定顺序拼 BIN，存在的段才出现；
+// bufferView/accessor 编号按同顺序递增。三角形网格必有 TRIANGLES 图元；
+// 有边折线必有 LINES 图元（纯线图元：仅 LINES）。
 #include "glb_writer.h"
 
 #include <cmath>
@@ -43,6 +48,11 @@ std::string vec3(const double v[3]) {
     return "[" + num(v[0]) + "," + num(v[1]) + "," + num(v[2]) + "]";
 }
 
+struct Section {
+    std::uint32_t offset = 0;
+    std::uint32_t bytes = 0;
+};
+
 }  // namespace
 
 std::vector<unsigned char> GlbWriter::write(const MeshData& mesh, std::string* error) {
@@ -50,111 +60,135 @@ std::vector<unsigned char> GlbWriter::write(const MeshData& mesh, std::string* e
         if (error) *error = message;
         return std::vector<unsigned char>();
     };
-    if (mesh.positions.empty() || mesh.indices.empty())
-        return fail("mesh has no triangles");
-    if (mesh.normals.size() != mesh.positions.size())
+    const bool hasTriangles = !mesh.indices.empty();
+    const bool hasEdges = !mesh.edgePositions.empty();
+    if (!hasTriangles && !hasEdges)
+        return fail("mesh has no triangles or edges");
+    if (hasTriangles && mesh.normals.size() != mesh.positions.size())
         return fail("normals/positions size mismatch");
+    if (hasTriangles && mesh.positions.empty())
+        return fail("triangles without positions");
     const std::uint32_t vertexCount = mesh.vertexCount();
     for (float value : mesh.positions)
         if (!std::isfinite(value)) return fail("non-finite position");
     for (float value : mesh.normals)
         if (!std::isfinite(value)) return fail("non-finite normal");
+    for (float value : mesh.edgePositions)
+        if (!std::isfinite(value)) return fail("non-finite edge position");
     for (std::uint32_t index : mesh.indices)
         if (index >= vertexCount) return fail("index out of range");
-    const bool hasEdges = !mesh.edgePositions.empty();
 
-    // ---- BIN：按头文件声明的固定段顺序拼装 ------------------------------
+    // ---- BIN：固定段顺序，存在的段才写入 ------------------------------
     std::vector<unsigned char> bin;
-    MinMax posRange;
-    for (size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
-        posRange.add(&mesh.positions[i]);
-        appendF32(bin, mesh.positions[i]);
-        appendF32(bin, mesh.positions[i + 1]);
-        appendF32(bin, mesh.positions[i + 2]);
-    }
-    for (float value : mesh.normals) appendF32(bin, value);
+    Section positionSection, normalSection, indexSection, edgePositionSection, edgeIndexSection;
+    MinMax posRange, edgeRange;
     std::uint32_t indexMax = 0;
-    for (std::uint32_t index : mesh.indices) {
-        if (index > indexMax) indexMax = index;
-        appendU32(bin, index);
+    if (hasTriangles) {
+        positionSection.offset = 0;
+        positionSection.bytes = static_cast<std::uint32_t>(mesh.positions.size() * 4);
+        for (size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
+            posRange.add(&mesh.positions[i]);
+            appendF32(bin, mesh.positions[i]);
+            appendF32(bin, mesh.positions[i + 1]);
+            appendF32(bin, mesh.positions[i + 2]);
+        }
+        normalSection.offset = positionSection.bytes;
+        normalSection.bytes = static_cast<std::uint32_t>(mesh.normals.size() * 4);
+        for (float value : mesh.normals) appendF32(bin, value);
+        indexSection.offset = normalSection.offset + normalSection.bytes;
+        indexSection.bytes = static_cast<std::uint32_t>(mesh.indices.size() * 4);
+        for (std::uint32_t index : mesh.indices) {
+            if (index > indexMax) indexMax = index;
+            appendU32(bin, index);
+        }
     }
-    MinMax edgeRange;
-    std::vector<std::uint32_t> edgeIndices;
+    std::uint32_t edgeIndexCount = 0;
     std::uint32_t edgeIndexMax = 0;
+    std::vector<std::uint32_t> edgeIndices;
+    for (const MeshEdgeRun& run : mesh.edges) {
+        for (std::uint32_t i = 1; i < run.vertexCount; ++i) {
+            const std::uint32_t a = run.firstVertex + i - 1;
+            const std::uint32_t b = run.firstVertex + i;
+            edgeIndices.push_back(a);
+            edgeIndices.push_back(b);
+            if (b > edgeIndexMax) edgeIndexMax = b;
+        }
+    }
     if (hasEdges) {
+        edgePositionSection.offset = static_cast<std::uint32_t>(bin.size());
+        edgePositionSection.bytes = static_cast<std::uint32_t>(mesh.edgePositions.size() * 4);
         for (size_t i = 0; i + 2 < mesh.edgePositions.size(); i += 3)
             edgeRange.add(&mesh.edgePositions[i]);
         for (float value : mesh.edgePositions) appendF32(bin, value);
-        for (const MeshEdgeRun& run : mesh.edges) {
-            for (std::uint32_t i = 1; i < run.vertexCount; ++i) {
-                const std::uint32_t a = run.firstVertex + i - 1;
-                const std::uint32_t b = run.firstVertex + i;
-                edgeIndices.push_back(a);
-                edgeIndices.push_back(b);
-                if (b > edgeIndexMax) edgeIndexMax = b;
-            }
-        }
+        edgeIndexSection.offset = edgePositionSection.offset + edgePositionSection.bytes;
+        edgeIndexSection.bytes = static_cast<std::uint32_t>(edgeIndices.size() * 4);
+        edgeIndexCount = static_cast<std::uint32_t>(edgeIndices.size());
         for (std::uint32_t index : edgeIndices) appendU32(bin, index);
     }
-    const std::uint32_t positionBytes = static_cast<std::uint32_t>(mesh.positions.size() * 4);
-    const std::uint32_t normalBytes = static_cast<std::uint32_t>(mesh.normals.size() * 4);
-    const std::uint32_t indexBytes = static_cast<std::uint32_t>(mesh.indices.size() * 4);
-    const std::uint32_t edgePositionBytes =
-        hasEdges ? static_cast<std::uint32_t>(mesh.edgePositions.size() * 4) : 0;
-    // 块大小均为 4 的倍数，无需补齐即可满足 glTF 对齐要求。
 
-    // ---- JSON -----------------------------------------------------------
-    const std::uint32_t offsetNormals = positionBytes;
-    const std::uint32_t offsetIndices = offsetNormals + normalBytes;
-    const std::uint32_t offsetEdgePositions = offsetIndices + indexBytes;
-    const std::uint32_t offsetEdgeIndices = offsetEdgePositions + edgePositionBytes;
-
+    // ---- JSON：bufferView/accessor 按段顺序编号 -------------------------
     std::string json;
     json += "{\"asset\":{\"version\":\"2.0\",\"generator\":\"DB-CAD v3 MeshExtractor\"},";
     json += "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0,\"name\":\"component\"}],";
 
-    json += "\"bufferViews\":[";
-    auto view = [&](std::uint32_t idx, std::uint32_t offset, std::uint32_t bytes) {
-        if (idx) json += ",";
-        json += "{\"buffer\":0,\"byteOffset\":" + num(offset) + ",\"byteLength\":" + num(bytes) + "}";
+    int nextId = 0;
+    int viewPosition = -1, viewNormal = -1, viewIndex = -1, viewEdgePosition = -1, viewEdgeIndex = -1;
+    int accPosition = -1, accNormal = -1, accIndex = -1, accEdgePosition = -1, accEdgeIndex = -1;
+    std::string viewsJson;
+    auto addView = [&](Section section) {
+        int id = nextId++;
+        if (!viewsJson.empty()) viewsJson += ",";
+        viewsJson += "{\"buffer\":0,\"byteOffset\":" + num(section.offset) +
+                     ",\"byteLength\":" + num(section.bytes) + "}";
+        return id;
     };
-    view(0, 0, positionBytes);
-    view(1, offsetNormals, normalBytes);
-    view(2, offsetIndices, indexBytes);
-    if (hasEdges) {
-        view(3, offsetEdgePositions, edgePositionBytes);
-        view(4, offsetEdgeIndices, static_cast<std::uint32_t>(edgeIndices.size() * 4));
+    if (hasTriangles) {
+        viewPosition = addView(positionSection);
+        viewNormal = addView(normalSection);
+        viewIndex = addView(indexSection);
     }
-    json += "],";
+    if (hasEdges) {
+        viewEdgePosition = addView(edgePositionSection);
+        viewEdgeIndex = addView(edgeIndexSection);
+    }
+    json += "\"bufferViews\":[" + viewsJson + "],";
 
-    json += "\"accessors\":[";
-    auto accessorHead = [&](std::uint32_t idx, std::uint32_t viewIdx, const char* type,
-                            int componentType, std::uint32_t count) {
-        if (idx) json += ",";
-        json += "{\"bufferView\":" + num(viewIdx) + ",\"componentType\":" + num(componentType) +
-                ",\"count\":" + num(count) + ",\"type\":\"" + type + "\"";
+    std::string accessorsJson;
+    auto addAccessor = [&](int viewIdx, const char* type, int componentType, std::uint32_t count,
+                           const char* extra) {
+        int id = nextId++;
+        if (!accessorsJson.empty()) accessorsJson += ",";
+        accessorsJson += "{\"bufferView\":" + num(viewIdx) + ",\"componentType\":" + num(componentType) +
+                         ",\"count\":" + num(count) + ",\"type\":\"" + type + "\"" + extra + "}";
+        return id;
     };
-    accessorHead(0, 0, "VEC3", 5126, vertexCount);
-    json += ",\"min\":" + vec3(posRange.mn) + ",\"max\":" + vec3(posRange.mx) + "}";
-    accessorHead(1, 1, "VEC3", 5126, vertexCount);
-    json += "}";
-    accessorHead(2, 2, "SCALAR", 5125, static_cast<std::uint32_t>(mesh.indices.size()));
-    json += ",\"max\":" + num(indexMax) + "}";
-    if (hasEdges) {
-        const std::uint32_t edgeVertexCount =
-            static_cast<std::uint32_t>(mesh.edgePositions.size() / 3);
-        accessorHead(3, 3, "VEC3", 5126, edgeVertexCount);
-        json += ",\"min\":" + vec3(edgeRange.mn) + ",\"max\":" + vec3(edgeRange.mx) + "}";
-        accessorHead(4, 4, "SCALAR", 5125, static_cast<std::uint32_t>(edgeIndices.size()));
-        json += ",\"max\":" + num(edgeIndexMax) + "}";
+    if (hasTriangles) {
+        accPosition = addAccessor(viewPosition, "VEC3", 5126, vertexCount,
+                                  (",\"min\":" + vec3(posRange.mn) + ",\"max\":" + vec3(posRange.mx)).c_str());
+        accNormal = addAccessor(viewNormal, "VEC3", 5126, vertexCount, "");
+        accIndex = addAccessor(viewIndex, "SCALAR", 5125,
+                               static_cast<std::uint32_t>(mesh.indices.size()),
+                               (",\"max\":" + num(indexMax)).c_str());
     }
-    json += "],";
+    if (hasEdges) {
+        accEdgePosition = addAccessor(viewEdgePosition, "VEC3", 5126,
+                                      static_cast<std::uint32_t>(mesh.edgePositions.size() / 3),
+                                      (",\"min\":" + vec3(edgeRange.mn) + ",\"max\":" + vec3(edgeRange.mx)).c_str());
+        accEdgeIndex = addAccessor(viewEdgeIndex, "SCALAR", 5125, edgeIndexCount,
+                                   (",\"max\":" + num(edgeIndexMax)).c_str());
+    }
+    json += "\"accessors\":[" + accessorsJson + "],";
 
-    json += "\"meshes\":[{\"primitives\":[";
-    json += "{\"attributes\":{\"POSITION\":0,\"NORMAL\":1},\"indices\":2,\"mode\":4}";
-    if (hasEdges)
-        json += ",{\"attributes\":{\"POSITION\":3},\"indices\":4,\"mode\":1}";
-    json += "],\"extras\":{";
+    std::string primitivesJson;
+    if (hasTriangles)
+        primitivesJson += "{\"attributes\":{\"POSITION\":" + num(accPosition) +
+                          ",\"NORMAL\":" + num(accNormal) + "},\"indices\":" + num(accIndex) + ",\"mode\":4}";
+    if (hasEdges) {
+        if (!primitivesJson.empty()) primitivesJson += ",";
+        primitivesJson += "{\"attributes\":{\"POSITION\":" + num(accEdgePosition) +
+                          "},\"indices\":" + num(accEdgeIndex) + ",\"mode\":1}";
+    }
+    json += "\"meshes\":[{\"primitives\":[" + primitivesJson + "],\"extras\":{";
     json += "\"faceRanges\":[";
     for (size_t i = 0; i < mesh.faces.size(); ++i) {
         if (i) json += ",";

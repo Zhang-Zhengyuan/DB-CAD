@@ -163,6 +163,7 @@
     <ClCompile Include="..\scripts\tests\mesh_bench.cpp" Condition="'$(DBCADMeshBench)' == 'true'" />
     <ClCompile Include="..\scripts\tests\mesh_tests.cpp" Condition="'$(DBCADMeshTests)' == 'true'" />
     <ClCompile Include="worker\main.cpp" Condition="'$(DBCADWorker)' == 'true'" />
+    <ClCompile Include="worker\session.cpp" Condition="'$(DBCADWorker)' == 'true'" />
     <ClCompile Include="kernel\mesh_extractor.cpp" />
     <ClCompile Include="kernel\glb_writer.cpp" />
   </ItemGroup>

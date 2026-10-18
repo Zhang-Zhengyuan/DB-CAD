@@ -1,20 +1,30 @@
-// v3 几何 worker（V3_PLAN.md ADR-1/ADR-2 · P1 交付）：无 Qt 控制台进程。
+// v3 几何 worker（V3_PLAN.md ADR-1/ADR-2 · P1/P2 交付）：无 Qt 控制台进程。
 //
-// P1 形态：批处理 CLI，由 FastAPI 网关按次调用（导入是低频操作）。
-// 常驻进程 + 命令队列在 P2 命令引擎时升级，届时本 main 换成行协议循环，
-// SAT→组件→GLB 的流水线函数（importDirectory）原样复用。
+// P1 形态：批处理 CLI（import/merge/export/selftest），网关按次调用。
+// P2 形态：serve 常驻模式——stdin/stdout JSON 行协议，网关每项目一会话：
+//   → {"id":1,"op":"ping"}
+//   → {"id":2,"op":"open","spool":"<dir>","components":[{"sid":"c0","file":"c0.sat"}]}
+//   → {"id":3,"op":"exec","command":{"action":"component.create","params":{...}}}
+//   ← {"id":3,"ok":true,"result":{"added":[...],"modified":[...],"removed":[...]}}
+//   → {"id":4,"op":"close"}（进程随之退出）
+//  exec 语义见 worker/session.h；命令失败回 ok:false+error，会话由网关重建。
 //
-// 命令：
+// 批处理命令：
 //   dbcad_worker import --sat <path> --outdir <dir>
-//     SAT → 逐顶层 BODY：独立 SAT 组件 + medium_fine GLB + 包围盒/颜色元数据
-//     → <dir>/manifest.json（schema=dbcad.worker.import/1）
+//   dbcad_worker merge --sat-list <a,b> --out <p>
+//   dbcad_worker export --sat-list <a,b> --glb-out <p>
 //   dbcad_worker selftest
-//     内建模型 存→读→导入 全链路自检（网关集成测试前的快速验证）
 // 退出码：0 成功 / 1 失败（stderr 带原因）。错误显式，不静默兜底（v3 原则）。
 #include "kernel/mesh_extractor.h"
 #include "kernel/glb_writer.h"
+#include "session.h"
+
+#include "vendor/nlohmann/json.hpp"
 
 #include "acis.hxx"
+
+#include <iostream>
+#include <memory>
 
 #include "acis/include/acistype.hxx"
 #include "acis/include/api.hxx"
@@ -36,6 +46,8 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+using json = nlohmann::json;
 
 int fail(const std::string& message) {
     std::fprintf(stderr, "[worker] %s\n", message.c_str());
@@ -280,6 +292,56 @@ int exportGlb(const std::vector<fs::path>& inputs, const fs::path& output) {
     return 0;
 }
 
+// ---- P2 serve 模式：常驻行协议 ------------------------------------------
+int serveLoop() {
+    using dbcad::worker::GeometrySession;
+    std::unique_ptr<GeometrySession> session;
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        json request = json::parse(line, nullptr, false);
+        json response = {{"ok", false}, {"error", "bad request: expected JSON with id"}};
+        int id = -1;
+        bool hasId = false;
+        if (!request.is_discarded() && request.contains("id")) {
+            id = request.at("id").get<int>();
+            hasId = true;
+        }
+        if (!hasId) {
+            std::cout << response.dump() << "\n" << std::flush;
+            continue;
+        }
+        response = {{"id", id}, {"ok", false}, {"error", "unknown op"}};
+        const std::string op = request.value("op", "");
+        try {
+            if (op == "ping") {
+                response = {{"id", id}, {"ok", true}};
+            } else if (op == "open") {
+                session = std::make_unique<GeometrySession>(request.value("spool", ""));
+                std::vector<std::pair<std::string, std::string>> components;
+                if (request.contains("components"))
+                    for (const json& entry : request.at("components"))
+                        components.push_back({entry.value("sid", ""), entry.value("file", "")});
+                const std::string error = session->open(components);
+                if (error.empty()) response = {{"id", id}, {"ok", true}};
+                else response = {{"id", id}, {"ok", false}, {"error", error}};
+            } else if (op == "exec") {
+                if (!session || !session->opened())
+                    throw std::runtime_error("no open session");
+                const std::string result = session->exec(request.at("command").dump());
+                response = {{"id", id}, {"ok", true}, {"result", json::parse(result)}};
+            } else if (op == "close") {
+                session.reset();
+                response = {{"id", id}, {"ok", true}};
+            }
+        } catch (const std::exception& exc) {
+            response = {{"id", id}, {"ok", false}, {"error", exc.what()}};
+        }
+        std::cout << response.dump() << "\n" << std::flush;
+        if (op == "close") return 0;
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -291,7 +353,9 @@ int main(int argc, char** argv) {
 
     int code = 1;
     const std::string command = argc >= 2 ? argv[1] : "";
-    if (command == "selftest") {
+    if (argc == 2 && command == "serve") {
+        code = serveLoop();
+    } else if (command == "selftest") {
         code = selftest(fs::temp_directory_path() / "dbcad_worker_selftest");
     } else if (argc == 6 && command == "merge" && std::string(argv[2]) == "--sat-list" &&
                std::string(argv[4]) == "--out") {

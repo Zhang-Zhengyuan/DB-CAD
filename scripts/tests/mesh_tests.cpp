@@ -117,6 +117,11 @@ void testExtractLadder(const char* name, BODY& body) {
         expect(indicesOk, tag + ": indices in range");
         expect(mesh.triangleCount() >= previousTris, tag + ": quality ladder monotonic");
         previousTris = mesh.triangleCount();
+        // 精确回归：平面立方体 = 6 面 x 2 三角。曾因 serialize_triangles
+        // 返回值语义误读（三角形数 vs 索引数）少算 2/3，mesh_tests 当时
+        // 内部自洽未察觉——worker 集成才暴露，此处钉死。
+        if (std::string(name) == "cuboid" && q == 1)
+            expect(mesh.triangleCount() == 12, "cuboid exact triangle count (6 faces x 2)");
         // faceRanges 计数闭合
         std::uint64_t sum = 0;
         for (const MeshFaceRange& range : mesh.faces) sum += range.indexCount;

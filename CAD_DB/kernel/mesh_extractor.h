@@ -8,8 +8,10 @@
 //  - 法线一律取内核 facet 法线：P0 实测 visualization 档 32/32 恒有法线，
 //    面缺网格或缺法线=显式错误；旧实现的"平面静默回退"已废除。
 //  - 边折线走 api_get_facet_edge_points：实测返回局部坐标（af_api.hxx 声称
-//    已应用宿主变换，但对本路径不成立），与面片一致乘恰好一次 get_owner_transf
+//    已应用宿主变换，但对本路径不实），与面片一致乘恰好一次 get_owner_transf
 //    （mesh_tests 的 transform 用例锁定该语义）。
+//  - extractEntity 分发 BODY/FACE/EDGE 三类顶层图元（P2 命令引擎：面/线
+//    图元与体同级成为组件）；纯线图元产出的 MeshData 无三角形、只有边折线。
 //  - Qt-free：P1 headless worker 与 GLB 序列化直接复用，P6 去 Qt 不受影响。
 // 线程模型：ACIS modeller 状态为进程级（ADR-2），调用方负责串行化。
 #include <cstdint>
@@ -17,6 +19,9 @@
 #include <vector>
 
 class BODY;
+class ENTITY;
+class FACE;
+class EDGE;
 
 namespace dbcad {
 
@@ -61,6 +66,9 @@ public:
     // 离散化并读取一个 BODY。失败路径全部显式（ok=false + error），不做静默
     // 几何兜底。进程内串行调用。
     static MeshResult extract(BODY& body, MeshQuality quality);
+    // 顶层图元分发：BODY→三角面片；FACE→单面面片+边；EDGE→仅边折线
+    // （MeshData.indices/positions 为空）。其余类型显式报错。
+    static MeshResult extractEntity(ENTITY& entity, MeshQuality quality);
 };
 
 // 把 src 追加到 dst（索引/区间偏移平移），用于多体合成单一网格（整体导出）。

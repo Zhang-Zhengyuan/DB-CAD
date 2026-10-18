@@ -85,6 +85,18 @@ class MemoryV1Store:
         self.versions: dict[str, list[V1Version]] = {}
         self.tags: dict[str, dict[str, int]] = {}
         self.branches: dict[str, dict[str, int]] = {}
+        # 撤销栈（进程内）：undo 压入被撤销清单，redo 弹出重放。
+        # 不随 Neo4j 持久化——服务重启后 redo 清空是可接受语义。
+        self.redo_stacks: dict[str, list[list[SceneComponent]]] = {}
+
+    def push_redo(self, project_id: str, components: list[SceneComponent]) -> None:
+        self.redo_stacks.setdefault(project_id, []).append(list(components))
+
+    def pop_redo(self, project_id: str) -> list[SceneComponent] | None:
+        stack = self.redo_stacks.get(project_id)
+        if not stack:
+            return None
+        return stack.pop()
 
     # ---- 项目 ----------------------------------------------------------
     def create_project(self, name: str) -> ProjectRecord:
@@ -117,6 +129,7 @@ class MemoryV1Store:
         self.versions.pop(project_id, None)
         self.tags.pop(project_id, None)
         self.branches.pop(project_id, None)
+        self.redo_stacks.pop(project_id, None)
 
     def touch(self, project_id: str) -> None:
         self.projects[project_id].updated_at = _now()

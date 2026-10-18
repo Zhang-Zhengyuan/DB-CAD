@@ -212,15 +212,14 @@ def test_export_sat_and_glb(client):
     assert stl.status_code == 501
 
 
-def test_command_endpoints_are_contractual_501(client):
+def test_command_schema_endpoint_contract(client):
+    """命令端点自 P2 起真实实现（见 test_api_v1_commands.py）；此处锁定
+    schema 目录的契约形状。"""
     client, _fake = client
-    imported = _import_project(client, "cmds")
-    project_id = imported["project_id"]
-    for suffix in ("commands", "commands/dry-run", "undo", "redo"):
-        response = client.post(f"/api/v1/projects/{project_id}/{suffix}")
-        assert response.status_code == 501, suffix
     schema = client.get("/api/v1/schema/commands").json()
     assert schema["schema"] == "dbcad.commands/1"
+    assert "component.create" in schema["commands"]
+    assert "boolean.unite" in schema["commands"]
 
 
 def test_websocket_receives_commit_events(client):
