@@ -157,10 +157,13 @@
     <ClCompile Include="ui\mainwindow_config.cpp" />
     <ClCompile Include="ui\mainwindow_menus.cpp" />
 
-    <ClCompile Include="main.cpp" Condition="'$(DBCADRegression)' != 'true' And '$(DBCADCoreTests)' != 'true' And '$(DBCADMeshBench)' != 'true'" />
+    <ClCompile Include="main.cpp" Condition="'$(DBCADRegression)' != 'true' And '$(DBCADCoreTests)' != 'true' And '$(DBCADMeshBench)' != 'true' And '$(DBCADMeshTests)' != 'true'" />
     <ClCompile Include="..\scripts\tests\client_regression.cpp" Condition="'$(DBCADRegression)' == 'true'" />
     <ClCompile Include="..\scripts\tests\core_unit_tests.cpp" Condition="'$(DBCADCoreTests)' == 'true'" />
     <ClCompile Include="..\scripts\tests\mesh_bench.cpp" Condition="'$(DBCADMeshBench)' == 'true'" />
+    <ClCompile Include="..\scripts\tests\mesh_tests.cpp" Condition="'$(DBCADMeshTests)' == 'true'" />
+    <ClCompile Include="kernel\mesh_extractor.cpp" />
+    <ClCompile Include="kernel\glb_writer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="core\collab_backend.h" />
@@ -174,6 +177,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="kernel\geometry_kernel.h" />
+    <ClInclude Include="kernel\mesh_extractor.h" />
+    <ClInclude Include="kernel\glb_writer.h" />
     <ClInclude Include="kernel\model_types.h" />
     <ClInclude Include="kernel\document_model.h" />
     <ClInclude Include="acis.hxx" />
@@ -226,9 +231,11 @@
     <IntDir Condition="'$(DBCADRegression)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\ClientRegression\$(Configuration)\</IntDir>
     <IntDir Condition="'$(DBCADCoreTests)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\CoreUnitTests\$(Configuration)\</IntDir>
     <IntDir Condition="'$(DBCADMeshBench)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\MeshBench\$(Configuration)\</IntDir>
+    <IntDir Condition="'$(DBCADMeshTests)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\MeshTests\$(Configuration)\</IntDir>
     <TargetName Condition="'$(DBCADRegression)' == 'true'">client_regression</TargetName>
     <TargetName Condition="'$(DBCADCoreTests)' == 'true'">core_unit_tests</TargetName>
     <TargetName Condition="'$(DBCADMeshBench)' == 'true'">mesh_bench</TargetName>
+    <TargetName Condition="'$(DBCADMeshTests)' == 'true'">mesh_tests</TargetName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

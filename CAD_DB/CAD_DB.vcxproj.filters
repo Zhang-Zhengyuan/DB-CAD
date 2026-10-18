@@ -19,6 +19,8 @@
     <ClCompile Include="core\document_session.cpp"><Filter>core</Filter></ClCompile>
     <ClCompile Include="core\http_transport.cpp"><Filter>core</Filter></ClCompile>
     <ClCompile Include="core\sat_file_backend.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="kernel\mesh_extractor.cpp"><Filter>kernel</Filter></ClCompile>
+    <ClCompile Include="kernel\glb_writer.cpp"><Filter>kernel</Filter></ClCompile>
     <ClCompile Include="glwidget.cpp" />
     <ClCompile Include="window.cpp" />
     <QtRcc Include="mainwindow.qrc" />
@@ -48,6 +50,8 @@
     <ClInclude Include="core\sat_file_backend.h"><Filter>core</Filter></ClInclude>
     <ClInclude Include="core\storage_backend.h"><Filter>core</Filter></ClInclude>
     <ClInclude Include="kernel\geometry_kernel.h"><Filter>kernel</Filter></ClInclude>
+    <ClInclude Include="kernel\mesh_extractor.h"><Filter>kernel</Filter></ClInclude>
+    <ClInclude Include="kernel\glb_writer.h"><Filter>kernel</Filter></ClInclude>
     <ClInclude Include="kernel\model_types.h"><Filter>kernel</Filter></ClInclude>
     <ClInclude Include="kernel\document_model.h"><Filter>kernel</Filter></ClInclude>
     <ClInclude Include="acis.hxx" />
