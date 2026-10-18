@@ -12,7 +12,8 @@
 3. **A（默认档，现状）**：介于 B 的 coarse 与 medium_fine 之间，无参数可控——被 B 严格取代。
 4. **法线结论**：所有路径（含默认档）`has_normals()` 均为真，`serialize_normals` 直接可用——**旧代码的平面法线手工回退不必要**；旧回退真正兜的是"图恢复面缺 facet 网格"场景（PCURVE 重建失败），新 MeshExtractor 改为显式报错+日志，不再静默三角化外环。
 5. **缓存结论**：同参数二次离散**没有任何缓存收益**（球 49ms vs 首次 18ms，反而更慢——疑似在旧 facet 上重算）——内核层无免费缓存，**worker 侧内容寻址网格缓存（V3_PLAN API 设计 `/assets/{hash}`）是必需设计而非优化项**。
-6. **SDK 能力边界（重要发现）**：`api_get_facet_face_tri_points` / `api_get_sequential_mesh` 属 compound 组件（DECL_COMPOUND），符号不在授权库 SPAAcisDsd.lib 中（链接实测 + 二进制 grep 双重确认）；`api_delete_entity_facets` / `GetSerializableMesh` / `af_serializable_mesh` 可用。**三角形读取通道 = `GetSerializableMesh(FACE*)` + serialize_positions/normals/triangles**，这也是旧代码手工遍历存在的原因——但"手工"仅指遍历面，序列化本身是官方接口。
+6. **SDK 能力边界（2026-10-18 复核修正）**：`api_get_facet_face_tri_points` / `api_get_sequential_mesh` 等 compound API **在授权包内，但位于独立 DLL `SpaAcisCompound.dll`**（bin 下 release/debug 各一，dumpbin 证实导出这批符号含 `INT_ARRAY` 系列），而发行包**未附带该 DLL 的导入库**（全包 .lib 检索无果，官方 samples 也不链它），项目 `_deps` 更未引入——故链接失败。如确需启用：`dumpbin /exports SpaAcisCompound.dll` → 生成 .def → `lib /def` 造导入库并随部署拷 DLL。**本选型不需要**：`GetSerializableMesh` + serialize_* 用现有已链接库即可拿到相同数据（位置/法线/三角形索引），少部署一个 DLL。可用/不可用清单：`api_facet_entity`、`api_delete_entity_facets`、`GetSerializableMesh`、`api_get_facet_edge_points` ✓；compound 系（tri_points/sequential_mesh/SEQUENTIAL_MESH）✗（除非自制导入库）。
+7. **授权包家底补充（D:\ACISCAD 全套包勘察）**：① Interop_2026.1.0.1 完整在包（SPAIInterop/SPAIop 等导入库齐全）——STEP/IGES/CATIA/SolidWorks/Inventor 转换器授权可用，v3 导入导出面比预想宽；② `2026.1.0.1_demo_models/` 含 ACIS/CATIAV5/IGES/SolidWorks 示例模型——MeshExtractor 重写后的天然验证语料。两者均尚未引入 `_deps`。
 
 ## 基准数据（节选）
 

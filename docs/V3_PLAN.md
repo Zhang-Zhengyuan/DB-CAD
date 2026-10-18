@@ -7,7 +7,7 @@
 
 1. **旧 API 全部废弃**：json-delta 推拉协议、旧 WS 通知、旧 WebUI 端点标记 deprecated，v3 上线验收后物理删除。不搞兼容层、不做双写过渡。
 2. **服务端权威（server-authoritative）**：建模命令在服务侧执行（worker 里的 ACIS），客户端只提交命令、渲染网格。这是 Onshape 验证过的云端 CAD 架构——几何计算集中、每个协作者看到同一状态、天然配合数据库式版本管理。旧的"客户端本地建模 + 推 json-delta"模式随之退役。
-3. **几何内核边界保留，实现刷新**：`GeometryKernel` 的中立接口设计（PR #5 成果，输出全是句柄/坐标/JSON，无 SDK 类型泄漏）是对的，保留并扩展（参数化 create、新 MeshExtractor）；`gme_mesh` 旧离散化实现废弃重写。ACIS SDK 无 STEP 转换器（已查 `_deps`，无 InterOp），导入导出以 SAT 原生 + GLB/STL 网格为准，STEP 列为后续授权项。
+3. **几何内核边界保留，实现刷新**：`GeometryKernel` 的中立接口设计（PR #5 成果，输出全是句柄/坐标/JSON，无 SDK 类型泄漏）是对的，保留并扩展（参数化 create、新 MeshExtractor）；`gme_mesh` 旧离散化实现废弃重写。**导入导出面（2026-10-18 勘察 D:\ACISCAD 全套授权包后修正）**：授权包含完整 Interop（STEP/IGES/CATIA/SolidWorks/Inventor 转换器，导入库齐全），只是 `_deps` 尚未引入——SAT 原生 + GLB/STL 先行，STEP 纳入 P5（引入 `_deps` 即可用，无需新授权）；compound 系面片 API 在独立 DLL 且无导入库，不使用（见 P0_MESH_BENCH.md §6）。
 
 ## 1. 目标架构
 
@@ -109,7 +109,7 @@ FastAPI 网关（鉴权/限流/静态托管）
 | **P2 命令执行引擎（服务端全功能）** | CommandBus 面向服务器化：全部 34 图元 + 布尔/求交/去重 + 变换 + undo/redo 栈；参数 schema 端点；dry-run；rebase 语义 | 纯 API（无 UI）跑通与 Qt 客户端等价的建模全流程；命令级契约测试 | 1 周 |
 | **P3 Web 查看器** | R3F 脚手架；scene/asset 增量加载；相机/标准视图/显示模式/边线；组件树、点选高亮、属性面板；版本时间线 | 打开项目即渲染，版本切换只补拉增量；abc 中等模型流畅 | 1.5 周 |
 | **P4 建模与协同交互** | 工具栏+参数化插入表单（schema 驱动生成）；gizmo 平移/旋转/缩放；布尔/删除/撤销；双端协同（WS 增量刷新、在场、edit_intent、409 冲突 UX） | 两个浏览器标签完整复现现 Qt 双客户端回归场景 | 1.5-2 周 |
-| **P5 工业级收口** | 测量、剖切、导入导出、性能压测（abc_cache 万面模型：meshopt/LOD/懒加载）、Playwright e2e 门禁 | 大模型首屏秒级；e2e 绿；功能矩阵 P0/P1 全勾 | 1 周 |
+| **P5 工业级收口** | 测量、剖切、导入导出（含 STEP：从全套授权包引入 Interop 到 `_deps`）、性能压测（abc_cache 万面模型 + demo_models：meshopt/LOD/懒加载）、Playwright e2e 门禁 | 大模型首屏秒级；e2e 绿；功能矩阵 P0/P1 全勾 | 1 周 |
 | **P6 旧物拆除** | json-delta/旧 WS/旧 WebUI 端点删除；Qt 客户端与 QtCore 依赖删除（core 换 nlohmann/std）；构建与部署脚本瘦身 | 构建无 Qt；仓库无旧协议代码；全部门禁绿；tag `v3` | 1-1.5 周 |
 
 **总计约 8-10 周**到"Qt 依赖物理删除、工业级 Web 客户端接管"。P0/P1 期间 Qt 客户端冻结只修致命 bug；P4 验收后旧客户端事实上退役，P6 物理清除。
@@ -127,7 +127,7 @@ FastAPI 网关（鉴权/限流/静态托管）
 
 ## 6. 明确不做（本期）
 
-草图约束/工程制图/图纸输出、装配体结构、STEP 接入（无授权）、离线模式、移动端。这些是 v3 之后的路线。
+草图约束/工程制图/图纸输出、装配体结构、离线模式、移动端。STEP 已升级为 P5 范围（授权已含 Interop，见 §0.3）。这些是 v3 之后的路线。
 
 ## 7. 变更记录
 
