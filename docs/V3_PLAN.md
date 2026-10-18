@@ -105,7 +105,7 @@ FastAPI 网关（鉴权/限流/静态托管）
 | 里程碑 | 内容 | 验收 | 估时 |
 |---|---|---|---|
 | **P0 面片引擎** | 四路径离散化调研（默认档/visualization/precise/sequential_mesh，抽样基准）→ 重写 `MeshExtractor`（质量档位、内核法线、批量）→ GLB+manifest 序列化 | **已完成（2026-10-18）**：调研选型 B `facet_options_visualization`（[P0_MESH_BENCH.md](P0_MESH_BENCH.md)，compound API 不可用）；`kernel/mesh_extractor`（三档质量、内核法线、边折线、显式错误策略）+ `kernel/glb_writer`（glTF 2.0 二进制 + faceRanges extras）已交付，`mesh_tests` 171 项真实内核校验全绿（含变换语义实证：边折线须乘一次宿主变换，af_api.hxx 文档声明不实） | **1 周** |
-| **P1 API 契约 + 服务端骨架** | OpenAPI v1 草案评审冻结；组件内容寻址入库（SAT 源+GLB 资产双写）；版本提交协议（含 branches 预留）；worker 进程管理与内部调度；WS events | 契约测试绿：建项目→导 SAT→scene/asset 可取；两 worker 并发无竞态 | 1.5-2 周 |
+| **P1 API 契约 + 服务端骨架** | OpenAPI v1 草案评审冻结；组件内容寻址入库（SAT 源+GLB 资产双写）；版本提交协议（含 branches 预留）；worker 进程管理与内部调度；WS events | **已完成（2026-10-18）**：契约冻结（`tests/test_api_v1_contract.py` 路径守门）；`app/component_store`（内容寻址，并发幂等——Windows 竞态已修）；`app/v1_store`（Memory/Neo4j 双实现，base_version 409 乐观锁，标签/分支预留）；`CAD_DB/worker` 批处理 CLI（import/merge/export/selftest，目标 DBCADWorker，Qt-free，ACIS 全链路自检绿）；`/api/v1` 全端点 + WS events；真栈集成测试绿（SAT→ACIS→GLB→scene/export 闭环）。常驻 worker+每项目串行队列随 P2 命令引擎升级（批处理即退化单实例） | 1.5-2 周 |
 | **P2 命令执行引擎（服务端全功能）** | CommandBus 面向服务器化：全部 34 图元 + 布尔/求交/去重 + 变换 + undo/redo 栈；参数 schema 端点；dry-run；rebase 语义 | 纯 API（无 UI）跑通与 Qt 客户端等价的建模全流程；命令级契约测试 | 1 周 |
 | **P3 Web 查看器** | R3F 脚手架；scene/asset 增量加载；相机/标准视图/显示模式/边线；组件树、点选高亮、属性面板；版本时间线 | 打开项目即渲染，版本切换只补拉增量；abc 中等模型流畅 | 1.5 周 |
 | **P4 建模与协同交互** | 工具栏+参数化插入表单（schema 驱动生成）；gizmo 平移/旋转/缩放；布尔/删除/撤销；双端协同（WS 增量刷新、在场、edit_intent、409 冲突 UX） | 两个浏览器标签完整复现现 Qt 双客户端回归场景 | 1.5-2 周 |
@@ -133,3 +133,4 @@ FastAPI 网关（鉴权/限流/静态托管）
 
 - 2026-10-18 拟定。取代 UI_REFACTOR_PLAN.md（UI 视角）为本计划（项目总视角）：旧 API 全废弃、服务端权威命令执行、工业级功能矩阵、8-10 周里程碑。
 - 2026-10-18 P0 完成：MeshExtractor + GlbWriter 交付（`kernel/mesh_extractor`、`kernel/glb_writer`，mesh_tests 171 项全绿）。实证勘误：完整球/环体可无边拓扑（轮廓由着色呈现）；`api_get_facet_edge_points` 实返局部坐标（SDK 头文档声明不实，须乘一次宿主变换）。
+- 2026-10-18 P1 完成：`/api/v1` 全契约落地（projects/versions/branches/scene/assets/commands 占位/WS events）；组件内容寻址存储（SAT+GLB 双写，并发幂等）；Qt-free worker CLI（import/merge/export/selftest）；真栈集成测试通过。命令引擎（501 占位）与常驻 worker 随 P2 交付。

@@ -63,4 +63,24 @@ public:
     static MeshResult extract(BODY& body, MeshQuality quality);
 };
 
+// 把 src 追加到 dst（索引/区间偏移平移），用于多体合成单一网格（整体导出）。
+inline void appendMesh(MeshData& dst, const MeshData& src) {
+    const std::uint32_t baseVertex = dst.vertexCount();
+    const std::uint32_t baseIndex = static_cast<std::uint32_t>(dst.indices.size());
+    const std::uint32_t baseEdgeVertex = static_cast<std::uint32_t>(dst.edgePositions.size() / 3);
+    dst.positions.insert(dst.positions.end(), src.positions.begin(), src.positions.end());
+    dst.normals.insert(dst.normals.end(), src.normals.begin(), src.normals.end());
+    for (std::uint32_t index : src.indices) dst.indices.push_back(index + baseVertex);
+    for (MeshFaceRange face : src.faces) {
+        face.firstIndex += baseIndex;
+        dst.faces.push_back(face);
+    }
+    dst.edgePositions.insert(dst.edgePositions.end(), src.edgePositions.begin(),
+                             src.edgePositions.end());
+    for (MeshEdgeRun run : src.edges) {
+        run.firstVertex += baseEdgeVertex;
+        dst.edges.push_back(run);
+    }
+}
+
 }  // namespace dbcad

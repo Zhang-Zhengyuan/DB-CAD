@@ -10,6 +10,7 @@ from .config import settings
 from .lifecycle import LOG_FILE_PATH, lifespan
 from . import neo4j_webui
 from .api import projects, models, json_delta, websocket
+from .api import v1
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
@@ -70,3 +71,5 @@ def health() -> dict[str, str | bool]:
 # Register literal routes before parameter routes (e.g. /versions before /{version}).
 for module in (projects, models, json_delta, websocket):
     app.include_router(module.router)
+# v1（V3_PLAN.md §2）：全新服务端权威协议；json-delta 族端点 deprecated（P6 删除）。
+app.include_router(v1.router)

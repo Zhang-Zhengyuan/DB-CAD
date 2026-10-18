@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from . import crud, neo4j_webui
 from .json_graph_store import shutdown_json_graph_store
+from .v1_store import initialize_v1_store, shutdown_v1_store
 
 logger = logging.getLogger(__name__)
 LOG_FILE_PATH = Path(__file__).resolve().parent.parent / "logs" / "backend-error.log"
@@ -39,10 +40,17 @@ def _setup_file_logging() -> None:
 async def lifespan(app: FastAPI):
     _setup_file_logging()
     crud.initialize_backend()
+    # v1 store：Neo4j 不可用时降级内存实现（本地/单测）；生产配 Neo4j 环境变量。
+    try:
+        initialize_v1_store()
+    except Exception as exc:  # noqa: BLE001 - startup resilience for local runs
+        logger.warning("v1 store falling back to memory backend: %s", exc)
+        initialize_v1_store(memory=True)
     logger.info("Backend startup completed, log file: %s", LOG_FILE_PATH)
     try:
         yield
     finally:
         crud.shutdown_backend()
+        shutdown_v1_store()
         shutdown_json_graph_store()
         neo4j_webui._close_driver()
