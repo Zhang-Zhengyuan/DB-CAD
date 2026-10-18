@@ -133,3 +133,15 @@ FakeGeometryKernel（可注入会话）+ MemoryTransport（内存实现 json-del
 **M2.4 撤销记账对齐：** `restoreHistory` 按 uuid 差量化记账——消失记 REMOVE、新增/复活记 ADD、存续记 MODIFY（替代旧的全树 REMOVE+ADD 全量记账）；复活组件的 ADD 覆盖此前 REMOVE，推送语义与基线一致（客户端回归"undo/delete/restore-deleted Push"全绿）。命令级 undo（CommandBus 逆操作）评估后留待后续：撤销栈现为内核快照式，逆操作化收益集中在记账粒度，差量化已消解其推送层问题。
 
 **测试与门禁（全绿）：** core_unit_tests 104 项（协议测试改异步信号等待，覆盖 busy 闸门下的串行拒绝语义）；`run-client-regression.ps1` 内核契约 77 项 + 真客户端异步 HTTP 场景 26 项（pushAndWait/pullAndWait 事件循环等待真实 QNAM 应答）；后端 pytest 43 项；build.ps1 Debug。
+
+## 6. M3 变更记录（存储物理表示升级 Phase B，已完成，2026-10-18）
+
+按 STORAGE_CONSOLIDATION_PLAN §Phase B，服务端内部升级、**协议与客户端零改动**：
+
+- **`app/json_graph_native.py`（新）**：原生标签（12 个 codec 语义标签 → Body/Face/…/Unknown，FOREACH 静态子句写入，无 apoc 依赖；未识别标签显式落 `:Unknown` + `raw_labels` 保留，绝不静默）+ 一级扁平字段（`props.sense → sense`、`geometry.type → geometry_type`；标量与同质原始类型列表直存，嵌套/异质/NaN 计入 skipped 统计）；`migrate_native_v2()` 存量迁移逻辑（幂等：只处理 `native_v2 IS NULL`）。
+- **`json_graph_store.py`**：写路径 v2（实体 MERGE 时同时写原生投影；组件带 native_field_count/native_skipped_count 覆盖率计数）；`initialize()` 为 Body/Face/Edge/Vertex 建 entity_id 索引；`graph()` 读投影不变——**迁移前后逐字节等价由构造保证**（labels_json/props_json 仍是权威载荷）。
+- **`scripts/migrate_json_graph_native_v2.py`（新）**：一次性迁移 CLI（--dry-run 支持）。
+- **L3 测试 `tests/test_json_graph_native_v2.py`（新，4 项）**：原生查询可用（`MATCH (f:Face) WHERE f.geometry_type='spline'`）、同图二次 push 实体节点幂等去重、迁移幂等 + graph() 逐字节等价、Unknown 显式兜底。
+- **WebUI**：版本实体聚合优先原生标签（legacy 退回 labels_json）；新增 native_coverage（fields/skipped_fields）覆盖率展示。
+
+**门禁（全绿）**：后端非集成 43 项；集成 17 项（含 12 项原 L3 往返 + 4 项新 v2；真 Neo4j 容器）；客户端门禁不受影响（零改动验证于 M2 提交时已绿）。

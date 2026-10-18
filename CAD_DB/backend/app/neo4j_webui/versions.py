@@ -196,10 +196,13 @@ def get_json_version_detail(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="JSON version not found")
+    # Phase B v2：优先按原生 Neo4j 标签聚合（可在库端按标签查询）；
+    # legacy 行（迁移前）退回 labels_json。
     counts = _run_cypher(
         "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version})"
         "-[:HAS_COMPONENT]->(c:JsonGraphComponent)-[:HAS_JSON_ENTITY]->(e:JsonGraphEntity) "
-        "RETURN e.labels_json AS labels_json, count(e) AS count "
+        "RETURN [l IN labels(e) WHERE l <> 'JsonGraphEntity'] AS native_labels, "
+        "e.labels_json AS labels_json, count(e) AS count "
         "ORDER BY count DESC",
         {"pid": row["project_id"], "version": version},
     )
@@ -207,7 +210,8 @@ def get_json_version_detail(
         "MATCH (v:JsonGraphVersion {project_id: $pid, version: $version})"
         "-[hc:HAS_COMPONENT]->(c:JsonGraphComponent) "
         "RETURN c.component_hash AS component_hash, hc.root_uuid AS root_uuid, "
-        "c.node_count AS node_count, c.rel_count AS rel_count, c.created_at AS created_at "
+        "c.node_count AS node_count, c.rel_count AS rel_count, c.created_at AS created_at, "
+        "c.native_field_count AS native_field_count, c.native_skipped_count AS native_skipped_count "
         "ORDER BY root_uuid",
         {"pid": row["project_id"], "version": version},
     )
@@ -255,9 +259,21 @@ def get_json_version_detail(
         ],
         "cross_component_relation_count": int((relation_count or {}).get("count") or 0),
         "entity_counts": [
-            {"labels": json.loads(item["labels_json"]), "count": int(item["count"])}
+            {
+                "labels": (
+                    [str(label) for label in item["native_labels"]]
+                    if item.get("native_labels")
+                    else json.loads(item["labels_json"])
+                ),
+                "count": int(item["count"]),
+                "native": bool(item.get("native_labels")),
+            }
             for item in counts
         ],
+        "native_coverage": {
+            "fields": sum(int(item.get("native_field_count") or 0) for item in components),
+            "skipped_fields": sum(int(item.get("native_skipped_count") or 0) for item in components),
+        },
         "payload_format": str(safe_audit.get("payload_format") or "json"),
         "contains_sat": bool(safe_audit.get("contains_sat", False)),
         "request_bytes": int(safe_audit.get("request_bytes") or 0),

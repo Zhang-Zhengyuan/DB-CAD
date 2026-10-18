@@ -15,6 +15,11 @@ from fastapi import HTTPException, status
 
 from .config import settings
 from .json_collab import graph_component, validate_graph
+from .json_graph_native import (
+    INDEXED_NATIVE_LABELS,
+    entity_write_projection,
+    native_label_set_clauses,
+)
 
 
 EMPTY_GRAPH: dict[str, Any] = {"nodes": [], "rels": []}
@@ -169,6 +174,12 @@ class JsonGraphStore:
                 "CREATE CONSTRAINT json_graph_relation_unique IF NOT EXISTS "
                 "FOR (r:JsonGraphRelation) REQUIRE (r.project_id, r.relation_hash) IS UNIQUE"
             )
+            # Phase B v2：热点原生标签的 entity_id 索引。
+            for label in INDEXED_NATIVE_LABELS:
+                session.run(
+                    f"CREATE INDEX json_graph_{label.lower()}_entity IF NOT EXISTS "
+                    f"FOR (n:{label}) ON (n.entity_id)"
+                )
 
     @staticmethod
     def _now() -> datetime:
@@ -440,10 +451,20 @@ class JsonGraphStore:
                         if key not in {"nodes", "rels", "root_uuid", "component_hash"}
                     },
                 }
+                entity_projections = [
+                    entity_write_projection(node) for node in component["nodes"]
+                ]
+                native_field_count = sum(
+                    len(item["native_fields"]) for item in entity_projections
+                )
+                native_skipped_count = sum(
+                    int(item["native_skipped"]) for item in entity_projections
+                )
                 tx.run(
                     "MERGE (c:JsonGraphComponent {project_id: $project_id, component_hash: $component_hash}) "
                     "ON CREATE SET c.id = $id, c.root_uuid = $root_uuid, c.content_json = $content_json, "
-                    "c.node_count = $node_count, c.rel_count = $rel_count, c.created_at = $created_at",
+                    "c.node_count = $node_count, c.rel_count = $rel_count, c.created_at = $created_at, "
+                    "c.native_field_count = $native_field_count, c.native_skipped_count = $native_skipped_count",
                     project_id=project_id,
                     component_hash=component_hash,
                     id=str(uuid4()),
@@ -454,6 +475,8 @@ class JsonGraphStore:
                     node_count=len(component["nodes"]),
                     rel_count=len(component["rels"]),
                     created_at=now.isoformat(),
+                    native_field_count=native_field_count,
+                    native_skipped_count=native_skipped_count,
                 )
                 tx.run(
                     "MATCH (v:JsonGraphVersion {id: $version_id}), "
@@ -466,31 +489,22 @@ class JsonGraphStore:
                 )
                 # Populate immutable entities exactly once. MERGE prevents a
                 # later version from duplicating unchanged component payloads.
+                # Phase B v2：权威 JSON 之外写原生标签 + 一级扁平字段（可查询投影）。
+                # graph() 读投影不变，迁移前后逐字节等价由构造保证。
                 tx.run(
                     "MATCH (c:JsonGraphComponent {project_id: $project_id, component_hash: $component_hash}) "
                     "WITH c WHERE NOT (c)-[:HAS_JSON_ENTITY]->() "
                     "UNWIND $nodes AS item "
                     "MERGE (e:JsonGraphEntity {component_hash: $component_hash, entity_id: item.id}) "
                     "ON CREATE SET e.labels_json = item.labels_json, e.props_json = item.props_json "
+                    + native_label_set_clauses("item.native_labels")
+                    + " "
+                    "SET e += item.native_fields, e.native_v2 = true, "
+                    "e.native_skipped = item.native_skipped, e.raw_labels = item.raw_labels "
                     "CREATE (c)-[:HAS_JSON_ENTITY]->(e)",
                     project_id=project_id,
                     component_hash=component_hash,
-                    nodes=[
-                        {
-                            "id": str(node["id"]),
-                            "labels_json": json.dumps(
-                                node.get("labels", []),
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                            "props_json": json.dumps(
-                                node.get("props", {}),
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        }
-                        for node in component["nodes"]
-                    ],
+                    nodes=entity_projections,
                 )
                 if component["rels"]:
                     tx.run(
