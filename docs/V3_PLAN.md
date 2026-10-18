@@ -104,7 +104,7 @@ FastAPI 网关（鉴权/限流/静态托管）
 
 | 里程碑 | 内容 | 验收 | 估时 |
 |---|---|---|---|
-| **P0 面片引擎** | 四路径离散化调研（默认档/visualization/precise/sequential_mesh，abc_cache 抽样基准）→ 重写 `MeshExtractor`（质量档位、内核法线、批量）→ GLB+manifest 序列化 | 基准对比报告；CLI 一条命令 SAT→GLB；浏览器渲染带边着色模型 | **1 周** |
+| **P0 面片引擎** | 四路径离散化调研（默认档/visualization/precise/sequential_mesh，抽样基准）→ 重写 `MeshExtractor`（质量档位、内核法线、批量）→ GLB+manifest 序列化 | **调研已完成（2026-10-18）**：选型 B `facet_options_visualization`，报告见 [P0_MESH_BENCH.md](P0_MESH_BENCH.md)（含 SDK 能力边界：compound API 不可用）。MeshExtractor 与 GLB 序列化随 P1 交付 | **1 周** |
 | **P1 API 契约 + 服务端骨架** | OpenAPI v1 草案评审冻结；组件内容寻址入库（SAT 源+GLB 资产双写）；版本提交协议（含 branches 预留）；worker 进程管理与内部调度；WS events | 契约测试绿：建项目→导 SAT→scene/asset 可取；两 worker 并发无竞态 | 1.5-2 周 |
 | **P2 命令执行引擎（服务端全功能）** | CommandBus 面向服务器化：全部 34 图元 + 布尔/求交/去重 + 变换 + undo/redo 栈；参数 schema 端点；dry-run；rebase 语义 | 纯 API（无 UI）跑通与 Qt 客户端等价的建模全流程；命令级契约测试 | 1 周 |
 | **P3 Web 查看器** | R3F 脚手架；scene/asset 增量加载；相机/标准视图/显示模式/边线；组件树、点选高亮、属性面板；版本时间线 | 打开项目即渲染，版本切换只补拉增量；abc 中等模型流畅 | 1.5 周 |
