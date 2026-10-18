@@ -11,7 +11,7 @@ import tracemalloc
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from app.json_collab import graph_component, merge_graph
+from app.json_collab import graph_component, merge_graph  # noqa: E402  依赖上面的 sys.path 注入
 
 OUT = Path(__file__).resolve().parent
 

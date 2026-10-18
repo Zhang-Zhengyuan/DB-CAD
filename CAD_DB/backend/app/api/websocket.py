@@ -5,14 +5,13 @@ from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..collaboration.protocol import _handle_project_ws_message
+from ..collaboration.snapshots import _send_latest_model_saved_event
 from ..config import settings
 from ..sync import sync_manager
 
 
 router = APIRouter()
-
-from ..collaboration.snapshots import _send_latest_model_saved_event
-from ..collaboration.protocol import _handle_project_ws_message
 
 
 @router.websocket("/ws/projects/{project_id}")

@@ -9,15 +9,5 @@
     <ClCompile Include="entity_graph_deserializer.cpp" />
     <ClCompile Include="gme_dump_object.cpp" />
     <ClCompile Include="gme_mesh.cpp" />
-    <ClCompile Include="neo4j.cpp" />
-    <ClCompile Include="storage\access_save_values.cpp" />
-    <ClCompile Include="storage\access_save_surfaces.cpp" />
-    <ClCompile Include="storage\access_save_curves.cpp" />
-    <ClCompile Include="storage\access_restore_values.cpp" />
-    <ClCompile Include="storage\access_graph_save.cpp" />
-    <ClCompile Include="storage\access_graph_restore.cpp" />
-    <ClCompile Include="storage\access_history_save.cpp" />
-    <ClCompile Include="storage\access_history_restore.cpp" />
-    <ClCompile Include="storage\access_parts.cpp" />
   </ItemGroup>
 </Project>

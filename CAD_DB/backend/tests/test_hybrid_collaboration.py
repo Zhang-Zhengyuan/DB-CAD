@@ -5,10 +5,9 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app import crud
-from app.api import json_delta, models, projects
+from app.api import json_delta, models
 from app.collaboration import snapshots
 from app.json_graph_store import split_graph_components
-from app.json_collab import validate_graph
 from app.main import app
 from memory_store import MemoryStore
 
