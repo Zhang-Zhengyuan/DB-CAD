@@ -34,6 +34,7 @@ uv run --frozen pytest -q -m 'not integration'
 - Neo4j 管理 WebUI，包含项目、版本、图及按需查看原始提交。
 - 存取模式只有两个：SAT 本地文件与 FastAPI 云端协作。客户端 Bolt 直连 Neo4j 栈与 PostgreSQL 实验已在架构 v2 清理中移除（tag：`legacy/pre-architecture-v2`）。
 - **架构 v2（2026-10-18）**：协作编排下沉为无 UI 核心库 `CAD_DB/core/`（DocumentSession/CollabState/CollabController/CollabBackend/StorageBackend/CommandBus，仅 QtCore），Qt 只剩壳；全部网络异步（无嵌套事件循环）；服务端库内表示升级为原生标签 + 扁平字段（协议/客户端零改动）；协同工作流新增自动拉取、在场感知（edit_intent）、定版标签。详见 [架构定稿](docs/ARCHITECTURE.md) 与 [重构计划](docs/REFACTOR_PLAN.md)。核心库单测 `core_unit_tests`（116 项）与既有回归见 [验证记录](docs/REFACTOR_VALIDATION.md)。
+- **下一阶段（规划中）**：UI 重构 Qt → Web 前端（three.js/R3F + headless 几何 worker，最终移除 Qt 依赖），计划见 [UI 重构计划](docs/UI_REFACTOR_PLAN.md)。
 
 ## 几何内核隔离
 
