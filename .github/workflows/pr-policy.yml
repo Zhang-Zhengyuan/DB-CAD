@@ -1,0 +1,46 @@
+name: PR policy
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      # Never check out PR code here. This event uses the trusted base workflow.
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const types = 'feat|fix|docs|refactor|test|chore|perf|build|ci|revert';
+            const branch = pr.head.ref.match(new RegExp(`^(${types})/([1-9][0-9]*)-[a-z0-9]+(?:-[a-z0-9]+)*$`));
+            if (!branch) {
+              core.setFailed('Branch must be type/issue-number-kebab-summary; local branches cannot be published.');
+              return;
+            }
+            const title = pr.title.match(new RegExp(`^(${types})(?:\\([a-zA-Z0-9._/-]+\\))?: \\S.*$`));
+            if (!title || title[1] !== branch[1]) {
+              core.setFailed('PR title must be type(scope): description (scope optional), with the branch type.');
+              return;
+            }
+            // Require one unambiguous, same-repository closing line.
+            const links = [...(pr.body || '').matchAll(/^Closes #([1-9][0-9]*)[ \t]*\r?$/gm)];
+            if (links.length !== 1 || links[0][1] !== branch[2]) {
+              core.setFailed('Body must contain exactly one standalone Closes #N matching the branch issue.');
+              return;
+            }
+            try {
+              const {data: issue} = await github.rest.issues.get({
+                ...context.repo, issue_number: Number(branch[2])
+              });
+              if (issue.pull_request || issue.state !== 'open') {
+                core.setFailed('Linked number must identify an open issue in this repository, not a PR.');
+                return;
+              }
+              core.info(`Policy passed for issue #${branch[2]}. Human review and required checks remain mandatory.`);
+            } catch (error) {
+              core.setFailed(`Cannot verify linked issue (HTTP ${error.status || 'unknown'}); check issue number and permissions.`);
+            }
