@@ -1,7 +1,7 @@
 // Integration regressions through the same kernel, widgets and HTTP client as CAD_DB.
 #include "window.h"
-#include "backend_api_client.h"
-#include "collab_session.h"
+#include "core/collab_backend.h"
+#include "core/collab_controller.h"
 #include <QApplication>
 #include <QFile>
 #include <QTemporaryDir>
@@ -93,8 +93,9 @@ static void clientChecks(const QString& url) {
     config.write(url.toUtf8()+"\nregression\n\n"); config.close();
     MainWindow main;
     auto window=main.findChild<Window*>(); expect(window!=nullptr,"real client document created");
-    BackendApiClient peer(url,"peer"); auto project=peer.getOrCreateProject(QString("kernel-isolation-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
-    expect(project.has_value(),qPrintable("create project: "+peer.lastError()));
+    dbcad::CollabBackend peer; peer.configure(url,"peer",QString());
+    const auto project=peer.getOrCreateProject(QString("kernel-isolation-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    expect(project.found,qPrintable("create project: "+project.error));
     QWebSocket observer; QEventLoop connected; QTimer timeout; timeout.setSingleShot(true);
     QObject::connect(&observer,&QWebSocket::connected,&connected,&QEventLoop::quit);
     QObject::connect(&timeout,&QTimer::timeout,&connected,&QEventLoop::quit);
@@ -103,55 +104,56 @@ static void clientChecks(const QString& url) {
         if(QJsonDocument::fromJson(text.toUtf8()).object().value("type").toString()=="json_delta_saved") announced=true;
     });
     auto ws=url; ws.replace("http://","ws://");
-    observer.open(QUrl(ws+"/ws/projects/"+project->id+"?client_id=observer")); timeout.start(5000); connected.exec();
+    observer.open(QUrl(ws+"/ws/projects/"+project.project.id+"?client_id=observer")); timeout.start(5000); connected.exec();
     expect(observer.isValid(),"peer WebSocket connected to same project");
-    auto& session=CollabSession::instance(); session.setProjectId(project->id); session.onReconnect(true);
+    auto& collab=main.collabController(); collab.bindProject(project.project.id,project.project.name); collab.onChannelConnected();
     main.show(); QApplication::processEvents();
     HandleGrid h; auto cube=kernel().create(E_CUBE,h);
     auto row=window->addEntity(cube,"original",E_CUBE,h); const int id=row->index;
     const auto uuid=QString::fromStdString(row->uuid); window->captureHistory();
-    expect(main.submitMode1JsonDelta("cold-start"),"real UI first Push succeeds");
-    expect(session.modelVersion()==1,"first Push advances v1");
+    expect(collab.push("cold-start").ok,"real UI first Push succeeds");
+    expect(collab.modelVersion()==1,"first Push advances v1");
     for(int i=0;i<10 && !announced;++i) { QEventLoop tick; QTimer::singleShot(20,&tick,&QEventLoop::quit); tick.exec(); }
     expect(announced,"peer receives WebSocket version notification");
-    auto remote=peer.getJsonDelta(project->id,0);
+    auto remote=peer.fetchJsonDelta(project.project.id,0);
     DecodedGraph decoded; QString error;
-    expect(remote && kernel().decodeGraph(QJsonDocument::fromJson(remote->graphJson.toUtf8()).object(),decoded,error),"second client pulls and rebuilds v1");
+    expect(remote.status==dbcad::CollabBackend::FetchResult::Status::Ok && kernel().decodeGraph(QJsonDocument::fromJson(remote.payload.graphJson.toUtf8()).object(),decoded,error),"second client pulls and rebuilds v1");
     kernel().erase(shapes(decoded));
     // Tree selection survives vector reallocation and redraw.
     auto tree=window->findChild<QTreeWidget*>(); tree->setCurrentItem(tree->topLevelItem(0));
     for(int i=0;i<8;++i) { h.clear(); window->addEntity(kernel().create(E_CUBE,h),"additional",E_CUBE,h); }
     auto checkbox=window->findChild<QCheckBox*>(); checkbox->setChecked(false);
     expect(!window->getEntityItemByIndex(id)->visible,"selection identity survives vector growth");
-    window->captureHistory(); expect(main.submitMode1JsonDelta("additional"),"multiple roots Push");
+    window->captureHistory(); expect(collab.push("additional").ok,"multiple roots Push");
     window->changeEntity(cube,Translation{{2,0,0}});
-    expect(main.submitMode1JsonDelta("move"),"translated Push");
+    expect(collab.push("move").ok,"translated Push");
     window->restoreHistory(-1);
-    expect(main.submitMode1JsonDelta("undo"),"undo followed by Push");
+    expect(collab.push("undo").ok,"undo followed by Push");
     main.deleteEntityByIndexForCollaboration(id);
     window->restoreHistory(-1);
-    expect(window->getEntityItemByIndex(id)!=nullptr && main.submitMode1JsonDelta("restore-deleted"),"delete undo Push retains UUID");
+    expect(window->getEntityItemByIndex(id)!=nullptr && collab.push("restore-deleted").ok,"delete undo Push retains UUID");
     main.deleteEntityByIndexForCollaboration(id);
-    expect(main.submitMode1JsonDelta("delete"),"deletion Push");
-    remote=peer.getJsonDelta(project->id,0);
-    auto full=QJsonDocument::fromJson(remote->graphJson.toUtf8()).object();
+    expect(collab.push("delete").ok,"deletion Push");
+    remote=peer.fetchJsonDelta(project.project.id,0);
+    auto full=QJsonDocument::fromJson(remote.payload.graphJson.toUtf8()).object();
     bool present=false; for(auto n:full.value("nodes").toArray()) if(n.toObject().value("id").toString()==uuid) present=true;
     expect(!present,"peer snapshot excludes deleted UUID");
     h.clear(); auto sphere=kernel().create(E_SPHERE,h);
     auto peerGraph=kernel().encodeGraph({{0,"peer-sphere"}},{sphere}); kernel().erase({sphere});
-    auto accepted=peer.saveJsonDelta(project->id,"peer",compact(peerGraph),"[]",{},remote->version);
-    expect(accepted.has_value(),"peer Push accepted");
-    main.pullMode1JsonDelta();
+    auto accepted=peer.pushJsonDelta(project.project.id,"peer",compact(peerGraph),"[]",{},remote.payload.version);
+    expect(accepted.status==dbcad::CollabBackend::PushResult::Status::Created,"peer Push accepted");
+    const auto pulled=collab.pull();
+    window->refreshAfterDocumentChange(pulled.retiredDisplayData);
     bool imported=false; for(const auto& item:window->getEntityTree()) if(item.uuid=="peer-sphere") imported=item.operatorType==OPERATOR_IMPORT && item.subOperatorType==-1 && item.handles.empty();
-    expect(imported && session.modelVersion()==*accepted,"real client Pull imports neutral geometry");
+    expect(imported && pulled.ok && collab.modelVersion()==accepted.version,"real client Pull imports neutral geometry");
     const auto liveBefore=window->getEntityList();
     QJsonObject malformed{{"nodes",QJsonArray{QJsonObject{{"id","broken"},{"labels",QJsonArray{"body"}},{"props",QJsonObject{{"top_level",true},{"fallback","sat_fragment"},{"sat_fragment","invalid"}}}}}},{"rels",QJsonArray{}}};
-    expect(!main.pullEntityGraph(*accepted+1,malformed,true) && window->getEntityList()==liveBefore,"failed remote decode preserves entire document");
-    expect(!peer.saveJsonDelta(project->id,"peer",compact(peerGraph),"[]",{},remote->version).has_value() && peer.lastStatusCode()==409,"stale peer Push rejected");
+    expect(!main.documentSession().applyRemoteGraph(accepted.version+1,malformed,true,{},{}).ok && window->getEntityList()==liveBefore,"failed remote decode preserves entire document");
+    expect(peer.pushJsonDelta(project.project.id,"peer",compact(peerGraph),"[]",{},remote.payload.version).status==dbcad::CollabBackend::PushResult::Status::Conflict,"stale peer Push rejected");
     const int nextBefore=window->getEntityTree().back().index;
     window->clear(); h.clear(); row=window->addEntity(kernel().create(E_CUBE,h),"after-clear",E_CUBE,h);
     expect(row->index>nextBefore,"clear never reuses document index");
-    window->captureHistory(); expect(main.submitMode1JsonDelta("clear-readd"),"clear readd Push");
+    window->captureHistory(); expect(collab.push("clear-readd").ok,"clear readd Push");
     // Rebuilding a multi-output operation replaces the group rather than appending duplicates.
     window->clear(); h.clear(); auto left=kernel().create(E_CUBE,h);
     const int leftId=window->addEntity(left,"left",E_CUBE,h)->index;

@@ -8,6 +8,12 @@
 #include <QtGlobal>
 #include <memory>
 #include <QColor>
+
+#include "core/collab_backend.h"
+#include "core/collab_controller.h"
+#include "core/command_bus.h"
+#include "core/document_session.h"
+#include "core/sat_file_backend.h"
 #include "kernel/model_types.h"
 
 class Window;
@@ -23,54 +29,30 @@ class QComboBox;
 
 const QStringList colorNames = QColor::colorNames();
 
+// MainWindow —— 视图接线（架构 v2 M1）：协作编排住在 core（DocumentSession /
+// CollabController / CollabBackend），本类只做菜单/面板/状态栏与对话框，
+// 不持有版本号或 HTTP/WS 细节。
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
     explicit MainWindow(QWidget* parent = nullptr, Qt::WindowFlags flags = {});
 
-    // ========== 增量协作支持 ==========
-    // 变更类型枚举
-    enum class EntityChangeType { ADD, REMOVE, MODIFY };
-
-    // 实体变更结构体
-    struct EntityChange {
-        QString uuid;
-        QString name;
-        QString entityType;
-        EntityChangeType changeType;
-        int entityIndex;
-        qint64 timestamp;
-        // Geometry belongs to the component graph; this record carries metadata only.
-
-    };
-
-    // 增量协作方法
-    void beginEntityChangeTracking();
-    void recordEntityAdded(const QString& uuid, const QString& name, const QString& entityType, int index);
-    void recordEntityRemoved(int index);
-    void recordEntityModified(int index);
-    QList<EntityChange> endEntityChangeTracking();
-    void clearEntityChanges();
-    // 协作友好的本地删除：UI 右键删除按钮调用，内核删除、变更记账
-    void deleteEntityByIndexForCollaboration(int index);
-    QString exportEntityChangesToJson(const QList<EntityChange>& changes);
-
-    // Legacy WebSocket delta apply, retained for old project history.
-
-    // Component encoding stays on the client; the server merges opaque JSON.
-    bool submitMode1JsonDelta(const QString& reason);
-    void pullMode1JsonDelta();
-
-    // Reconstruct through the kernel codec, then merge by stable document UUID.
-    bool pullEntityGraph(int version, const QJsonObject& graph, bool deltaGraph = false,
-                         const QStringList& removedIds = {}, const QHash<QString, QString>& remoteNames = {});
-
-    // ========== 其他 public 方法 ==========
+    // ---------- 供视图与回归测试的入口 ----------
     void setCurWindow(Window* w) { curWindow = w; }
     void showMessage(const QString s, int duration = -1);
+    // 本地编辑后的协作状态通知（模式门控在此，策略在 CollabController）。
     void notifyModelChangedForCollaboration();
+    // 协作友好的本地删除：会话删除 + 视图刷新（右键菜单/依赖重建共用）。
+    void deleteEntityByIndexForCollaboration(int index);
 
+    dbcad::DocumentSession& documentSession() { return *documentSession_; }
+    dbcad::CollabController& collabController() { return *collabController_; }
+    dbcad::CollabBackend& collabBackend() { return *collabBackend_; }
+    dbcad::CommandBus& commandBus() { return *commandBus_; }
+    // 当前存取后端（模式切换 = 后端选择，取代 if/else 分支）。
+    dbcad::StorageBackend* activeStorage() const { return activeStorage_; }
+    bool usingCollabStorage() const { return activeStorage_ == collabBackend_.get(); }
 
 protected:
     void loadFile(const QString& fileName);
@@ -98,51 +80,44 @@ private slots:
     void operation(const OPERATOR_TYPES ot, const int subOperatorType);
     void clear();
 
+    // 协作面板动作（转发到 controller/backend）
+    void onCollabPushButtonClicked();
+    void onCollabPullButtonClicked();
+    void requestFastAPISyncNow();
+    void reconnectFastAPISync();
+
 private:
     void createActions();
     void createStatusBar();
+    void registerDefaultCommands();
     bool maybeSave();
     bool saveFile(const QString& fileName);
     void updateCollabPanelUi();
     void setCollabConnectionState(const QString& stateText);
-    void reconnectFastAPISync();
-    void disconnectFastAPISync();
-    void handleFastAPISyncMessage(const QString& message);
-    void handlePresenceAndAckEvent(const QJsonObject& root, const QString& messageType);
-    void handleDeltaSyncEvent(const QJsonObject& root, const QString& messageType);
-    void handleFastAPISyncMessageImpl(const QString& message);
-    void requestFastAPISyncNow();
-    void updateFastAPICollaboratorsStatus();
     void setCurrentFile(const QString& fileName);
     void setCurrentPartName(const QString& partName);
-    void onCollabPushButtonClicked();
-    void onCollabPullButtonClicked();
+    void handleSyncTextMessage(const QString& message);
+    void handleBackendChannelState(const QString& stateKey);
+    void handleBackendChannelConnected();
+    void handleBackendChannelDisconnected();
+    void handleBackendChannelError(const QString& message);
+    void handleBackendCollaboratorsChanged();
+    void displayOutcome(const dbcad::CollabController::Outcome& outcome);
 
     Window* curWindow;
     QAction* setACISModeAct;
     QAction* setFASTAPIModeAct;
     QActionGroup* setModeActGroup;
-    std::string fastapi_base_url;
-    std::string fastapi_author;
-    std::string fastapi_password;
-    QString fastapi_project_id;
-    QString fastapi_project_name;
-    QString fastapi_client_id;
-    // Mirror fields — synced from CollabSession via mirrorToLegacy(). Do not write directly.
-    int fastapi_model_version = 0;
-    int fastapi_pending_remote_version = 0;
-    bool fastapiApplyingRemoteSnapshot = false;
-    bool fastapiSubmitInFlight = false;
-    bool fastapiLocalDirtyDuringSubmit = false;
-    bool fastapiLocalDirty = false;
-    QString fastapiLastPublishReason;
-    QString fastapiPendingSubmitRequestId;
-    // Presence and WebSocket infrastructure.
-    QHash<QString, QString> fastapi_collaborators;
-    QWebSocket* fastapiSyncSocket = nullptr;
-    QTimer* fastapiHeartbeatTimer = nullptr;
-    QTimer* fastapiReconnectTimer = nullptr;
 
+    // ---------- 核心库（组合，视图无权直写） ----------
+    std::unique_ptr<dbcad::DocumentSession> documentSession_;
+    std::unique_ptr<dbcad::CollabBackend> collabBackend_;
+    std::unique_ptr<dbcad::CollabController> collabController_;
+    std::unique_ptr<dbcad::SatFileBackend> satBackend_;
+    std::unique_ptr<dbcad::CommandBus> commandBus_;
+    dbcad::StorageBackend* activeStorage_ = nullptr;
+
+    // ---------- 协作面板（纯视图） ----------
     QDockWidget* collabDock = nullptr;
     QLabel* collabConnectionLabel = nullptr;
     QLabel* collabProjectLabel = nullptr;
@@ -153,11 +128,4 @@ private:
     QPushButton* collabPushButton = nullptr;
     QPushButton* collabPullButton = nullptr;
     QPushButton* collabReconnectButton = nullptr;
-
-
-    // 增量协作成员变量
-    QHash<int, QString> entityIndexToUuid;
-    QList<EntityChange> pendingEntityChanges;
-    bool isTrackingEntityChanges = false;
-    qint64 entityChangeTrackingStartTime = 0;
 };

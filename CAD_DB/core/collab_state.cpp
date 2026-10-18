@@ -1,50 +1,19 @@
-#include "collab_session.h"
+#include "core/collab_state.h"
 
-#include <QObject>
-#include <QDateTime>
-#include <QStringList>
 #include <QDebug>
+#include <QStringList>
 
-#undef tr
-#define tr(s) QString::fromUtf8(s)
+namespace dbcad {
 
-CollabSession &CollabSession::instance() {
-    static CollabSession s;
-    return s;
+namespace {
+QString tr(const char* s) { return QString::fromUtf8(s); }
 }
 
-void CollabSession::bindLegacyFields(QString &fastapi_project_id, int &fastapi_model_version,
-                                     int &fastapi_pending_remote_version, QString &fastapiLastPublishReason,
-                                     QString &fastapiPendingSubmitRequestId, bool &fastapiSubmitInFlight,
-                                     bool &fastapiLocalDirtyDuringSubmit, bool &fastapiApplyingRemoteSnapshot,
-                                     bool &fastapiLocalDirty) {
-    fastapi_model_version_ref_ = &fastapi_model_version;
-    fastapi_pending_remote_version_ref_ = &fastapi_pending_remote_version;
-    fastapiLastPublishReason_ref_ = &fastapiLastPublishReason;
-    fastapiPendingSubmitRequestId_ref_ = &fastapiPendingSubmitRequestId;
-    fastapiSubmitInFlight_ref_ = &fastapiSubmitInFlight;
-    fastapiLocalDirtyDuringSubmit_ref_ = &fastapiLocalDirtyDuringSubmit;
-    fastapiApplyingRemoteSnapshot_ref_ = &fastapiApplyingRemoteSnapshot;
-    fastapiLocalDirty_ref_ = &fastapiLocalDirty;
-    fastapi_project_id_ref_ = &fastapi_project_id;
-
-    snapshot_.projectId = fastapi_project_id;
-    snapshot_.modelVersion = fastapi_model_version;
-    snapshot_.pendingRemoteVersion = fastapi_pending_remote_version;
-    snapshot_.lastPublishReason = fastapiLastPublishReason;
-    snapshot_.submitRequestId = fastapiPendingSubmitRequestId;
-    snapshot_.submitInFlight = fastapiSubmitInFlight;
-    snapshot_.localDirtyDuringSubmit = fastapiLocalDirtyDuringSubmit;
-    snapshot_.applyingRemoteSnapshot = fastapiApplyingRemoteSnapshot;
-
-    emitDump(Event::Bound, true);
-}
-
-const char *CollabSession::stateName() const {
+const char* CollabState::stateName() const {
     return stateNameFor(state_);
 }
 
-const char *CollabSession::stateNameFor(State s) {
+const char* CollabState::stateNameFor(State s) {
     switch (s) {
     case State::Disconnected:
         return "Disconnected";
@@ -66,7 +35,7 @@ const char *CollabSession::stateNameFor(State s) {
     return "?";
 }
 
-const char *CollabSession::eventName(Event e) const {
+const char* CollabState::eventName(Event e) const {
     switch (e) {
     case Event::WsMessage:
         return "ws_msg";
@@ -102,80 +71,47 @@ const char *CollabSession::eventName(Event e) const {
     return "other";
 }
 
-void CollabSession::setDebugEnabled(bool enabled) {
-    debug_enabled_ = enabled;
-}
-bool CollabSession::isDebugEnabled() const {
-    return debug_enabled_;
-}
-void CollabSession::setMinDumpIntervalMs(int intervalMs) {
-    min_dump_interval_ms_ = intervalMs;
-}
-int CollabSession::minDumpIntervalMs() const {
-    return min_dump_interval_ms_;
-}
-void CollabSession::setEventMinInterval(Event e, int intervalMs) {
+void CollabState::setEventMinInterval(Event e, int intervalMs) {
     const int idx = static_cast<int>(e);
     if (idx >= 0 && idx < 15)
-        event_min_interval_ms_[idx] = intervalMs;
+        eventMinIntervalMs_[idx] = intervalMs;
 }
-int CollabSession::eventMinInterval(Event e) const {
+
+int CollabState::eventMinInterval(Event e) const {
     const int idx = static_cast<int>(e);
     if (idx >= 0 && idx < 15)
-        return event_min_interval_ms_[idx];
+        return eventMinIntervalMs_[idx];
     return 0;
 }
 
-bool CollabSession::isBound() const {
-    return fastapi_model_version_ref_ != nullptr && fastapiSubmitInFlight_ref_ != nullptr &&
-           fastapiApplyingRemoteSnapshot_ref_ != nullptr;
-}
-
-void CollabSession::mirrorToLegacy() const {
-    if (!isBound())
-        return;
-    *fastapi_model_version_ref_ = snapshot_.modelVersion;
-    *fastapi_pending_remote_version_ref_ = snapshot_.pendingRemoteVersion;
-    *fastapiLastPublishReason_ref_ = snapshot_.lastPublishReason;
-    *fastapiPendingSubmitRequestId_ref_ = snapshot_.submitRequestId;
-    *fastapiSubmitInFlight_ref_ = snapshot_.submitInFlight;
-    *fastapiLocalDirtyDuringSubmit_ref_ = snapshot_.localDirtyDuringSubmit;
-    *fastapiApplyingRemoteSnapshot_ref_ = snapshot_.applyingRemoteSnapshot;
-    *fastapiLocalDirty_ref_ = (state_ == State::Connected_LocalDirty);
-    *fastapi_project_id_ref_ = snapshot_.projectId;
-}
-
-void CollabSession::transition(State newState, Event event) {
+void CollabState::transition(State newState, Event event) {
     if (state_ == newState) {
         emitDump(event, true);
-        assertConsistent();
         return;
     }
     state_ = newState;
-    mirrorToLegacy();
     emitDump(event, true);
-    assertConsistent();
 }
 
-QString CollabSession::dump(Event event) const {
-    if (!debug_enabled_)
+QString CollabState::dump(Event event) const {
+    if (!debugEnabled_)
         return QString();
 
-    const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
-    const int event_idx = static_cast<int>(event);
-    const qint64 last_ms = last_dump_ms_[event_idx];
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const int eventIdx = static_cast<int>(event);
+    const qint64 lastMs = lastDumpMs_[eventIdx];
 
-    const int per_event_ms = event_min_interval_ms_[event_idx];
-    const int eff_ms = (per_event_ms > 0) ? per_event_ms : min_dump_interval_ms_;
-    if (eff_ms > 0 && last_ms != 0 && (now_ms - last_ms) < eff_ms) {
+    const int perEventMs = eventMinIntervalMs_[eventIdx];
+    const int effMs = (perEventMs > 0) ? perEventMs : minDumpIntervalMs_;
+    if (effMs > 0 && lastMs != 0 && (nowMs - lastMs) < effMs) {
         return QString();
     }
-    last_dump_ms_[event_idx] = now_ms;
+    lastDumpMs_[eventIdx] = nowMs;
 
     QStringList parts;
-    const qint64 rel = (last_ms == 0) ? 0 : (now_ms - last_ms);
+    const qint64 rel = (lastMs == 0) ? 0 : (nowMs - lastMs);
     parts << QString("[+%1ms]").arg(rel);
-    parts << QString("[CollabSession]");
+    parts << QString("[CollabState]");
     parts << QString::fromUtf8(eventName(event));
     parts << QString::fromUtf8(stateName());
     parts << QString("v=%1").arg(snapshot_.modelVersion);
@@ -189,56 +125,24 @@ QString CollabSession::dump(Event event) const {
     return parts.join(" | ");
 }
 
-void CollabSession::emitDump(Event event, bool force) {
-    if (!debug_enabled_)
+void CollabState::emitDump(Event event, bool force) {
+    if (!debugEnabled_)
         return;
     const int idx = static_cast<int>(event);
-    const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
-    const qint64 last_ms = last_dump_ms_[idx];
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const qint64 lastMs = lastDumpMs_[idx];
     if (!force) {
-        const int per_event_ms = event_min_interval_ms_[idx];
-        const int eff_ms = (per_event_ms > 0) ? per_event_ms : min_dump_interval_ms_;
-        if (eff_ms > 0 && last_ms != 0 && (now_ms - last_ms) < eff_ms) {
+        const int perEventMs = eventMinIntervalMs_[idx];
+        const int effMs = (perEventMs > 0) ? perEventMs : minDumpIntervalMs_;
+        if (effMs > 0 && lastMs != 0 && (nowMs - lastMs) < effMs) {
             return;
         }
     }
-    last_dump_ms_[idx] = now_ms;
+    lastDumpMs_[idx] = nowMs;
     qDebug().noquote() << dump(event);
 }
 
-CollabSession::State CollabSession::inferStateFromLegacy() const {
-    if (!isBound())
-        return state_;
-    if (*fastapiApplyingRemoteSnapshot_ref_)
-        return State::Connected_ApplyingRemote;
-    if (*fastapiSubmitInFlight_ref_) {
-        if (*fastapiLocalDirtyDuringSubmit_ref_)
-            return State::Connected_SubmitInFlight_Dirty;
-        return State::Connected_SubmitInFlight;
-    }
-    if (*fastapi_pending_remote_version_ref_ > *fastapi_model_version_ref_) {
-        return State::Connected_RemotePending_Dirty;
-    }
-    if (*fastapiLocalDirty_ref_)
-        return State::Connected_LocalDirty;
-    return State::Connected_Idle;
-}
-
-void CollabSession::assertConsistent() const {
-    if (!isBound())
-        return;
-    State inferred = inferStateFromLegacy();
-    if (state_ == State::Disconnected || state_ == State::Connected_NoProject || inferred == State::Disconnected) {
-        return;
-    }
-    if (inferred != state_) {
-        qWarning().noquote() << "[CollabSession] INCONSISTENT:"
-                             << "state=" << QString::fromUtf8(stateNameFor(state_))
-                             << "inferred=" << QString::fromUtf8(stateNameFor(inferred));
-    }
-}
-
-CollabSession::SubmitDecision CollabSession::tryBeginSubmit(const QString &reason) {
+CollabState::SubmitDecision CollabState::tryBeginSubmit(const QString& reason) {
     SubmitDecision d;
 
     if (snapshot_.projectId.isEmpty() || state_ == State::Disconnected || state_ == State::Connected_NoProject) {
@@ -255,7 +159,6 @@ CollabSession::SubmitDecision CollabSession::tryBeginSubmit(const QString &reaso
     }
     if (snapshot_.submitInFlight) {
         snapshot_.localDirtyDuringSubmit = true;
-        mirrorToLegacy();
         transition(State::Connected_SubmitInFlight_Dirty, Event::UserEditDuringInFlight);
         d.kind = SubmitDecision::RejectAlreadyInFlight;
         d.reason = tr("上一笔提交还在进行中，已标记为 dirty，请等待当前提交完成");
@@ -273,12 +176,11 @@ CollabSession::SubmitDecision CollabSession::tryBeginSubmit(const QString &reaso
     snapshot_.submitInFlight = true;
     snapshot_.localDirtyDuringSubmit = false;
     snapshot_.lastPublishReason = reason.isEmpty() ? QString::fromUtf8("local-change") : reason;
-    mirrorToLegacy();
 
     if (state_ == State::Connected_Idle || state_ == State::Connected_LocalDirty) {
         transition(State::Connected_SubmitInFlight, Event::SubmitStarted);
     } else {
-        qWarning() << "[CollabSession] tryBeginSubmit from unexpected state" << QString::fromUtf8(stateName());
+        qWarning() << "[CollabState] tryBeginSubmit from unexpected state" << QString::fromUtf8(stateName());
         transition(State::Connected_SubmitInFlight, Event::SubmitStarted);
     }
 
@@ -287,12 +189,11 @@ CollabSession::SubmitDecision CollabSession::tryBeginSubmit(const QString &reaso
     return d;
 }
 
-void CollabSession::rollbackSubmit() {
+void CollabState::rollbackSubmit() {
     if (!snapshot_.submitInFlight)
         return;
     snapshot_.submitInFlight = false;
     snapshot_.submitRequestId.clear();
-    mirrorToLegacy();
     if (snapshot_.localDirtyDuringSubmit) {
         transition(State::Connected_LocalDirty, Event::SubmitStarted);
     } else {
@@ -300,59 +201,29 @@ void CollabSession::rollbackSubmit() {
     }
 }
 
-void CollabSession::setLastPublishReason(const QString &reason) {
-    snapshot_.lastPublishReason = reason;
-    mirrorToLegacy();
-}
-
-void CollabSession::setModelVersion(int v) {
-    snapshot_.modelVersion = v;
-    mirrorToLegacy();
-}
-
-void CollabSession::setPendingRemoteVersion(int pv) {
-    snapshot_.pendingRemoteVersion = pv;
-    mirrorToLegacy();
-}
-
-void CollabSession::onUserEdit() {
-    if (!isBound()) {
-        emitDump(Event::UserEdit, true);
-        return;
-    }
-
+void CollabState::onUserEdit() {
     if (snapshot_.applyingRemoteSnapshot) {
         emitDump(Event::UserEdit, false);
         return;
     }
     if (snapshot_.submitInFlight) {
         snapshot_.localDirtyDuringSubmit = true;
-        mirrorToLegacy();
         transition(State::Connected_SubmitInFlight_Dirty, Event::UserEditDuringInFlight);
         return;
     }
     transition(State::Connected_LocalDirty, Event::UserEdit);
 }
 
-void CollabSession::onUserEditDuringInFlight() {
-    if (!isBound()) {
-        emitDump(Event::UserEditDuringInFlight, true);
-        return;
-    }
+void CollabState::onUserEditDuringInFlight() {
     if (!snapshot_.submitInFlight) {
-        qWarning() << "[CollabSession] onUserEditDuringInFlight while not in_flight";
+        qWarning() << "[CollabState] onUserEditDuringInFlight while not in_flight";
         return;
     }
     snapshot_.localDirtyDuringSubmit = true;
-    mirrorToLegacy();
     transition(State::Connected_SubmitInFlight_Dirty, Event::UserEditDuringInFlight);
 }
 
-void CollabSession::onSubmitAccepted(int newRemoteVersion) {
-    if (!isBound()) {
-        emitDump(Event::SubmitAccepted, true);
-        return;
-    }
+void CollabState::onSubmitAccepted(int newRemoteVersion) {
     const bool hadDirtyDuringSubmit = snapshot_.localDirtyDuringSubmit;
     if (snapshot_.submitInFlight) {
         snapshot_.submitInFlight = false;
@@ -361,7 +232,6 @@ void CollabSession::onSubmitAccepted(int newRemoteVersion) {
         if (snapshot_.pendingRemoteVersion <= snapshot_.modelVersion)
             snapshot_.pendingRemoteVersion = 0;
         snapshot_.localDirtyDuringSubmit = false;
-        mirrorToLegacy();
     }
     if (snapshot_.pendingRemoteVersion > snapshot_.modelVersion) {
         transition(State::Connected_RemotePending_Dirty, Event::SubmitAccepted);
@@ -372,15 +242,10 @@ void CollabSession::onSubmitAccepted(int newRemoteVersion) {
     }
 }
 
-void CollabSession::onRemotePending(int remoteVersion) {
-    if (!isBound()) {
-        emitDump(Event::RemotePending, true);
-        return;
-    }
+void CollabState::onRemotePending(int remoteVersion) {
     // Keep the newest notification, including messages received during HTTP.
     if (remoteVersion > snapshot_.modelVersion) {
         snapshot_.pendingRemoteVersion = qMax(snapshot_.pendingRemoteVersion, remoteVersion);
-        mirrorToLegacy();
     }
     // During reconstruction, retain notifications until the apply completes.
     if (snapshot_.applyingRemoteSnapshot) {
@@ -396,16 +261,11 @@ void CollabSession::onRemotePending(int remoteVersion) {
     }
 }
 
-void CollabSession::onRemoteApplied(int appliedVersion) {
-    if (!isBound()) {
-        emitDump(Event::RemoteApplied, true);
-        return;
-    }
+void CollabState::onRemoteApplied(int appliedVersion) {
     snapshot_.applyingRemoteSnapshot = false;
     snapshot_.modelVersion = appliedVersion;
     if (snapshot_.pendingRemoteVersion <= snapshot_.modelVersion)
         snapshot_.pendingRemoteVersion = 0;
-    mirrorToLegacy();
     if (snapshot_.submitInFlight) {
         transition(State::Connected_SubmitInFlight, Event::RemoteApplied);
     } else if (snapshot_.pendingRemoteVersion > snapshot_.modelVersion) {
@@ -417,11 +277,7 @@ void CollabSession::onRemoteApplied(int appliedVersion) {
     }
 }
 
-void CollabSession::onReconnect(bool /*projectIdValid*/) {
-    if (!isBound()) {
-        emitDump(Event::Reconnect, true);
-        return;
-    }
+void CollabState::onReconnect(bool /*projectIdValid*/) {
     if (snapshot_.submitInFlight) {
         transition(State::Connected_SubmitInFlight, Event::Reconnect);
     } else {
@@ -429,21 +285,17 @@ void CollabSession::onReconnect(bool /*projectIdValid*/) {
     }
 }
 
-void CollabSession::onDisconnected() {
-    if (!isBound()) {
-        emitDump(Event::Disconnected, true);
-        return;
-    }
+void CollabState::onDisconnected() {
     snapshot_.submitInFlight = false;
     snapshot_.localDirtyDuringSubmit = false;
     snapshot_.submitRequestId.clear();
     snapshot_.applyingRemoteSnapshot = false;
-    mirrorToLegacy();
     transition(State::Disconnected, Event::Disconnected);
 }
 
-void CollabSession::reset() {
+void CollabState::reset() {
     snapshot_ = Snapshot();
     state_ = State::Disconnected;
-    mirrorToLegacy();
 }
+
+} // namespace dbcad

@@ -133,23 +133,21 @@
   </ItemDefinitionGroup>
   <Import Project="kernel\acis_link.props" />
   <ItemGroup>
-    <ClCompile Include="backend_api_client.cpp" />
-
-    <ClCompile Include="collab_session.cpp" />
+    <ClCompile Include="core\collab_backend.cpp" />
+    <ClCompile Include="core\collab_controller.cpp" />
+    <ClCompile Include="core\collab_state.cpp" />
+    <ClCompile Include="core\command_bus.cpp" />
+    <ClCompile Include="core\document_session.cpp" />
+    <ClCompile Include="core\http_transport.cpp" />
+    <ClCompile Include="core\sat_file_backend.cpp" />
     <ClCompile Include="glwidget.cpp" />
     <ClCompile Include="window.cpp" />
     <QtRcc Include="mainwindow.qrc" />
     <QtMoc Include="mainwindow.h" />
     <ClCompile Include="mainwindow.cpp" />
     <ClCompile Include="ui\mainwindow_connections.cpp" />
-    <ClCompile Include="ui\mainwindow_changes.cpp" />
     <ClCompile Include="ui\mainwindow_collab_actions.cpp" />
-    <ClCompile Include="ui\mainwindow_graph.cpp" />
-    <ClCompile Include="ui\mainwindow_json.cpp" />
     <ClCompile Include="ui\mainwindow_presence.cpp" />
-    <ClCompile Include="ui\mainwindow_messages.cpp" />
-    <ClCompile Include="ui\mainwindow_event_presence_ack.cpp" />
-    <ClCompile Include="ui\mainwindow_event_delta.cpp" />
 
     <ClCompile Include="ui\mainwindow_documents.cpp" />
     <ClCompile Include="ui\mainwindow_actions.cpp" />
@@ -159,8 +157,13 @@
     <ClCompile Include="ui\mainwindow_config.cpp" />
     <ClCompile Include="ui\mainwindow_menus.cpp" />
 
-    <ClCompile Include="main.cpp" Condition="'$(DBCADRegression)' != 'true'" />
+    <ClCompile Include="main.cpp" Condition="'$(DBCADRegression)' != 'true' And '$(DBCADCoreTests)' != 'true'" />
     <ClCompile Include="..\scripts\tests\client_regression.cpp" Condition="'$(DBCADRegression)' == 'true'" />
+    <ClCompile Include="..\scripts\tests\core_unit_tests.cpp" Condition="'$(DBCADCoreTests)' == 'true'" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="core\collab_backend.h" />
+    <QtMoc Include="core\collab_controller.h" />
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="window.h" />
@@ -173,15 +176,20 @@
     <ClInclude Include="kernel\model_types.h" />
     <ClInclude Include="kernel\document_model.h" />
     <ClInclude Include="acis.hxx" />
-    <ClInclude Include="backend_api_client.h" />
     <ClInclude Include="common.hxx" />
     <ClInclude Include="access.hxx" />
     <ClInclude Include="ui\mainwindow_internal.h" />
 
     <ClInclude Include="gme_dump_object.hxx" />
     <ClInclude Include="gme_mesh.hxx" />
-    <ClInclude Include="collab_session.h" />
     <ClInclude Include="entity_graph_serializer.h" />
+    <ClInclude Include="core\collab_state.h" />
+    <ClInclude Include="core\command_bus.h" />
+    <ClInclude Include="core\document_session.h" />
+    <ClInclude Include="core\entity_change.h" />
+    <ClInclude Include="core\http_transport.h" />
+    <ClInclude Include="core\sat_file_backend.h" />
+    <ClInclude Include="core\storage_backend.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="images\DBCAD.rc" />
@@ -214,7 +222,9 @@
     <OutDir>$(MSBuildProjectDirectory)\..\x64\$(Configuration)\</OutDir>
     <IntDir>$(MSBuildProjectDirectory)\..\x64\obj\CAD_DB\$(Configuration)\</IntDir>
     <IntDir Condition="'$(DBCADRegression)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\ClientRegression\$(Configuration)\</IntDir>
+    <IntDir Condition="'$(DBCADCoreTests)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\CoreUnitTests\$(Configuration)\</IntDir>
     <TargetName Condition="'$(DBCADRegression)' == 'true'">client_regression</TargetName>
+    <TargetName Condition="'$(DBCADCoreTests)' == 'true'">core_unit_tests</TargetName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

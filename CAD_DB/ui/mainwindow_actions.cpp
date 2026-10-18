@@ -105,44 +105,54 @@ void MainWindow::createActions() {
     exitAct->setShortcuts(QKeySequence::Quit);
     exitAct->setStatusTip(tr("退出系统"));
 
-    // 插入基本体的菜单项和工具栏
+    // ---------- 插入/操作菜单：由命令注册表生成（M1.6） ----------
+    registerDefaultCommands();
+
     QMenu *insertMenu = menuBar()->addMenu(tr("插入(&I)"));
     QMenu *insertSubMenu = nullptr;
     QToolBar *insertSubToolBar = nullptr;
-    for (auto it = menus_entities.begin(); it != menus_entities.end(); ++it) {
-        if (it->operatorType == OPERATOR_TYPES::OPERATOR_SPERATOR) {
-            if (it->subOperatorType == 0) {
-                insertSubMenu = insertMenu->addMenu(it->name_cn.c_str());
-                insertSubToolBar = addToolBar(tr("插入%1").arg(it->name_cn.c_str()));
-            } else if (it->subOperatorType == 1)
-                insertToolBarBreak(insertSubToolBar);
-
-            continue;
+    QString insertGroupId;
+    const auto insertGroups = commandBus_->groups(QStringLiteral("insert"));
+    for (const auto *command : commandBus_->commands(QStringLiteral("insert"))) {
+        if (command->groupId != insertGroupId) {
+            const dbcad::CommandBus::Group *group = nullptr;
+            for (const auto& candidate : insertGroups)
+                if (candidate.id == command->groupId)
+                    group = &candidate;
+            if (group != nullptr) {
+                insertSubMenu = insertMenu->addMenu(group->title);
+                insertSubToolBar = addToolBar(tr("插入%1").arg(group->title));
+                insertGroupId = command->groupId;
+            }
         }
-        const QIcon icon =
-            QIcon::fromTheme("application", QIcon(QString::fromStdString(":/images/" + it->name_en + ".png")));
-        QAction *act = insertSubMenu->addAction(icon, tr(it->name_cn.c_str()), this,
-                                                [=]() { this->insertElements(it->operatorType, it->subOperatorType); });
-        act->setCheckable(it->checkable);
-        act->setStatusTip(QString::fromStdString("插入" + it->name_cn));
+        if (command->toolbarBreakBefore && insertSubToolBar != nullptr) {
+            insertToolBarBreak(insertSubToolBar);
+        }
+        const QIcon icon = QIcon::fromTheme("application", QIcon(":/images/" + command->icon + ".png"));
+        const QString id = command->id;
+        QAction *act =
+            insertSubMenu->addAction(icon, command->label, this, [this, id]() { commandBus_->dispatch(id); });
+        act->setCheckable(command->checkable);
+        act->setStatusTip(QString::fromStdString("插入" + command->label.toStdString()));
         insertSubToolBar->addAction(act);
     }
 
-    // 插入布尔运算菜单项和工具栏
     QMenu *operatorMenu = menuBar()->addMenu(tr("操作(&O)"));
     QToolBar *operatorToolBar = addToolBar(tr("操作"));
-    for (auto it = menus_operators.begin(); it != menus_operators.end(); ++it) {
-        if (it->operatorType == OPERATOR_TYPES::OPERATOR_SPERATOR) {
-            operatorMenu->addSeparator();
+    QString operateGroupId;
+    for (const auto *command : commandBus_->commands(QStringLiteral("operate"))) {
+        if (command->groupId != operateGroupId) {
+            if (!operateGroupId.isEmpty())
+                operatorMenu->addSeparator();
             operatorToolBar = addToolBar(tr("操作"));
-            continue;
+            operateGroupId = command->groupId;
         }
-        const QIcon icon =
-            QIcon::fromTheme("application", QIcon(QString::fromStdString(":/images/" + it->name_en + ".png")));
-        QAction *act = operatorMenu->addAction(icon, tr(it->name_cn.c_str()), this,
-                                               [=]() { this->operation(it->operatorType, it->subOperatorType); });
-        act->setCheckable(it->checkable);
-        act->setStatusTip(QString::fromStdString(it->name_cn));
+        const QIcon icon = QIcon::fromTheme("application", QIcon(":/images/" + command->icon + ".png"));
+        const QString id = command->id;
+        QAction *act =
+            operatorMenu->addAction(icon, command->label, this, [this, id]() { commandBus_->dispatch(id); });
+        act->setCheckable(command->checkable);
+        act->setStatusTip(command->label);
         operatorToolBar->addAction(act);
     }
 
@@ -151,7 +161,7 @@ void MainWindow::createActions() {
     QAction *aboutAct = helpMenu->addAction(tr("关于(&A)"), this, &MainWindow::about);
     aboutAct->setStatusTip(tr("显示系统说明"));
 
-    // 设置存取模式
+    // 设置存取模式：模式切换 = 后端选择
     QMenu *settingsMenu = menuBar()->addMenu(tr("设置存取模式(&S)"));
 
     setACISModeAct = new QAction(tr("SAT文件(ACIS)(&A)"), this);
@@ -169,6 +179,9 @@ void MainWindow::createActions() {
     setModeActGroup->addAction(setACISModeAct);
     setModeActGroup->addAction(setFASTAPIModeAct);
     setACISModeAct->setChecked(true);
+
+    connect(setACISModeAct, &QAction::triggered, this, [this]() { activeStorage_ = satBackend_.get(); });
+    connect(setFASTAPIModeAct, &QAction::triggered, this, [this]() { activeStorage_ = collabBackend_.get(); });
 
     settingsMenu->addSeparator();
     QAction *setFastAPIConnectInfoAct =

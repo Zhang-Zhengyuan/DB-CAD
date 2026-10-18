@@ -1,7 +1,6 @@
 #pragma once
 // Private dependencies shared by MainWindow implementation units.
 #include "mainwindow.h"
-#include "collab_session.h"
 
 #include <QActionGroup>
 #include <QApplication>
@@ -49,7 +48,6 @@
 #include <QTimer>
 #include <QUuid>
 #include <QUrl>
-#include <QtWebSockets/QWebSocket>
 #include <fstream>
 #include <algorithm>
 #include <functional>
@@ -57,19 +55,8 @@
 
 #include "window.h"
 #include "kernel/geometry_kernel.h"
-#include "backend_api_client.h"
 #include <filesystem>
 #include <format>
 
-struct menu_struct {
-    std::string name_cn = "菜单";                                       // 菜单项中文名/状态栏提示
-    std::string name_en = "menu";                                       // 菜单项英文名/icon文件名.png
-    bool checkable = false;                                             // 该菜单是否可以check
-    OPERATOR_TYPES operatorType = OPERATOR_TYPES::OPERATOR_CONSTRUCTOR; // 该项对应的操作类型
-    // 说明：-1表示读入实体；OPERATOR_TYPES::OPERATOR_SPERATOR，表示插入分隔符
-    int subOperatorType = 0; // 该项对应的子操作类型
-};
-extern std::vector<menu_struct> menus_entities;
-extern std::vector<menu_struct> menus_operators;
 std::vector<std::string> read_config_lines(const std::string &filePath, int maxLines);
 bool write_config_lines(const std::string &filePath, const std::vector<std::string> &lines, QString *error);

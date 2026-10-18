@@ -14,7 +14,8 @@ void MainWindow::insertElements(OPERATOR_TYPES type,int subtype) {
     curWindow->createEntity(subtype,shape,handles);
     if(!shape) return;
     std::string name="实体";
-    for(auto& menu:menus_entities) if(menu.operatorType==type && menu.subOperatorType==subtype) name=menu.name_cn;
+    for(const auto* command:commandBus_->commands(QStringLiteral("insert")))
+        if(command->operatorType==type && command->subOperatorType==subtype) name=command->label.toStdString();
     curWindow->addEntity(shape,name,subtype,handles);
     curWindow->captureHistory();
 }

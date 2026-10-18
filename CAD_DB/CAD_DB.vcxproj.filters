@@ -1,57 +1,60 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="backend_api_client.cpp" />
-    <ClCompile Include="DbcadAPI.cpp" />
-    <ClCompile Include="collab_session.cpp" />
-    <ClCompile Include="entity_merge_engine.cpp" />
+    <Filter Include="core">
+      <UniqueIdentifier>{7a1e9f22-6a04-4d8f-98e3-9c11a30c2b01}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="kernel">
+      <UniqueIdentifier>{0c55b160-9301-43a2-8e5f-3f4a30c8dd52}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ui">
+      <UniqueIdentifier>{93f0bd33-91c5-42de-8fbe-72eb6b09cf42}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="core\collab_backend.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="core\collab_controller.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="core\collab_state.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="core\command_bus.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="core\document_session.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="core\http_transport.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="core\sat_file_backend.cpp"><Filter>core</Filter></ClCompile>
     <ClCompile Include="glwidget.cpp" />
-    <ClCompile Include="pg_service.cpp" />
-    <ClCompile Include="pg_store.cpp" />
     <ClCompile Include="window.cpp" />
     <QtRcc Include="mainwindow.qrc" />
     <QtMoc Include="mainwindow.h" />
     <ClCompile Include="mainwindow.cpp" />
-    <ClCompile Include="ui\mainwindow_connections.cpp" />
-    <ClCompile Include="ui\mainwindow_postgres.cpp" />
-    <ClCompile Include="ui\mainwindow_changes.cpp" />
-    <ClCompile Include="ui\mainwindow_collab_actions.cpp" />
-    <ClCompile Include="ui\mainwindow_graph.cpp" />
-    <ClCompile Include="ui\mainwindow_json.cpp" />
-    <ClCompile Include="ui\mainwindow_presence.cpp" />
-    <ClCompile Include="ui\mainwindow_messages.cpp" />
-    <ClCompile Include="ui\mainwindow_event_presence_ack.cpp" />
-    <ClCompile Include="ui\mainwindow_event_delta.cpp" />
-    <ClCompile Include="ui\mainwindow_documents.cpp" />
-    <ClCompile Include="ui\mainwindow_actions.cpp" />
-    <ClCompile Include="ui\mainwindow_editing.cpp" />
-    <ClCompile Include="ui\mainwindow_load.cpp" />
-    <ClCompile Include="ui\mainwindow_save.cpp" />
-    <ClCompile Include="ui\mainwindow_config.cpp" />
-    <ClCompile Include="ui\mainwindow_menus.cpp" />
+    <ClCompile Include="ui\mainwindow_connections.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="ui\mainwindow_collab_actions.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="ui\mainwindow_presence.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="ui\mainwindow_documents.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="ui\mainwindow_actions.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="ui\mainwindow_editing.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="ui\mainwindow_load.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="ui\mainwindow_save.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="ui\mainwindow_config.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="ui\mainwindow_menus.cpp"><Filter>ui</Filter></ClCompile>
     <ClCompile Include="main.cpp" />
     <QtMoc Include="window.h" />
     <QtMoc Include="glwidget.h" />
-    <QtMoc Include="pg_service.h" />
-    <ClInclude Include="kernel\geometry_kernel.h" />
-    <ClInclude Include="kernel\model_types.h" />
-    <ClInclude Include="kernel\document_model.h" />
-    <ClInclude Include="kernel\legacy_storage.h" />
+    <ClInclude Include="core\collab_backend.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="core\collab_controller.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="core\collab_state.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="core\command_bus.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="core\document_session.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="core\entity_change.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="core\http_transport.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="core\sat_file_backend.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="core\storage_backend.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="kernel\geometry_kernel.h"><Filter>kernel</Filter></ClInclude>
+    <ClInclude Include="kernel\model_types.h"><Filter>kernel</Filter></ClInclude>
+    <ClInclude Include="kernel\document_model.h"><Filter>kernel</Filter></ClInclude>
     <ClInclude Include="acis.hxx" />
-    <ClInclude Include="backend_api_client.h" />
     <ClInclude Include="common.hxx" />
     <ClInclude Include="access.hxx" />
-    <ClInclude Include="ui\mainwindow_internal.h" />
-    <ClInclude Include="storage\access_internal.hxx" />
-    <ClInclude Include="storage\access_save_codec.hxx" />
-    <ClInclude Include="storage\access_restore_codec.hxx" />
-    <ClInclude Include="DbcadAPI.h" />
+    <ClInclude Include="ui\mainwindow_internal.h"><Filter>ui</Filter></ClInclude>
     <ClInclude Include="gme_dump_object.hxx" />
     <ClInclude Include="gme_mesh.hxx" />
-    <ClInclude Include="neo4j.hxx" />
-    <ClInclude Include="pg_store.hxx" />
-    <ClInclude Include="collab_session.h" />
     <ClInclude Include="entity_graph_serializer.h" />
-    <ClInclude Include="entity_merge_engine.h" />
   </ItemGroup>
 </Project>

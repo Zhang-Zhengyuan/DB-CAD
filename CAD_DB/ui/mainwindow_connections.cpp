@@ -2,14 +2,13 @@
 
 void MainWindow::setFastAPIConnectInfo() {
     auto values = read_config_lines("fastapi_connect_info.conf", 3);
+    QString baseUrl = collabBackend_->baseUrl();
+    QString author = collabBackend_->author();
+    QString password;
     if (!values.empty()) {
-        if (!values[0].empty()) {
-            fastapi_base_url = values[0];
-        }
-        if (!values[1].empty()) {
-            fastapi_author = values[1];
-        }
-        fastapi_password = values[2];
+        if (!values[0].empty()) baseUrl = QString::fromStdString(values[0]);
+        if (!values[1].empty()) author = QString::fromStdString(values[1]);
+        password = QString::fromStdString(values[2]);
     }
 
     QDialog dialog(this);
@@ -19,18 +18,18 @@ void MainWindow::setFastAPIConnectInfo() {
 
     QLineEdit baseUrlEdit(&dialog);
     baseUrlEdit.setPlaceholderText("http://127.0.0.1:8000");
-    baseUrlEdit.setText(QString::fromStdString(fastapi_base_url));
+    baseUrlEdit.setText(baseUrl);
     form.addRow(tr("FastAPI地址:"), &baseUrlEdit);
 
     QLineEdit authorEdit(&dialog);
     authorEdit.setPlaceholderText("dbcad-exe");
-    authorEdit.setText(QString::fromStdString(fastapi_author));
+    authorEdit.setText(author);
     form.addRow(tr("作者名:"), &authorEdit);
 
     QLineEdit passwordEdit(&dialog);
     passwordEdit.setEchoMode(QLineEdit::Password);
-    passwordEdit.setPlaceholderText("可留空（后端未启用密码时）");
-    passwordEdit.setText(QString::fromStdString(fastapi_password));
+    passwordEdit.setPlaceholderText(tr("可留空（后端未启用密码时）"));
+    passwordEdit.setText(password);
     form.addRow(tr("连接密码:"), &passwordEdit);
 
     QPushButton testButton(tr("测试连接"), &dialog);
@@ -48,12 +47,11 @@ void MainWindow::setFastAPIConnectInfo() {
             return;
         }
 
-        BackendApiClient client(url, authorEdit.text().trimmed(), passwordEdit.text());
-        auto project = client.getProjectByName("__dbcad_connection_test__");
-        Q_UNUSED(project);
-        const QString err = client.lastError();
-        if (!err.isEmpty()) {
-            QMessageBox::warning(this, tr("FastAPI连接测试"), tr("连接失败：%1").arg(err));
+        dbcad::CollabBackend probe;
+        probe.configure(url, authorEdit.text().trimmed(), passwordEdit.text());
+        QString error;
+        if (!probe.testConnection(&error)) {
+            QMessageBox::warning(this, tr("FastAPI连接测试"), tr("连接失败：%1").arg(error));
         } else {
             QMessageBox::information(this, tr("FastAPI连接测试"), tr("连接成功。"));
         }
@@ -63,19 +61,19 @@ void MainWindow::setFastAPIConnectInfo() {
         return;
     }
 
-    const QString baseUrl = baseUrlEdit.text().trimmed();
-    if (baseUrl.isEmpty()) {
+    const QString newBaseUrl = baseUrlEdit.text().trimmed();
+    if (newBaseUrl.isEmpty()) {
         QMessageBox::warning(this, tr("FastAPI连接配置"), tr("FastAPI地址不能为空"));
         return;
     }
 
-    fastapi_base_url = baseUrl.toStdString();
-    fastapi_author = authorEdit.text().trimmed().toStdString();
-    fastapi_password = passwordEdit.text().trimmed().toStdString();
+    const std::string newAuthor = authorEdit.text().trimmed().toStdString();
+    const std::string newPassword = passwordEdit.text().trimmed().toStdString();
+    const std::string newBaseUrlStd = newBaseUrl.toStdString();
+    collabBackend_->configure(newBaseUrl, authorEdit.text().trimmed(), passwordEdit.text().trimmed());
 
     QString writeError;
-    if (!write_config_lines("fastapi_connect_info.conf", {fastapi_base_url, fastapi_author, fastapi_password},
-                            &writeError)) {
+    if (!write_config_lines("fastapi_connect_info.conf", {newBaseUrlStd, newAuthor, newPassword}, &writeError)) {
         QMessageBox::warning(this, tr("FastAPI连接配置"), writeError);
         return;
     }
@@ -83,7 +81,7 @@ void MainWindow::setFastAPIConnectInfo() {
     statusBar()->showMessage(tr("FastAPI连接信息已更新"), 2000);
 
     // 保存连接信息后，如果有项目ID则重新建立WebSocket连接
-    if (!fastapi_project_id.isEmpty() && !fastapi_base_url.empty()) {
+    if (!collabController_->projectId().isEmpty() && collabBackend_->isConfigured()) {
         reconnectFastAPISync();
     }
 }

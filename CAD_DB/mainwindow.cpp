@@ -4,33 +4,38 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
     setObjectName("MainWindow");
     setWindowTitle("DBCAD");
     curWindow = nullptr;
-    fastapi_client_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
-
-    fastapiHeartbeatTimer = new QTimer(this);
-    fastapiHeartbeatTimer->setInterval(10000);
-    connect(fastapiHeartbeatTimer, &QTimer::timeout, this, [this]() {
-        if (fastapiSyncSocket != nullptr && fastapiSyncSocket->isValid()) {
-            fastapiSyncSocket->sendTextMessage("ping");
-        }
-    });
-
-    fastapiReconnectTimer = new QTimer(this);
-    fastapiReconnectTimer->setInterval(3000);
-    connect(fastapiReconnectTimer, &QTimer::timeout, this, [this]() {
-        QAction *checkedAct = setModeActGroup ? setModeActGroup->checkedAction() : nullptr;
-        if (checkedAct == setFASTAPIModeAct && !fastapi_project_id.isEmpty()) {
-            reconnectFastAPISync();
-        } else {
-            fastapiReconnectTimer->stop();
-        }
-    });
-
-
+    // 核心库装配：内核 → 文档会话 → 协作后端/控制器 → 命令总线。
     try { dbcad::kernel(); } catch (const std::exception&) {
         QMessageBox::warning(this, tr("异常"), tr("几何内核初始化失败"));
         throw;
     }
+    documentSession_ = std::make_unique<dbcad::DocumentSession>(dbcad::kernel());
+    collabBackend_ = std::make_unique<dbcad::CollabBackend>(this);
+    collabController_ = std::make_unique<dbcad::CollabController>(*documentSession_, *collabBackend_, this);
+    satBackend_ = std::make_unique<dbcad::SatFileBackend>(dbcad::kernel());
+    commandBus_ = std::make_unique<dbcad::CommandBus>();
+    activeStorage_ = satBackend_.get();
+
+    // 后端信号 → 视图反应（状态机转移在控制器，文案在这里）。
+    connect(collabBackend_.get(), &dbcad::CollabBackend::textMessageReceived, this,
+            &MainWindow::handleSyncTextMessage);
+    connect(collabBackend_.get(), &dbcad::CollabBackend::channelStateChanged, this,
+            &MainWindow::handleBackendChannelState);
+    connect(collabBackend_.get(), &dbcad::CollabBackend::channelConnected, this,
+            &MainWindow::handleBackendChannelConnected);
+    connect(collabBackend_.get(), &dbcad::CollabBackend::channelDisconnected, this,
+            &MainWindow::handleBackendChannelDisconnected);
+    connect(collabBackend_.get(), &dbcad::CollabBackend::channelError, this,
+            &MainWindow::handleBackendChannelError);
+    connect(collabBackend_.get(), &dbcad::CollabBackend::collaboratorsChanged, this,
+            &MainWindow::handleBackendCollaboratorsChanged);
+    connect(collabController_.get(), &dbcad::CollabController::infoMessage, this,
+            [this](const QString& message, int duration) { showMessage(message, duration); });
+    connect(collabController_.get(), &dbcad::CollabController::stateChanged, this,
+            &MainWindow::updateCollabPanelUi);
+    // 重连策略 = 存取后端是协作后端且项目仍打开（原"模式为 FastAPI 且项目非空"）。
+    collabBackend_->setReconnectPolicy([this]() { return usingCollabStorage() && !collabController_->projectId().isEmpty(); });
 
     createActions();
     createStatusBar();
@@ -41,41 +46,27 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
 
     addWindow();
 
-    // option_header* delete_forward_states_option = find_option("delete_forward_states");
-    // delete_forward_states_option->push(FALSE);
-
-
-
     {
         auto fastapiValues = read_config_lines("fastapi_connect_info.conf", 3);
         if (!fastapiValues.empty()) {
-            fastapi_base_url = fastapiValues[0];
-            fastapi_author = fastapiValues[1];
-            fastapi_password = fastapiValues[2];
+            collabBackend_->configure(QString::fromStdString(fastapiValues[0]),
+                                      QString::fromStdString(fastapiValues[1]),
+                                      QString::fromStdString(fastapiValues[2]));
         }
-
     }
 
-    CollabSession::instance().bindLegacyFields(
-        fastapi_project_id, fastapi_model_version, fastapi_pending_remote_version, fastapiLastPublishReason,
-        fastapiPendingSubmitRequestId, fastapiSubmitInFlight, fastapiLocalDirtyDuringSubmit,
-        fastapiApplyingRemoteSnapshot, fastapiLocalDirty);
-    qDebug().noquote() << "[CollabSession] bound:" << CollabSession::instance().dump(CollabSession::Event::Bound);
-    CollabSession::instance().setDebugEnabled(true);
-    CollabSession::instance().setMinDumpIntervalMs(0);
-    CollabSession::instance().setEventMinInterval(CollabSession::Event::WsMessage, 200);
+    qDebug().noquote() << "[CollabState] bound:" << collabController_->state().dump(dbcad::CollabState::Event::Bound);
 
-    // 永久启用实体变更追踪：每次 addEntity/removeEntity/modifyEntity 都会记录到 pendingEntityChanges，
-    // 直到当前协作模式提交成功后才清空列表。
-    // 这是 entity_graph 增量提交路径生效的前提。
-    beginEntityChangeTracking();
+    // 永久启用实体变更追踪：每次 addEntity/removeEntity/modifyEntity 都会记录，
+    // 直到当前协作模式提交成功后才清空列表。这是 entity_graph 增量提交路径生效的前提。
+    documentSession_->beginChangeTracking();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (maybeSave()) {
         if(curWindow && !curWindow->close()) { event->ignore(); return; }
         event->accept();
-        disconnectFastAPISync();
+        collabController_->disconnectChannel();
         dbcad::shutdownKernel();
     } else {
         event->ignore();

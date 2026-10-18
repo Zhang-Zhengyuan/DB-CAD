@@ -10,13 +10,12 @@ void MainWindow::addWindow() {
 
 void MainWindow::open() {
     if (maybeSave()) {
-        QAction *checkedAct = setModeActGroup->checkedAction();
-        if (checkedAct == setACISModeAct) {
+        if (!usingCollabStorage()) {
             QString fileName =
                 QFileDialog::getOpenFileName(this, QObject::tr("打开文件"), QString::fromStdString(std::string(".")));
             if (!fileName.isEmpty())
                 loadFile(fileName);
-        } else if (checkedAct == setFASTAPIModeAct) {
+        } else {
             QDateTime curDateTime = QDateTime::currentDateTime();
             QString curDateTime_qstr = QString("part") + curDateTime.toString("yyyyMMddhhmmss");
 
@@ -50,8 +49,6 @@ void MainWindow::open() {
                     loadFile(lineEdit_partname.text(), spinBox_version.value());
                 }
             }
-        } else {
-            assert(false && "未知的存取模式");
         }
     }
 }
@@ -72,21 +69,18 @@ bool MainWindow::save() {
         return false;
     }
 
-    if (curWindow->getEntityList().empty() && setModeActGroup->checkedAction() != setFASTAPIModeAct) {
+    if (curWindow->getEntityList().empty() && !usingCollabStorage()) {
         QMessageBox::warning(this, tr("DBCAD"), tr("当前无顶级活跃实体。"));
         return false;
     }
 
-    QAction *checkedAct = setModeActGroup->checkedAction();
-
-    if (checkedAct == setACISModeAct) {
+    if (!usingCollabStorage()) {
         if (curWindow->getCurFile().isEmpty()) {
             return saveAs();
         } else {
             return saveFile(curWindow->getCurFile());
         }
     } else {
-        assert(checkedAct == setFASTAPIModeAct);
         if (curWindow->getCurPartName().isEmpty()) {
             return saveAs();
         } else {
@@ -182,8 +176,7 @@ void MainWindow::saveDebugFile() {
 }
 
 bool MainWindow::saveAs() {
-    QAction *checkedAct = setModeActGroup->checkedAction();
-    if (checkedAct == setACISModeAct) {
+    if (!usingCollabStorage()) {
         QFileDialog dialog(this);
         dialog.setWindowModality(Qt::WindowModal);
         dialog.setAcceptMode(QFileDialog::AcceptSave);
@@ -192,7 +185,6 @@ bool MainWindow::saveAs() {
             return false;
         return saveFile(dialog.selectedFiles().first());
     } else {
-        assert(checkedAct == setFASTAPIModeAct);
         bool ok;
         QDateTime curDateTime = QDateTime::currentDateTime();
         QString curDateTime_qstr =

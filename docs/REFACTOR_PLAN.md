@@ -1,7 +1,7 @@
 # 架构 v2 重构计划（refactor/architecture-v2）
 
 > 配套文档：[ARCHITECTURE.md](ARCHITECTURE.md)（架构定稿）。本文是执行计划：做什么、按什么顺序、每步怎么验收、什么时候合并回 master。
-> 开始日期：2026-10-18。M0 已完成（见文末变更记录）。
+> 开始日期：2026-10-18。M0 已完成、**M1 已完成**（见文末变更记录）。当前起点：M2。
 
 ## 0. 总原则
 
@@ -21,8 +21,8 @@
 
 ```text
 M0 清理（已完成）
- └─ M1 核心库抽取 ←—————— 当前起点
-     ├─ M2 UI 瘦身 + 网络异步化
+ └─ M1 核心库抽取（已完成）
+     ├─ M2 UI 瘦身 + 网络异步化 ←—— 当前起点
      │    └─ M4 协同工作流演进
      └─ M3 存储物理表示升级（服务端内部，与 M2/M4 并行）
           └─ M5 实体级增量（Phase D）
@@ -94,3 +94,26 @@ AI 作为"另一个操作者"接 CommandBus（与 UI 平级）：先实现命令
 - 构建：两个 vcxproj 与 build.ps1/check-environment.ps1 去掉 mgclient/libpq/openssl/glaze。
 - 验证：Debug 编译过、后端 43 项无 DB 测试绿、check-environment 过、无悬挂引用。
 - 净变更：55 文件，+107/−8025 行。留档 tag：`legacy/pre-architecture-v2`。
+
+## 4. M1 变更记录（已完成，2026-10-18）
+
+**核心库 `CAD_DB/core/`（并入 CAD_DB 工程，仅依赖 QtCore，无任何 Qt Widgets 头）：**
+
+| 组件 | 职责（替代的旧位置） |
+|---|---|
+| `DocumentSession` | 实体树/单调索引/依赖图、组件级变更记账（record*）、级联删除、下游重建、`applyRemoteGraph` 合并入口（防回环标记 RAII）（原 window.cpp + mainwindow_changes.cpp + mainwindow_graph.cpp 的非 UI 部分） |
+| `CollabState` | 版本状态机，**镜像字段模式已删除**，自身即唯一真相源（原 CollabSession 去掉 bindLegacyFields/mirror） |
+| `CollabController` | 推/拉编排、冲突判据（同组件并发 → 诚实拒绝 + 409 Conflict 类型化）、打开/另存项目编排、本地编辑与 WS 通知策略（原 mainwindow_json.cpp + load/save 的 FastAPI 策略部分） |
+| `CollabBackend` | json-delta HTTP 封装（返回类型化结果含 Conflict）+ WS 连接管理（重连/心跳定时器、在场名单）（原 BackendApiClient + mainwindow_presence 连接管理）；传输经 `HttpTransport` 抽象，可注入内存假服务器 |
+| `StorageBackend` + `SatFileBackend` | open/save/list/remove 统一接口；SAT 文件实现包 `kernel().writeNative/readNative`；CollabBackend 实现同一接口 → **存取模式 if/else 消失，改为后端选择**（`activeStorage` 指针，模式动作即切换动作） |
+| `CommandBus` | 命令注册表（名 → 参数 schema → 执行器）骨架；insert/operate 全部注册为命令，**菜单由注册表生成**（含 toolbar 布局与"换行符"分隔条的忠实保真） |
+
+**视图瘦身：** MainWindow 不再持有版本号、HTTP/WS 细节与 fastapi_* 镜像字段；只做菜单/面板/对话框与 `Outcome` 显示。Window 只留交互输入与呈现（树/网格/撤销历史），业务数据全部经由 `DocumentSession`。删除 collab_session、backend_api_client 与 7 个 ui 实现单元。
+
+**测试（新增 `scripts/tests/core_unit_tests.cpp`，`/p:DBCADCoreTests=true` 构建 core_unit_tests.exe）：**
+FakeGeometryKernel（可注入会话）+ MemoryTransport（内存实现 json-delta 线协议含 409 乐观锁）覆盖：变更记账、组件替换/追加/全量删除、防回环（apply 零记账）、级联删除、循环依赖检测、状态机全转移、推/拉协议（v1→v2→对端 v3→409 冲突回滚→pull 合入→同组件冲突拒绝→up-to-date）、StorageBackend 双实现、CommandBus 注册/分发/schema 校验。**104 项全部通过。**
+
+**验证门禁（全绿）：** `build.ps1 -Configuration Debug`；`run-client-regression.ps1 -Configuration Debug`（内核契约 77 项 + 真客户端对隔离 FastAPI 服务器 26 项——含双端推拉、undo 推送、删除推送、peer 409、坏图原子性、多输出重建、Escape 保真）；后端 `pytest -m 'not integration'` 43 项。client_regression.cpp 已随新 API 更新。
+
+**已知保留（按计划留给后续里程碑）：** HTTP 仍同步（嵌套事件循环 + 整窗禁用，M2.1 拆除，saveToProject 内的等待循环已标注）；`fprintf(stderr)` 调试残留未清（M2.3）；撤销仍为快照式全量记账（M2.4）；协作后端 list/remove 因服务端无对应端点而显式报"不支持"。
+
