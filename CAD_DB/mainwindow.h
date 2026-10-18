@@ -147,6 +147,12 @@ private:
     QString pendingOpenName_;
     QString pendingSaveName_;
 
+    // ---------- M4.2 在场感知 ----------
+    QSet<QString> announcedIntents_;               // 本端已广播 begin 的组件
+    QHash<QString, QString> remoteEditIntents_;    // uuid → 远端作者
+    void announceEditIntentEnds();
+    void handleEditIntentMessage(const QJsonObject& root);
+
     // ---------- 协作面板（纯视图） ----------
     QDockWidget* collabDock = nullptr;
     QLabel* collabConnectionLabel = nullptr;

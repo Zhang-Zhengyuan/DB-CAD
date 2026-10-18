@@ -66,6 +66,9 @@ public:
 
     // ---------- WS 通知策略 ----------
     void onRemoteVersionNotified(int remoteVersion);
+    // M4.1 自动拉取：WS 通知到达即拉；冲突判据为空自动应用，非空走人工通道。
+    void setAutoPullEnabled(bool enabled) { autoPullEnabled_ = enabled; }
+    bool autoPullEnabled() const { return autoPullEnabled_; }
 
     // ---------- 异步操作 ----------
     // 入口立即返回；前置条件不满足时同步发 *Finished（错误 Outcome）。
@@ -116,6 +119,7 @@ private:
     CollabState state_;
     QString projectName_;
     bool operationInFlight_ = false;
+    bool autoPullEnabled_ = true;
     // saveToProject 等待 WS 连接的一次性接线与定时器。
     QTimer* saveWaitTimer_ = nullptr;
     std::vector<QMetaObject::Connection> saveWaitConnections_;

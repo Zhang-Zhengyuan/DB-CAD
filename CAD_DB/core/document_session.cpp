@@ -425,6 +425,16 @@ void DocumentSession::resetChangesFromTree() {
         indexToUuid_.insert(item.index, QString::fromStdString(item.uuid));
 }
 
+void DocumentSession::announceEntityEdit(const QString& uuid) {
+    if (uuid.isEmpty() || applyingRemoteSnapshot_)
+        return;
+    if (announcedEdits_.contains(uuid))
+        return; // 已宣布过：意图只广播一次，直到显式 forget
+    announcedEdits_.insert(uuid);
+    if (entityEditSink_)
+        entityEditSink_(uuid);
+}
+
 void DocumentSession::recordEntityAdded(const QString& uuid, const QString& name, const QString& entityType,
                                         int index) {
     if (!trackingEntityChanges_)
@@ -438,6 +448,7 @@ void DocumentSession::recordEntityAdded(const QString& uuid, const QString& name
     change.timestamp = QDateTime::currentMSecsSinceEpoch();
     pendingChanges_.append(change);
     indexToUuid_[index] = uuid;
+    announceEntityEdit(uuid);
 }
 
 void DocumentSession::recordEntityRemoved(int index) {
@@ -486,6 +497,7 @@ void DocumentSession::recordEntityModified(int index) {
     change.entityIndex = index;
     change.timestamp = QDateTime::currentMSecsSinceEpoch();
     pendingChanges_.append(change);
+    announceEntityEdit(uuid);
 }
 
 QString DocumentSession::exportEntityChangesJson(const QList<EntityChange>& changes) const {

@@ -658,6 +658,96 @@ static void testPushPullProtocol() {
     expect(reopened.ok, "reopen empty project succeeds");
 }
 
+// ---------------------------------------------- M4.1/M4.2 自动拉取 + 编辑意图
+static void testAutoPullAndEditIntent() {
+    FakeKernel kernel;
+    DocumentSession session(kernel);
+    MemoryTransport* memory = new MemoryTransport;
+    memory->projects["p-x"] = {"p-x", "proj", 0, {}};
+    CollabBackend backend;
+    backend.setTransport(memory);
+    backend.configure("http://memory", "tester", "");
+    CollabController controller(session, backend);
+    controller.bindProject("p-x", "proj");
+    controller.onChannelConnected();
+    session.beginChangeTracking();
+
+    // 本地推 v1（立方体）。
+    const int cubeIndex = session.addEntity(kernel.create(E_CUBE, emptyGrid), "cube", E_CUBE)->index;
+    const QString cubeUuid = QString::fromStdString(session.itemByIndex(cubeIndex)->uuid);
+    waitForOutcome(controller, [&] { controller.pushAsync("t"); }, &CollabController::pushFinished);
+
+    // 编辑意图：每 uuid 只广播一次（sink 收一次），forget 后可再广播。
+    // addEntity 时（sink 未设置）已计入 announcedEdits_——先 forget 历史再验证。
+    QStringList announced;
+    session.setEntityEditSink([&announced](const QString& uuid) { announced << uuid; });
+    session.forgetAllEntityEdits();
+    session.recordEntityModified(cubeIndex);
+    session.recordEntityModified(cubeIndex);
+    expect(announced.size() == 1 && announced.first() == cubeUuid, "edit intent announced once per uuid");
+    session.forgetEntityEdit(cubeUuid);
+    session.recordEntityModified(cubeIndex);
+    expect(announced.size() == 2, "edit intent re-announced after forget");
+
+    // 对端推 v2（球体）。
+    CollabBackend peer;
+    peer.setTransport(memory);
+    peer.configure("http://memory", "peer", "");
+    CollabBackend::PushResult peerPush;
+    const auto peerGraph = QString::fromUtf8(
+        QJsonDocument(graphWith(kernel, {{QStringLiteral("peer-body"), kernel.create(E_SPHERE, emptyGrid)}}))
+            .toJson(QJsonDocument::Compact));
+    peer.pushJsonDelta("p-x", "peer", peerGraph, "[]", {}, controller.modelVersion(),
+                       [&](const CollabBackend::PushResult& r) { peerPush = r; });
+    expect(peerPush.status == CollabBackend::PushResult::Status::Created && peerPush.version == 2,
+           "peer advances to v2");
+
+    // M4.1 自动拉取：WS 通知到达即拉，冲突判据为空自动应用。
+    controller.setAutoPullEnabled(true);
+    bool autoPulled = false;
+    CollabController::Outcome autoOutcome;
+    QMetaObject::Connection connection = QObject::connect(
+        &controller, &CollabController::pullFinished, [&](const CollabController::Outcome& o) {
+            autoOutcome = o;
+            autoPulled = true;
+        });
+    session.discardPendingChanges(); // 本地无未提交 → 无冲突
+    controller.onRemoteVersionNotified(2);
+    QObject::disconnect(connection);
+    expect(autoPulled && autoOutcome.ok && autoOutcome.version == 2, "WS notify triggers auto pull");
+    expect(controller.modelVersion() == 2 && findByUuid(session, QStringLiteral("peer-body")) != nullptr,
+           "auto pull applied remote delta");
+
+    // 冲突路径：本地未提交修改与远端重叠 → 自动拉取诚实拒绝 → 人工通道提示。
+    CollabBackend::PushResult peerPush2;
+    peer.pushJsonDelta("p-x", "peer", peerGraph, "[]", {}, 2,
+                       [&](const CollabBackend::PushResult& r) { peerPush2 = r; });
+    expect(peerPush2.status == CollabBackend::PushResult::Status::Created && peerPush2.version == 3,
+           "peer advances same component to v3");
+    const auto* peerRow = findByUuid(session, QStringLiteral("peer-body"));
+    const ShapeHandle oldPeerShape = peerRow->shape;
+    session.recordEntityModified(peerRow->index); // 本地未提交修改命中远端变更
+    bool conflictAuto = false;
+    QStringList infos;
+    QMetaObject::Connection infoConnection =
+        QObject::connect(&controller, &CollabController::infoMessage, [&](const QString& m, int) { infos << m; });
+    QMetaObject::Connection conflictConnection = QObject::connect(
+        &controller, &CollabController::pullFinished, [&](const CollabController::Outcome& o) {
+            conflictAuto = o.conflict;
+        });
+    controller.onRemoteVersionNotified(3);
+    QObject::disconnect(conflictConnection);
+    QObject::disconnect(infoConnection);
+    expect(conflictAuto, "auto pull honestly rejects conflicting component");
+    expect(findByUuid(session, QStringLiteral("peer-body"))->shape == oldPeerShape,
+           "conflicting auto pull does not touch document");
+    bool manualHint = false;
+    for (const QString& message : infos)
+        if (message.contains(QString::fromUtf8("自动拉取")))
+            manualHint = true;
+    expect(manualHint, "auto pull progress is surfaced to the user");
+}
+
 // ---------------------------------------------- M1.5 StorageBackend 同接口测试
 static void testStorageBackends() {
     FakeKernel kernel;
@@ -779,6 +869,7 @@ int main(int argc, char** argv) {
         testCascadeAndRebuild();
         testStateMachine();
         testPushPullProtocol();
+        testAutoPullAndEditIntent();
         testStorageBackends();
         testCommandBus();
         printf("PASS total=%d\n", checks);

@@ -97,6 +97,13 @@ MainWindow::MainWindow(QWidget *parent, Qt::WindowFlags flags) : QMainWindow(par
     // 永久启用实体变更追踪：每次 addEntity/removeEntity/modifyEntity 都会记录，
     // 直到当前协作模式提交成功后才清空列表。这是 entity_graph 增量提交路径生效的前提。
     documentSession_->beginChangeTracking();
+    // M4.2 在场感知：本地首次编辑某组件时广播编辑意图（每 uuid 一次）。
+    documentSession_->setEntityEditSink([this](const QString& uuid) {
+        if (!usingCollabStorage() || announcedIntents_.contains(uuid))
+            return;
+        announcedIntents_.insert(uuid);
+        collabBackend_->sendEditIntent(uuid, QStringLiteral("begin"));
+    });
 }
 
 void MainWindow::setInteractionSurface(InteractionSurface* surface) {

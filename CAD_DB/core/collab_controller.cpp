@@ -95,6 +95,14 @@ void CollabController::onRemoteVersionNotified(int remoteVersion) {
     // 永远不在 WS 通知里直接应用远端图；Pull 经 HTTP 只取变更的拓扑组件。
     if (remoteVersion > state_.modelVersion()) {
         state_.onRemotePending(remoteVersion);
+        // M4.1 自动拉取：无在飞操作/提交时立即拉取。本地未提交修改与远端变更
+        // 重叠时，pull 的冲突判据会拒绝并给出人工通道提示——不静默覆盖。
+        if (autoPullEnabled_ && !operationInFlight_ && canPullNow(nullptr)) {
+            emit infoMessage(QString::fromUtf8("远端有新版本 v%1，自动拉取中").arg(remoteVersion), 3000);
+            emit stateChanged();
+            pullAsync();
+            return;
+        }
         emit infoMessage(QString::fromUtf8("远端有 JSON 协作版本 v%1，请点击 Pull 合并").arg(remoteVersion), 5000);
         emit stateChanged();
     }

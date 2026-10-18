@@ -139,6 +139,7 @@ static void clientChecks(const QString& url) {
     observer.open(QUrl(ws+"/ws/projects/"+project.project.id+"?client_id=observer")); timeout.start(5000); connected.exec();
     expect(observer.isValid(),"peer WebSocket connected to same project");
     auto& collab=main.collabController(); collab.bindProject(project.project.id,project.project.name); collab.onChannelConnected();
+    collab.setAutoPullEnabled(false); // 回归锁定手动 Pull 语义；自动拉取由 core 单测覆盖
     main.show(); QApplication::processEvents();
     HandleGrid h; auto cube=kernel().create(E_CUBE,h);
     auto row=window->addEntity(cube,"original",E_CUBE,h); const int id=row->index;

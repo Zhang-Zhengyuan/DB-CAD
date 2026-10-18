@@ -66,6 +66,8 @@ void MainWindow::reconnectFastAPISync() {
 
 void MainWindow::handlePushFinished(const dbcad::CollabController::Outcome& outcome) {
     displayOutcome(outcome);
+    if (outcome.ok)
+        announceEditIntentEnds(); // 已提交的组件编辑结束
     updateCollabPanelUi();
 }
 
@@ -73,7 +75,48 @@ void MainWindow::handlePullFinished(const dbcad::CollabController::Outcome& outc
     if (curWindow != nullptr)
         curWindow->refreshAfterDocumentChange(outcome.retiredDisplayData);
     displayOutcome(outcome);
+    if (outcome.ok)
+        announceEditIntentEnds(); // 远端合并后重新声明意图
     updateCollabPanelUi();
+}
+
+void MainWindow::announceEditIntentEnds() {
+    if (!usingCollabStorage()) {
+        announcedIntents_.clear();
+        documentSession_->forgetAllEntityEdits();
+        return;
+    }
+    const QStringList ends = announcedIntents_.values();
+    for (const QString& uuid : ends)
+        collabBackend_->sendEditIntent(uuid, QStringLiteral("end"));
+    announcedIntents_.clear();
+    documentSession_->forgetAllEntityEdits();
+}
+
+// M4.2 组件级软锁提示：远端意图只用于 UI 提示；提交仍走 base_version 乐观锁。
+void MainWindow::handleEditIntentMessage(const QJsonObject& root) {
+    const QString componentUuid = root.value("component_uuid").toString();
+    const QString author = root.value("author").toString();
+    const QString action = root.value("action").toString();
+    if (componentUuid.isEmpty())
+        return;
+    if (action == QStringLiteral("begin")) {
+        remoteEditIntents_.insert(componentUuid, author);
+        const QString name = [this, componentUuid]() {
+            for (const auto& item : documentSession_->entities())
+                if (QString::fromStdString(item.uuid) == componentUuid)
+                    return QString::fromStdString(item.name);
+            return QString::fromUtf8("新组件");
+        }();
+        statusBar()->showMessage(tr("%1 正在编辑「%2」").arg(author, name), 3000);
+        for (const auto& change : documentSession_->pendingChanges())
+            if (change.uuid == componentUuid) {
+                statusBar()->showMessage(tr("注意：%1 也在编辑该组件，推送时可能冲突").arg(author), 5000);
+                break;
+            }
+    } else if (action == QStringLiteral("end")) {
+        remoteEditIntents_.remove(componentUuid);
+    }
 }
 
 void MainWindow::handleOpenProjectFinished(const dbcad::CollabController::Outcome& outcome) {
@@ -186,6 +229,10 @@ void MainWindow::handleSyncTextMessage(const QString& message) {
             return;
         }
         if (messageType == QStringLiteral("pong")) {
+            return;
+        }
+        if (messageType == QStringLiteral("edit_intent")) {
+            handleEditIntentMessage(root);
             return;
         }
         if (messageType == QStringLiteral("error")) {

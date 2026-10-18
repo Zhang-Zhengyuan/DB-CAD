@@ -37,6 +37,8 @@ bool MainWindow::saveFile(const QString& fileName) {
     curWindow->setIsModified(false);
 
     collabController_->leaveProject();
+    announcedIntents_.clear();
+    remoteEditIntents_.clear();
     setCurrentFile(fileName);
     statusBar()->showMessage(tr("文件已保存"), 2000);
     updateCollabPanelUi();

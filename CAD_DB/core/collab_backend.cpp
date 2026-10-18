@@ -518,6 +518,16 @@ void CollabBackend::sendSyncNow() {
     }
 }
 
+void CollabBackend::sendEditIntent(const QString& componentUuid, const QString& action) {
+    if (!channelReady() || componentUuid.isEmpty())
+        return;
+    QJsonObject payload;
+    payload.insert("type", QStringLiteral("edit_intent"));
+    payload.insert("component_uuid", componentUuid);
+    payload.insert("action", action);
+    socket_->sendTextMessage(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact)));
+}
+
 void CollabBackend::processPresenceMessage(const QJsonObject& root, const QString& messageType) {
     if (messageType == QStringLiteral("presence_snapshot")) {
         collaborators_.clear();

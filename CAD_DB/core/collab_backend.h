@@ -111,6 +111,8 @@ public:
     bool channelOpening() const { return socket_ != nullptr; }
     bool hasChannelProject() const { return !channelProjectId_.isEmpty(); }
     void sendSyncNow();
+    // M4.2 在场感知：组件级编辑意图广播（软锁提示用，提交仍走乐观锁）。
+    void sendEditIntent(const QString& componentUuid, const QString& action);
     // 重连策略由上层注入（"存取后端为协作且项目非空"）；返回 false 时重连定时器停止。
     void setReconnectPolicy(std::function<bool()> policy) { reconnectPolicy_ = std::move(policy); }
 

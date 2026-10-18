@@ -30,6 +30,8 @@ void MainWindow::loadFile(const QString &fileName) {
             curWindow->resetDocumentHistory();
             curWindow->setIsModified(false);
             collabController_->leaveProject();
+            announcedIntents_.clear();
+            remoteEditIntents_.clear();
             setCurrentFile(fileName);
             statusBar()->showMessage(tr("文件已导入"), 2000);
         }

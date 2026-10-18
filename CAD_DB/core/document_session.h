@@ -37,6 +37,10 @@ public:
     // ---------- 视图回调 ----------
     // 供视图设置的状态消息出口（原 showMessage 路径）。核心库内不做任何 UI。
     void setMessageSink(std::function<void(const QString&)> sink) { messageSink_ = std::move(sink); }
+    // M4.2 在场感知：本地记录 ADD/MODIFY 时回调（每 uuid 一次，直到 forgetEntityEdit）。
+    void setEntityEditSink(std::function<void(const QString& uuid)> sink) { entityEditSink_ = std::move(sink); }
+    void forgetEntityEdit(const QString& uuid) { announcedEdits_.remove(uuid); }
+    void forgetAllEntityEdits() { announcedEdits_.clear(); }
 
     // ---------- 实体树 ----------
     ENTITY_TREE_ITEM* addEntity(ShapeHandle shape, const std::string& name, int subOperatorType);
@@ -140,6 +144,10 @@ private:
 
     bool applyingRemoteSnapshot_ = false;
     bool dirty_ = false;
+    std::function<void(const QString& uuid)> entityEditSink_;
+    QSet<QString> announcedEdits_;
+
+    void announceEntityEdit(const QString& uuid);
 };
 
 } // namespace dbcad
