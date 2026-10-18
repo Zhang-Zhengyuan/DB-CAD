@@ -1,0 +1,33 @@
+name: 开发任务 / 缺陷 / 文档
+description: 实现前登记范围、验收和验证计划
+title: "[任务] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题与目标
+      description: 缺陷写复现步骤、实际/预期行为；功能写使用场景。不要附密码和用户模型。
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围与方案
+      description: 涉及模块、非目标、方案及协议/数据兼容影响。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收条件
+      description: 用可检查的清单说明怎样算完成，包括重要失败路径。
+      placeholder: "- [ ] 给出输入、操作和预期结果"
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: 验证计划与风险
+      description: 自动检查、GUI/数据库场景、所需依赖、风险和回滚方式。
+    validations:
+      required: true
