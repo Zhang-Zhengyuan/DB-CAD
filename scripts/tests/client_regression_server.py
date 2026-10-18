@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 backend = Path(__file__).resolve().parents[2] / 'CAD_DB' / 'backend'
 sys.path.insert(0, str(backend))
 sys.path.insert(0, str(backend / 'tests'))
-from test_hybrid_collaboration import MemoryStore
+from memory_store import MemoryStore
 from app import crud
 from app.api import json_delta, models
 from app.collaboration import snapshots

@@ -17,7 +17,8 @@ if($LASTEXITCODE -ne 0) { throw 'Client regression build failed' }
 $taskExe=Join-Path $taskRoot "x64/$Configuration/client_regression.exe"
 & (Join-Path $QtRoot 'bin/windeployqt.exe') --release --no-translations $taskExe
 if($LASTEXITCODE -ne 0) { throw 'Qt runtime staging failed' }
-$taskPython=(Get-Command python -ErrorAction Stop).Source
+$taskPython=Join-Path $taskRoot 'CAD_DB/backend/.venv/Scripts/python.exe'
+if(-not (Test-Path $taskPython)) { $taskPython=(Get-Command python -ErrorAction Stop).Source }
 $taskListener=[System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback,0)
 $taskListener.Start()
 $taskPort=$taskListener.LocalEndpoint.Port
@@ -25,18 +26,28 @@ $taskListener.Stop()
 $taskUrl="http://127.0.0.1:$taskPort"
 $taskServer=Join-Path $PSScriptRoot 'client_regression_server.py'
 $taskService=$null
+# Windows PowerShell 5.1 turns redirected native stderr into a terminating
+# error under $ErrorActionPreference='Stop', so never stream the exe through
+# the pipeline; capture its streams via Start-Process and judge by exit code.
+function Invoke-RegressionExe([string]$exe,[string[]]$arguments,[string]$log,[string]$errlog) {
+    # PS 5.1 rejects an empty -ArgumentList collection, so only pass it when set.
+    if($arguments -and $arguments.Count -gt 0) {
+        $run=Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $exe) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $log -RedirectStandardError $errlog
+    } else {
+        $run=Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $log -RedirectStandardError $errlog
+    }
+    if($run.ExitCode -ne 0) { throw "Regression executable failed with exit code $($run.ExitCode); see $log and $errlog" }
+}
 Push-Location (Split-Path -Parent $taskExe)
 try {
-    & $taskExe *> (Join-Path $taskLogs "kernel-contract-$Configuration.log")
-    if($LASTEXITCODE -ne 0) { throw 'Kernel contracts failed; see artifacts logs' }
+    Invoke-RegressionExe $taskExe @() (Join-Path $taskLogs "kernel-contract-$Configuration.log") (Join-Path $taskLogs "kernel-contract-$Configuration.err.log")
     $taskService=Start-Process -FilePath $taskPython -ArgumentList @(('"'+$taskServer+'"'),$taskPort) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskLogs 'regression-server-out.log') -RedirectStandardError (Join-Path $taskLogs 'regression-server-error.log')
     $taskReady=$false
     for($taskAttempt=0;$taskAttempt -lt 50;$taskAttempt++) {
         try { $null=Invoke-RestMethod "$taskUrl/health" -TimeoutSec 1; $taskReady=$true; break } catch { Start-Sleep -Milliseconds 100 }
     }
     if(-not $taskReady) { throw 'Isolated FastAPI regression server did not start' }
-    & $taskExe $taskUrl *> (Join-Path $taskLogs "client-http-$Configuration.log")
-    if($LASTEXITCODE -ne 0) { throw 'Client HTTP/widget regression failed; see artifacts logs' }
+    Invoke-RegressionExe $taskExe @($taskUrl) (Join-Path $taskLogs "client-http-$Configuration.log") (Join-Path $taskLogs "client-http-$Configuration.err.log")
     Write-Host "[OK] $Configuration kernel and real client regressions passed"
 } finally {
     Pop-Location
