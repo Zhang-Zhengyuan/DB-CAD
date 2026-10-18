@@ -9,7 +9,7 @@
 
 | 现有资产 | 位置 | 对本计划的意义 |
 |---|---|---|
-| **网格提取已解决** | `kernel/geometry_kernel.h:25` `mesh(ShapeHandle, GmeMesh::DisplayData&)`；`gme_mesh.cpp` 用 `api_facet_entity` + `api_get_facet_edge_points` + `api_rh_get_entity_rgb` | 三角面片、法线、边折线、逐面分组/颜色/包围盒一条龙，与 GLWidget 同一条通路。**第一步"面片怎么拿"已有答案，且是冻结接口的既有方法，不违反内核冻结** |
+| **网格提取通路存在，但属旧实现，须重构** | `kernel/geometry_kernel.h:25` `mesh(ShapeHandle, GmeMesh::DisplayData&)`；`gme_mesh.cpp` | 证明"ACIS 离散化在本项目可走通"（`api_facet_entity` + `api_get_facet_edge_points` + `api_rh_get_entity_rgb`），但该实现年代早、做法简陋：**调用 `api_facet_entity(ent)` 时不传任何质量参数（默认档）**、手工遍历 FACE 拼三角形、法线靠手工回退、还带着针对"图恢复面缺 facet"的防御性补丁。SDK 实际提供 `facet_options_visualization`（渲染质量档位）/`facet_options_precise`（sag/法向容差/最大边长）、`api_get_sequential_mesh`（结构化索引网格）、`api_get_facet_face_tri_points`、批量与缓存管理 API。**结论：不沿用，按 §2 第一步重写** |
 | **UI 层契约已隔离** | ARCHITECTURE.md §1-2：UI "只消费纯渲染数据（坐标/索引/颜色）和发操作命令" | 换 UI 不动核心，这是 v2 的设计承诺，本次兑现 |
 | **CommandBus 骨架** | `core/command_bus.*`（M1.6：名→schema→执行器，菜单即注册表生成） | 浏览器发命令 = 又一个平级操作者（与 M6 AI 同构），不需要发明新协议 |
 | **组件不可变 + 版本清单** | Neo4j 侧（M3）：组件内容寻址、版本=组件清单链 | **网格缓存天然成立**：同内容组件永远复用同一份网格，版本切换=换清单，只补拉新增组件 |
@@ -30,17 +30,27 @@
 
 要点：
 
-1. **ACIS 只能住在 C++ 进程里**（Python 服务端不可能解析 SAT），所以必须有一个 headless worker——它就是 ARCHITECTURE.md §1 里画的"核心进程"，只是 UI 客户端从 Qt 换成了浏览器。旧"bridge"概念的正当重生，但这次站在干净的 core/ 上。
-2. **FastAPI 是浏览器唯一入口**（鉴权、端口、WS 都在一处）；worker 只对 FastAPI 内网可见。json-delta 线协议冻结不动，网格通道全部是**新增**端点。
-3. **本地 SAT 文件模式**：浏览器上传/选择 SAT → worker 离散化 → 渲染，不经过项目流程。
+1. **ACIS 只能住在 C++ 进程里**（Python 服务端不可能解析 SAT，浏览器更不可能），所以必须有一个 headless worker——它就是 ARCHITECTURE.md §1 里画的"核心进程"，只是 UI 客户端从 Qt 换成了浏览器。旧"bridge"概念的正当重生，但这次站在干净的 core/ 上。
+2. **worker 不是渲染器。** 渲染（画三角形到屏幕）发生在浏览器的 GPU 上；worker 只干三件事：持有 ACIS 内核、把 B-rep 几何**离散成三角网格**（计算，不是画）、执行建模命令（浏览器拖 gizmo → 命令 → worker 在真实几何上执行 → 返回新网格）。它是"几何服务"，与画面无关，所以才叫 headless（无窗口）。
+3. **FastAPI 是浏览器唯一入口**（鉴权、端口、WS 都在一处）；worker 只对 FastAPI 内网可见。json-delta 线协议冻结不动，网格通道全部是**新增**端点。
+4. **本地 SAT 文件模式**：浏览器上传/选择 SAT → worker 离散化 → 渲染，不经过项目流程。
 
 ## 2. 三步走（对应用户三问，逐步验收）
 
-### 第一步：面片网格怎么获得 —— 已有 80%，补序列化
+### 第一步：面片网格怎么获得 —— 按未完成对待，先调研后重写
 
-- `mesh()` 产出 `DisplayData`：`faceCoords/normalCoords`（float32 xyz 流）、`triangles`（索引）、`edgeCoords`（边折线）、逐面/边/顶点分组的数量/基址/颜色/包围盒（`gme_mesh.hxx:22`）。
-- **新增**：`DisplayData → GLB`（glTF 2.0 二进制）序列化器。glTF 是行业标准，three.js 原生 `GLTFLoader`，任何查看器可调试；三角形 primitive（position+normal+index，组件色材质）+ 线段 primitive（B-rep 边）。分组/高亮元数据走**旁挂 manifest JSON**（组件 uuid → 面分组表），不硬塞进 glTF 语义。
-- 压缩：后期加 `EXT_meshopt_compression`（GPU 端解码、无损，2026 年主流管线已优于 Draco），MVP 先裸 GLB。
+现有 `gme_mesh` 通路只当"可行性证明"，不当资产。SDK 头文件（`_deps/acis/include/`）里可供调研的候选路径：
+
+| 候选 | 接口 | 特点 |
+|---|---|---|
+| A. 现状 | `api_facet_entity(ent)`（NULL 选项）+ 手工 FACE 遍历 | 默认质量、手工拼装、法线回退——作为基线 |
+| B. 可视化档位 | `facet_options_visualization`（face_quality/edge_quality 档位） | ACIS 为**渲染工作流**专门设计的档位，正对本计划场景 |
+| C. 精确容差 | `facet_options_precise`（surface_tolerance/sag、normal_tolerance、max_edge_length、grid_aspect_ratio、min_grid_lines） | 分析级控制，可量化误差 |
+| D. 结构化读取 | `api_get_sequential_mesh`（SEQUENTIAL_MESH 索引网格）/ `api_get_facet_face_tri_points` / `api_create_global_mesh` | 免手工遍历，直接拿带法线的索引网格；另有 `api_facet_entities` 批量与 `api_delete_entity_facets` 缓存管理 |
+
+调研动作（W0）：abc_cache 抽样模型（简单/中等/复杂各若干），四路对比**三角数、sag 误差、法线质量、耗时、边线与面网格一致性**，输出选型结论与推荐质量档位。然后重写为独立的 `MeshExtractor`：质量档位可调（低/中/高/精确容差）、法线一律来自内核、批量离散、边折线输出、旧防御性补丁按新路径重新验证后清除，配单元测试（往返一致性、法线连续性、未识别几何兜底）。
+
+**产出序列化**：`DisplayData → GLB`（glTF 2.0 二进制）。glTF 是行业标准，three.js 原生 `GLTFLoader`，任何查看器可调试；三角形 primitive（position+normal+index，组件色材质）+ 线段 primitive（B-rep 边）。分组/高亮元数据走**旁挂 manifest JSON**（组件 uuid → 面分组表），不硬塞进 glTF 语义。压缩：后期加 `EXT_meshopt_compression`（GPU 端解码、无损，2026 年主流管线已优于 Draco），MVP 先裸 GLB。
 
 ### 第二步：渲染怎么做 —— 常规 three.js 能力，无科研含量
 
@@ -66,14 +76,15 @@
 
 | 里程碑 | 内容 | 验收 | 估时 |
 |---|---|---|---|
-| **W0 端到端尖刺** | C++ CLI `mesh_export`：SAT → GLB + manifest；一次性 HTML 用 GLTFLoader 渲染 | 浏览器里看到带边线的着色模型；量化单模型 GLB 尺寸与生成耗时 | **2-3 天** |
-| **W1 headless worker + 网格端点** | 控制台 main 复用 core（文件模式 + FastAPI 项目模式，CollabController 原样）；内部 HTTP；`GET /projects/{id}/scene`、`GET /components/{hash}/mesh`（内容寻址缓存）；`POST /files/sat` | 浏览器渲染云端项目与本地 SAT；重复请求命中缓存 | 3-4 天 |
-| **W2 查看器 MVP** | R3F 工程脚手架；场景加载/fit/边线；组件树、点选高亮、版本列表 | 双击版本即切换渲染（只补拉增量组件） | 4-5 天 |
-| **W3 粗操作 + 协同** | 命令通道：WS → worker CommandBus（insert/draft/translate/erase + undo/redo）；TransformControls 拖拽平移；推/拉按钮 | 两个浏览器标签页互推互拉、409 冲突提示——等价于现有双客户端回归场景 | 4-5 天 |
-| **W4 加固与门禁** | abc_cache 抽样压测（10k 面片级模型）：meshopt 量化、懒加载调优；Playwright e2e；文档 | 大模型首屏可交互 < 数秒级；e2e 绿 | 3-4 天 |
-| **W5 去 Qt（独立里程碑）** | core/kernel 去 QtCore：QJson→nlohmann/json、QString→std::string、QByteArray→std::vector<std::uint8_t>、QSignal→回调（core 已是回调风格）；删 glwidget/window/mainwindow 与 Qt 工程/部署件；build.ps1 瘦身 | 构建不再需要 Qt；全部测试门禁绿；打 tag `qt-free` | 1-2 周 |
+| **W0 面片调研与选型** | §2 第一步的四路径对比（现状默认/visualization 档位/precise 容差/sequential_mesh），abc_cache 抽样基准 | 选型结论 + 基准数据（三角数/sag 误差/法线/耗时对比表） | **2-3 天** |
+| **W1 面片引擎重写 + 端到端尖刺** | 新 `MeshExtractor`（质量档位、内核法线、批量、边线）；GLB+manifest 序列化；一次性 HTML 渲染 | 浏览器看到带边线着色模型；质量档位切换肉眼可见差异；旧 `gme_mesh` 通路退役 | 2-3 天 |
+| **W2 headless worker + 网格端点** | 控制台 main 复用 core（文件模式 + FastAPI 项目模式，CollabController 原样）；内部 HTTP；`GET /projects/{id}/scene`、`GET /components/{hash}/mesh`（内容寻址缓存）；`POST /files/sat` | 浏览器渲染云端项目与本地 SAT；重复请求命中缓存 | 3-4 天 |
+| **W3 查看器 MVP** | R3F 工程脚手架；场景加载/fit/边线；组件树、点选高亮、版本列表 | 双击版本即切换渲染（只补拉增量组件） | 4-5 天 |
+| **W4 粗操作 + 协同** | 命令通道：WS → worker CommandBus（insert/draft/translate/erase + undo/redo）；TransformControls 拖拽平移；推/拉按钮 | 两个浏览器标签页互推互拉、409 冲突提示——等价于现有双客户端回归场景 | 4-5 天 |
+| **W5 加固与门禁** | abc_cache 抽样压测（10k 面片级模型）：meshopt 量化、懒加载调优；Playwright e2e；文档 | 大模型首屏可交互 < 数秒级；e2e 绿 | 3-4 天 |
+| **W6 去 Qt（独立里程碑）** | core/kernel 去 QtCore：QJson→nlohmann/json、QString→std::string、QByteArray→std::vector<std::uint8_t>、QSignal→回调（core 已是回调风格）；删 glwidget/window/mainwindow 与 Qt 工程/部署件；build.ps1 瘦身 | 构建不再需要 Qt；全部测试门禁绿；打 tag `qt-free` | 1-2 周 |
 
-**到 W4（约 3.5 周）Qt 已无用户；到 W5（再 1-2 周）Qt 从依赖里消失。** W0-W2 期间 Qt 客户端保持可用不动（web 前端在独立目录，新旧并行），W3 起以 web 为主战场，Qt 冻结只修致命 bug。
+**到 W5（约 4-5 周）Qt 已无用户；到 W6（再 1-2 周）Qt 从依赖里消失。** W0-W3 期间 Qt 客户端保持可用不动（web 前端在独立目录，新旧并行），W4 起以 web 为主战场，Qt 冻结只修致命 bug。面片引擎（W0-W1）先于一切前端工作——它是整条链路的地基，且与 UI 无关，即使后续计划有变也是净收益。
 
 ## 4. 冻结项与红线（延续 v2 规矩）
 
@@ -99,3 +110,4 @@
 ## 7. 变更记录
 
 - 2026-10-18 计划拟定（本文件）。现状盘点、技术调研、里程碑估算如上。
+- 2026-10-18 修订（评审意见）：① 澄清 headless worker 角色——它是持有 ACIS 的"几何服务"（离散化+建模命令执行），渲染在浏览器 GPU 上发生，worker 不画任何东西；② 面片获取从"已有答案"改为"按未完成对待"——旧 `gme_mesh` 仅作可行性基线，新增 W0 四路径调研（含 SDK 的 `facet_options_visualization`/`facet_options_precise`/`api_get_sequential_mesh`）与 W1 重写里程碑，总时长 3.5 周 → 4-5 周（到 Qt 无用户）。
