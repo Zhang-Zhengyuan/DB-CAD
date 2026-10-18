@@ -17,6 +17,12 @@ app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 app.mount(
     "/webui-static", StaticFiles(directory=neo4j_webui.STATIC_ROOT), name="webui-static"
 )
+# v3 Web 客户端（web/ 构建产物；开发期用 vite dev server + 代理）。
+from pathlib import Path as _Path  # noqa: E402
+
+_WEB_DIST = _Path(__file__).resolve().parents[3] / "web" / "dist"
+if _WEB_DIST.exists():
+    app.mount("/web", StaticFiles(directory=str(_WEB_DIST), html=True), name="web")
 app.include_router(neo4j_webui.router)
 app.add_route("/webui", neo4j_webui.serve_webui, ["GET"])
 app.add_route("/", neo4j_webui.serve_webui, ["GET"])

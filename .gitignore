@@ -103,3 +103,6 @@ scripts/tests/acis/entity_tests.exe
 scripts/tests/acis/graph_roundtrip_tests.exe
 scripts/tests/acis/*.dll
 scripts/tests/acis/*.obj
+
+# v1 组件内容寻址资产库（后端本地数据，不入库）
+CAD_DB/backend/data/

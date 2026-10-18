@@ -1,0 +1,95 @@
+:root {
+  color-scheme: dark;
+  --bg: #14181c;
+  --panel: #1d2329;
+  --panel-2: #222a31;
+  --border: #30383f;
+  --text: #d7dde3;
+  --text-dim: #8b959d;
+  --accent: #4d8bff;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  font: 13px/1.45 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app { display: flex; flex-direction: column; height: 100%; }
+.header {
+  display: flex; align-items: center; gap: 14px;
+  padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.brand { font-weight: 700; letter-spacing: 0.5px; color: var(--accent); }
+.project { color: var(--text); }
+.loading { color: var(--text-dim); }
+
+.error-banner {
+  background: #5b2330; color: #ffd9d9; padding: 6px 14px; font-size: 12px;
+}
+
+.main { display: flex; flex: 1; min-height: 0; }
+
+.sidebar {
+  width: 260px; min-width: 220px; overflow-y: auto;
+  background: var(--panel); border-right: 1px solid var(--border);
+}
+.panel-section { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.panel-section h3 {
+  margin: 0 0 8px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.8px; color: var(--text-dim);
+}
+
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li {
+  padding: 6px 8px; border-radius: 4px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.sidebar li:hover { background: var(--panel-2); }
+.sidebar li.active { background: #2b3a4d; outline: 1px solid #3d5a80; }
+.sidebar li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar li .meta { color: var(--text-dim); font-size: 11px; }
+.sidebar li .empty, .empty { color: var(--text-dim); cursor: default; }
+.sidebar li .message { width: 100%; color: var(--text-dim); font-size: 11px; }
+.version-number { font-weight: 600; min-width: 30px; }
+.tag {
+  background: #3d5a80; color: #cfe1ff; border-radius: 3px;
+  padding: 0 5px; font-size: 11px;
+}
+.swatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid #0006; }
+
+.viewport { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+.viewport > div { flex: 1 1 0%; min-height: 0; position: relative; }
+.viewport > div > div { height: 100%; position: relative; }
+.viewport canvas { display: block; width: 100% !important; height: 100% !important; }
+.toolbar {
+  display: flex; gap: 16px; padding: 6px 10px;
+  background: var(--panel); border-bottom: 1px solid var(--border); z-index: 2;
+}
+.segmented { display: flex; }
+.segmented button {
+  background: transparent; color: var(--text); border: 1px solid var(--border);
+  padding: 4px 10px; cursor: pointer; font-size: 12px;
+}
+.segmented button + button { border-left: none; }
+.segmented button:first-child { border-radius: 4px 0 0 4px; }
+.segmented button:last-child { border-radius: 0 4px 4px 0; }
+.segmented button:hover { background: var(--panel-2); }
+.segmented button.active { background: #2b3a4d; color: var(--accent); }
+
+.viewport > :last-child { flex: 1; min-height: 0; }
+
+.properties {
+  width: 240px; background: var(--panel); border-left: 1px solid var(--border);
+  padding: 10px 12px; overflow-y: auto;
+}
+.properties h3 {
+  margin: 0 0 8px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.8px; color: var(--text-dim);
+}
+.properties dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; }
+.properties dt { color: var(--text-dim); }
+.properties dd { margin: 0; font-variant-numeric: tabular-nums; word-break: break-all; }
+.hash { font-size: 10px; font-family: Consolas, monospace; }
