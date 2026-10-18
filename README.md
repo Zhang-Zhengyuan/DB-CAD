@@ -32,7 +32,7 @@ uv run --frozen pytest -q -m 'not integration'
 - WebSocket 只提供版本通知、在线成员和重连；Mode0 与 C++ Bridge 已移除。
 - base_version 冲突检查、稳定 UUID、增量拓扑组件合并和本地未提交修改保护。
 - Neo4j 管理 WebUI，包含项目、版本、图及按需查看原始提交。
-- 直接 Neo4j 与 PostgreSQL 实验功能保留。
+- 存取模式只有两个：SAT 本地文件与 FastAPI 云端协作。客户端 Bolt 直连 Neo4j 栈与 PostgreSQL 实验已在架构 v2 清理中移除（tag：`legacy/pre-architecture-v2`）。
 
 ## 几何内核隔离
 
@@ -52,8 +52,7 @@ CAD_DB/
   kernel/                中立接口、值类型、文档记录与 ACIS 适配实现
   mainwindow.cpp         窗口初始化；其他实现位于 ui/
   ui/                    连接、协作、消息、文档、编辑
-  access.cpp             SAT 文件与诊断；图存储位于 storage/
-  storage/               旧 Neo4j 图/历史兼容、几何编码（编入适配库）
+  access.cpp             SAT 文件存取（本地持久化与交换格式）
   backend/app/
     api/                 HTTP/WS 入口
     collaboration/       通知协议与版本摘要

@@ -22,15 +22,6 @@ void MainWindow::loadFile(const QString &fileName) {
             for(size_t i=0;i<shapes.size();++i) curWindow->addEntity(shapes[i],tr("导入实体%1").arg(i).toStdString(),-1);
             isRead=true;
         } catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); }
-    } else if (checkedAct == setNEO4JModeAct) {
-        try {
-            dbcad::DbConfig config{neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password};
-            if(dbcad::legacyPartCount(config,fileName.toStdString())!=1) throw std::runtime_error("零件不存在或不唯一");
-            auto shapes=dbcad::loadLegacyPart(config,fileName.toStdString());
-            curWindow->clear(); pendingEntityChanges.clear(); entityIndexToUuid.clear();
-            for(size_t i=0;i<shapes.size();++i) curWindow->addEntity(shapes[i],tr("导入实体%1").arg(i).toStdString(),-1);
-            isRead=true;
-        } catch(const std::exception& e) { showMessage(QString::fromUtf8(e.what()),5000); }
     } else if (checkedAct == setFASTAPIModeAct) {
         std::fprintf(stderr, "[DEBUG] loadFile: setFASTAPIModeAct, fileName =%s\n", fileName.toUtf8().constData());
         BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author),
@@ -122,14 +113,6 @@ void MainWindow::loadFile(const QString &fileName) {
             CollabSession::instance().setModelVersion(0);
             setCurrentFile(fileName);
             statusBar()->showMessage(tr("文件已导入"), 2000);
-        } else if (checkedAct == setNEO4JModeAct) {
-            disconnectFastAPISync();
-            CollabSession::instance().setProjectId(QString());
-            fastapi_project_name.clear();
-            CollabSession::instance().setModelVersion(0);
-            CollabSession::instance().setPendingRemoteVersion(0);
-            setCurrentPartName(fileName);
-            statusBar()->showMessage(tr("零件已导入(neo4j)"), 2000);
         } else if (checkedAct == setFASTAPIModeAct) {
             setCurrentPartName(fileName);
             statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(fastapi_model_version), 3000);
@@ -155,17 +138,7 @@ void MainWindow::loadFile(const QString &partName, const int generation) {
 
     QAction *checkedAct = setModeActGroup->checkedAction();
 
-    if (checkedAct == setNEO4JIncrementalModeAct) {
-        try {
-            dbcad::DbConfig config{neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password};
-            if(dbcad::legacyPartCount(config,partName.toStdString())!=1) throw std::runtime_error("零件不存在或不唯一");
-            auto shapes=dbcad::loadLegacyPart(config,partName.toStdString(),generation);
-            for(size_t i=0;i<shapes.size();++i) curWindow->addEntity(shapes[i],tr("导入实体%1").arg(i).toStdString(),-1);
-            isRead=true;
-        } catch (const std::exception &ex) {
-            QMessageBox::warning(this, tr("DBCAD"), tr("连接neo4j失败：%1").arg(QString::fromUtf8(ex.what())));
-        }
-    } else if (checkedAct == setFASTAPIModeAct) {
+    if (checkedAct == setFASTAPIModeAct) {
         BackendApiClient client(QString::fromStdString(fastapi_base_url), QString::fromStdString(fastapi_author),
                                 QString::fromStdString(fastapi_password));
         if (!client.isConfigured()) {
@@ -223,13 +196,6 @@ void MainWindow::loadFile(const QString &partName, const int generation) {
         if (checkedAct == setFASTAPIModeAct) {
             statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(CollabSession::instance().modelVersion()),
                                      3000);
-        } else {
-            disconnectFastAPISync();
-            CollabSession::instance().setProjectId(QString());
-            fastapi_project_name.clear();
-            CollabSession::instance().setModelVersion(0);
-            CollabSession::instance().setPendingRemoteVersion(0);
-            statusBar()->showMessage(tr("零件已导入(neo4j)"), 2000);
         }
         updateCollabPanelUi();
     }

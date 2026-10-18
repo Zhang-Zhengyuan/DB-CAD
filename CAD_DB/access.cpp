@@ -1,4 +1,12 @@
-#include "access_internal.hxx"
+#include "common.hxx"
+#include "access.hxx"
+#include <acis/include/api.hxx>
+#include <acis/include/kernapi.hxx>
+#include <acis/include/alltop.hxx>
+#include <acis/include/fileinfo.hxx>
+#include <acis/include/att_tag.hxx>
+#include <cstdio>
+#include <string>
 
 void acis_save_entity_list(const ENTITY_LIST &elist, const char *file_name, int major_version, int minor_version,
                            int text_mode) {
@@ -105,92 +113,3 @@ void acis_restore_entity_list(ENTITY_LIST &elist, FILE *file, int major_version,
     API_END;
 }
 
-std::string AccessTest::read_file_to_string(std::string filename) {
-    std::ifstream t(filename);
-    t.seekg(0, std::ios::end);
-    size_t size = t.tellg();
-    std::string buffer(size, ' ');
-    t.seekg(0);
-    t.read(&buffer[0], size);
-    return buffer;
-}
-
-std::tuple<bool, double, double, double, double> AccessTest::CheckTestCase(const Neo4jPart &conn,
-                                                                           std::string testcase_name,
-                                                                           const ENTITY_LIST &el) {
-    TMDF;
-
-    std::string acis_save_filename_str = std::format("acis_{}_save.sat", testcase_name);
-    const char *acis_save_filename = acis_save_filename_str.c_str();
-
-    // ACIS接口保存
-    TMST;
-    acis_save_entity_list(el, acis_save_filename, 2, 0, true);
-    TMED;
-    double acis_save_duration = TMDR;
-
-    // ACIS接口恢复
-    ENTITY_LIST el_restore_acis;
-    TMST;
-    acis_restore_entity_list(el_restore_acis, acis_save_filename, 2, 0, true);
-    TMED;
-    double acis_restore_duration = TMDR;
-
-    // 删除ACIS接口保存的文件
-    // remove(acis_save_filename);
-
-    // neo4j接口保存
-    std::unordered_map<void *, int64_t> ptr2elemid;
-    TMST;
-    api_save_entity_list_neo4j(conn, el, ptr2elemid);
-    TMED;
-    double neo4j_save_duration = TMDR;
-
-    // neo4j接口恢复
-    ENTITY_LIST el_restore_neo4j;
-    std::vector<int64_t> elemid_list;
-    for (ENTITY *e
-
-         : el) {
-        elemid_list.push_back(ptr2elemid.at(e));
-    }
-    std::unordered_map<int64_t, void *> elemid2ptr;
-    TMST;
-    api_restore_entity_list_neo4j(conn, elemid_list, el_restore_neo4j, elemid2ptr);
-    TMED;
-    double neo4j_restore_duration = TMDR;
-    // 删除neo4j接口保存的节点和边
-    // for (const int64_t id : elemid_list_subgraph) {
-    //     conn.query("MATCH (n) WHERE id(n) = $d "
-    //         "CALL apoc.path.subgraphAll(n, {minLevel:0}) YIELD nodes FOREACH(n IN nodes | DETACH DELETE n) ",
-    //         nlohmann::json{
-    //                                                                                                    {"d", id},
-    //         });
-    // }
-    conn.execute_bolt("match(n) call { with n detach delete n } in transactions of 10000 rows", NULL);
-    conn.discard_all_results();
-
-    // 对el_restore_neo4j和el_restore_acis判等
-    std::string acis_check_filename_str = std::format("acis_{}_check.sat", testcase_name);
-    std::string neo4j_check_filename_str = std::format("neo4j_{}_check.sat", testcase_name);
-    acis_save_entity_list(el_restore_acis, acis_check_filename_str.c_str(), 2, 0, true);
-    acis_save_entity_list(el_restore_neo4j, neo4j_check_filename_str.c_str(), 2, 0, true);
-    // 比较时略过SAT文件头
-    int newline_1_pos, newline_2_pos;
-    std::string acis_check_file_str = read_file_to_string(acis_check_filename_str);
-    newline_1_pos = acis_check_file_str.find('\n');
-    newline_2_pos = acis_check_file_str.find('\n', newline_1_pos + 1);
-    std::string acis_check_file_str_remove_header = acis_check_file_str.substr(newline_2_pos + 1);
-    std::string neo4j_check_file_str = read_file_to_string(neo4j_check_filename_str);
-    newline_1_pos = neo4j_check_file_str.find('\n');
-    newline_2_pos = neo4j_check_file_str.find('\n', newline_1_pos + 1);
-    std::string neo4j_check_file_str_remove_header = neo4j_check_file_str.substr(newline_2_pos + 1);
-    bool testresult = acis_check_file_str_remove_header == neo4j_check_file_str_remove_header;
-
-    // 删除ACIS接口保存的文件
-    // remove(acis_check_filename_str.c_str());
-    // remove(neo4j_subgraph_check_filename_str.c_str());
-
-    return std::make_tuple(testresult, neo4j_save_duration, acis_save_duration, neo4j_restore_duration,
-                           acis_restore_duration);
-}

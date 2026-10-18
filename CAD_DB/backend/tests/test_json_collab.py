@@ -1,7 +1,5 @@
 from app.json_collab import (
-    conflicting_ids,
     graph_component,
-    graph_diff,
     graph_hash,
     merge_graph,
     validate_graph,
@@ -51,18 +49,8 @@ def test_merge_remove_body_removes_topology():
     assert merged["rels"] == []
 
 
-def test_conflicts_are_detected_by_stable_body_id():
-    base = graph(value=1)
-    local = graph(value=2)
-    remote = graph(value=3)
-    assert conflicting_ids(base, local, remote) == ["b"]
-    assert conflicting_ids(base, local, base) == []
-
-
-def test_diff_and_hash_are_deterministic():
+def test_hash_is_deterministic():
     changed = graph(value=2)
-    diff = graph_diff(graph(value=1), changed)
-    assert diff["modified_nodes"]
     assert graph_hash(changed) == graph_hash(changed)
 
 

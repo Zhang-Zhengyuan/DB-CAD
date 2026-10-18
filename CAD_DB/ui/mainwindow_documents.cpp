@@ -16,18 +16,6 @@ void MainWindow::open() {
                 QFileDialog::getOpenFileName(this, QObject::tr("打开文件"), QString::fromStdString(std::string(".")));
             if (!fileName.isEmpty())
                 loadFile(fileName);
-        } else if (checkedAct == setNEO4JModeAct) {
-            bool ok;
-            QDateTime curDateTime = QDateTime::currentDateTime();
-            QString curDateTime_qstr =
-                QString("part") +
-                curDateTime.toString("yyyyMMddhhmmss"); // 保存零件对话框的默认零件名是part+当前年月日时分秒
-            QString partnametext =
-                QInputDialog::getText(this, tr("打开零件(neo4j)"), tr("请输入打开的零件名:"), QLineEdit::Normal,
-                                      curDateTime_qstr, &ok, this->windowFlags() | Qt::MSWindowsFixedSizeDialogHint);
-            if (ok && !partnametext.isEmpty()) {
-                loadFile(partnametext);
-            }
         } else if (checkedAct == setFASTAPIModeAct) {
             QDateTime curDateTime = QDateTime::currentDateTime();
             QString curDateTime_qstr = QString("part") + curDateTime.toString("yyyyMMddhhmmss");
@@ -63,38 +51,7 @@ void MainWindow::open() {
                 }
             }
         } else {
-            assert(checkedAct == setNEO4JIncrementalModeAct);
-            QDateTime curDateTime = QDateTime::currentDateTime();
-            QString curDateTime_qstr =
-                QString("part") +
-                curDateTime.toString("yyyyMMddhhmmss"); // 保存零件对话框的默认零件名是part+当前年月日时分秒
-
-            QDialog dialog(this);
-            dialog.setMinimumSize(200, 200);
-            dialog.setWindowTitle(tr("打开零件(neo4j)"));
-            QFormLayout form(&dialog);
-
-            QLabel lineEdit_partname_label(tr("请输入打开的零件名:"), &dialog);
-            form.addRow(&lineEdit_partname_label);
-            QLineEdit lineEdit_partname(&dialog);
-            lineEdit_partname.setText(curDateTime_qstr);
-            form.addRow(&lineEdit_partname);
-
-            QLabel spinBox_generation_label(tr("请输入打开的零件版次（正整数）:"), &dialog);
-            form.addRow(&spinBox_generation_label);
-            QSpinBox spinBox_generation(&dialog);
-            spinBox_generation.setMinimum(1);
-            spinBox_generation.setMaximum(2000000000);
-            form.addRow(&spinBox_generation);
-
-            QDialogButtonBox buttonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dialog);
-            form.addRow(&buttonBox);
-            QObject::connect(&buttonBox, SIGNAL(accepted()), &dialog, SLOT(accept()));
-            QObject::connect(&buttonBox, SIGNAL(rejected()), &dialog, SLOT(reject()));
-
-            if (dialog.exec() == QDialog::Accepted) {
-                loadFile(lineEdit_partname.text(), spinBox_generation.value());
-            }
+            assert(false && "未知的存取模式");
         }
     }
 }
@@ -129,8 +86,7 @@ bool MainWindow::save() {
             return saveFile(curWindow->getCurFile());
         }
     } else {
-        assert(checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct ||
-               checkedAct == setFASTAPIModeAct);
+        assert(checkedAct == setFASTAPIModeAct);
         if (curWindow->getCurPartName().isEmpty()) {
             return saveAs();
         } else {
@@ -236,14 +192,13 @@ bool MainWindow::saveAs() {
             return false;
         return saveFile(dialog.selectedFiles().first());
     } else {
-        assert(checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct ||
-               checkedAct == setFASTAPIModeAct);
+        assert(checkedAct == setFASTAPIModeAct);
         bool ok;
         QDateTime curDateTime = QDateTime::currentDateTime();
         QString curDateTime_qstr =
             QString("part") +
             curDateTime.toString("yyyyMMddhhmmss"); // 保存零件对话框的默认零件名是part+当前年月日时分秒
-        QString title = checkedAct == setFASTAPIModeAct ? tr("保存零件(FastAPI)") : tr("保存零件(neo4j)");
+        QString title = tr("保存零件(FastAPI)");
         QString text =
             QInputDialog::getText(this, title, tr("请输入保存的零件名:"), QLineEdit::Normal, curDateTime_qstr, &ok,
                                   this->windowFlags() | Qt::MSWindowsFixedSizeDialogHint);
@@ -268,13 +223,4 @@ void MainWindow::displayInfo() {
 void MainWindow::about() {
 
     QMessageBox::about(this, tr("关于DBCAD"), tr("用于测试和演示DBCAD功能与用法。"));
-}
-
-void MainWindow::runTest() {
-    dbcad::runLegacyAccess({neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password});
-    QMessageBox::information(this,tr("DBCAD"),tr("存取诊断结束。"));
-}
-void MainWindow::incrementalTest() {
-    dbcad::runLegacyIncremental({neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password});
-    QMessageBox::information(this,tr("DBCAD"),tr("增量诊断结束。"));
 }

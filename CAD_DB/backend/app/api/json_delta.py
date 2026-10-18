@@ -179,11 +179,7 @@ def get_json_delta(
     base = store.get(project_id, base_version) if base_version > 0 else None
     if base_version > 0 and base is None:
         raise HTTPException(status_code=404, detail="Base JSON graph version not found")
-    graph = (
-        store.graph(project_id, latest.version)
-        if hasattr(store, "graph")
-        else latest.content.get("entity_graph", {"nodes": [], "rels": []})
-    )
+    graph = store.graph(project_id, latest.version)
     commits = store.list_after(project_id, base_version)
     latest_changes = [
         item

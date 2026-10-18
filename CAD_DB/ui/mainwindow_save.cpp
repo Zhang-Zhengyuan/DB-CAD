@@ -70,11 +70,6 @@ bool MainWindow::saveFile(const QString &fileName) {
             QFile file(fileName);
             if(!file.open(QIODevice::WriteOnly) || file.write(bytes)!=bytes.size()) errorMessage=tr("无法写入文件：%1").arg(fileName);
         } catch(const std::exception& e) { errorMessage=QString::fromUtf8(e.what()); }
-    } else if(checkedAct==setNEO4JModeAct || checkedAct==setNEO4JIncrementalModeAct) {
-        try {
-            dbcad::saveLegacyPart({neo4jdb_host,neo4jdb_port_bolt,neo4jdb_username,neo4jdb_password},
-                fileName.toStdString(),curWindow->getEntityList(),checkedAct==setNEO4JIncrementalModeAct);
-        } catch(const std::exception& e) { errorMessage=QString::fromUtf8(e.what()); }
     } else {
         throw std::runtime_error("Cannot find the enum");
     }
@@ -95,14 +90,6 @@ bool MainWindow::saveFile(const QString &fileName) {
         fastapi_model_version = CollabSession::instance().modelVersion();
         setCurrentFile(fileName);
         statusBar()->showMessage(tr("文件已保存"), 2000);
-    } else if (checkedAct == setNEO4JModeAct || checkedAct == setNEO4JIncrementalModeAct) {
-        disconnectFastAPISync();
-        CollabSession::instance().setProjectId(QString());
-        fastapi_project_name.clear();
-        fastapi_model_version = CollabSession::instance().modelVersion();
-        fastapi_pending_remote_version = CollabSession::instance().pendingRemoteVersion();
-        setCurrentPartName(fileName);
-        statusBar()->showMessage(tr("零件已保存(neo4j)"), 2000);
     } else {
         throw std::runtime_error("不支持的保存模式");
     }

@@ -19,16 +19,10 @@ _deps/
   acis/lib/SPAAcisDsd.lib       # Debug 导入库（安装包 win_b64_debug/code/lib）
   acis/bin/SPAAcisDs.dll        # Release 运行库（直接依赖仅系统 DLL 与 VC 运行时）
   acis/bin/SPAAcisDsd.dll       # Debug 运行库
-  glaze-5.5.2/include/glaze/
   glfw/lib/glfw3_64.lib
-  mgclient-1.4.2/mgclient.h
-  openssl/lib/libssl.lib
-  openssl/lib/libcrypto.lib
-  openssl/bin/                  # 配套 DLL
-  postgresql/lib/libpq.lib      # libpq 18.6，配套 OpenSSL 3.5.9 LTS
-  postgresql/include/           # libpq-fe.h 及其配套头文件
-  postgresql/bin/               # libpq.dll 与完整传递依赖
 ```
+
+> 2026-10-18（架构 v2 清理）：`glaze`、`mgclient`、`openssl`、`postgresql`（libpq）不再被客户端链接——它们只服务于已删除的 Bolt 直连栈与 PostgreSQL 实验。`_deps` 目录中如仍存在这些子目录可删除以释放空间。
 
 ### 官方 2026 SDK 的编译约定
 
@@ -41,8 +35,6 @@ _deps/
   调用方与 DLL 必须共享同一动态 CRT，混用静态 CRT 会在 `ftelli64` 处触发
   invalid parameter 崩溃（0xC0000409）。
 - SAT 文本保存前必须调用 `api_set_file_info` 设置有效 `units`，否则 2026 返回错误 68017。
-
-PostgreSQL 头文件也可通过 `DBCAD_POSTGRES_INCLUDE` 指向 vcpkg 的 include；运行时通过 `DBCAD_RUNTIME_DIR` 指向配套的 bin。不能混用不同架构或不兼容运行时。Debug 和 Release 要分别验证。
 
 建议维护者发布一个校验过的内部依赖包，并保留版本、来源、授权范围、平台、哈希与安装步骤。ACIS 版本以 `_deps/acis/include` 内官方 `packageid`（2026.1.0.1，buildID 3343121）与 `SPAAcisDs.dll` 文件版本（6.428.0.26083）为准。接收包后先运行 `scripts/check-environment.ps1`。
 

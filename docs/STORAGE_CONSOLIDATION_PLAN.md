@@ -2,6 +2,8 @@
 
 # 存储链路收敛与重构计划（架构取舍）
 
+> 2026-10-18 头注：Phase A 已完成并入 master；Phase C 已于本轮执行（Bridge/C 栈为前轮所删，客户端 Bolt 直连入口与 PG 实验本轮删除，源码留档 tag `legacy/pre-architecture-v2`）；Phase B（库内原生标签+扁平字段）与 Phase D（实体级增量）**未实施**，仍为存储侧路线图。D 栈代码已不在工作区，字段映射参考见本文 §3 与 ENTITY_STORAGE_TEST_PLAN 的实体矩阵。
+
 > 前置文档：[ENTITY_STORAGE_TEST_PLAN.md](ENTITY_STORAGE_TEST_PLAN.md)（逐实体单元测试与 Phase 1 实测基线）。
 > 本文回答的问题：四条存储链路收敛成几条、废弃什么、保留什么、补什么。
 

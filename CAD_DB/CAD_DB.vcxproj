@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!--
 ***************************************************************************************************
  Copyright (C) 2023 The Qt Company Ltd.
@@ -54,9 +54,6 @@
   <PropertyGroup>
     <DBCADDepsRoot Condition="'$(DBCADDepsRoot)' == ''">$(MSBuildProjectDirectory)\..\_deps</DBCADDepsRoot>
   </PropertyGroup>
-  <PropertyGroup>
-    <DBCADPostgresInclude Condition="'$(DBCADPostgresInclude)' == ''">$(DBCADDepsRoot)\postgresql\include</DBCADPostgresInclude>
-  </PropertyGroup>
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
     <Error Text="Qt VS Tools not found. Install the extension or pass /p:QtMsBuild=the-directory-containing-qt.targets." />
   </Target>
@@ -77,7 +74,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(MSBuildProjectDirectory)\storage;$(DBCADPostgresInclude);$(DBCADDepsRoot);$(DBCADDepsRoot)/glaze-5.5.2/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(DBCADDepsRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- ACIS 官方要求：调用方必须用 /MD（即使 Debug 构建）。SPAAcisDsd.dll 自身链接
@@ -89,7 +86,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;ws2_32.lib;openssl\lib\libssl.lib;openssl\lib\libcrypto.lib;postgresql\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- ACIS 官方要求：栈保留 4MB（深度递归的几何算法），对应链接器 /STACK:4194304。 -->
       <StackReserveSize>4194304</StackReserveSize>
     </Link>
@@ -98,14 +95,14 @@
     <ClCompile>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(MSBuildProjectDirectory)\storage;$(DBCADPostgresInclude);$(DBCADDepsRoot);$(DBCADDepsRoot)/glaze-5.5.2/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(DBCADDepsRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <SDLCheck>false</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ExceptionHandling>Async</ExceptionHandling>
       <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;ws2_32.lib;openssl\lib\libssl.lib;openssl\lib\libcrypto.lib;postgresql\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
       <StackReserveSize>4194304</StackReserveSize>
     </Link>
@@ -138,18 +135,13 @@
   <ItemGroup>
     <ClCompile Include="backend_api_client.cpp" />
 
-    <ClCompile Include="DbcadAPI.cpp" />
     <ClCompile Include="collab_session.cpp" />
-    <ClCompile Include="entity_merge_engine.cpp" />
     <ClCompile Include="glwidget.cpp" />
-    <ClCompile Include="pg_service.cpp" />
-    <ClCompile Include="pg_store.cpp" />
     <ClCompile Include="window.cpp" />
     <QtRcc Include="mainwindow.qrc" />
     <QtMoc Include="mainwindow.h" />
     <ClCompile Include="mainwindow.cpp" />
     <ClCompile Include="ui\mainwindow_connections.cpp" />
-    <ClCompile Include="ui\mainwindow_postgres.cpp" />
     <ClCompile Include="ui\mainwindow_changes.cpp" />
     <ClCompile Include="ui\mainwindow_collab_actions.cpp" />
     <ClCompile Include="ui\mainwindow_graph.cpp" />
@@ -177,30 +169,19 @@
     <QtMoc Include="glwidget.h" />
   </ItemGroup>
   <ItemGroup>
-    <QtMoc Include="pg_service.h" />
-  </ItemGroup>
-  <ItemGroup>
     <ClInclude Include="kernel\geometry_kernel.h" />
     <ClInclude Include="kernel\model_types.h" />
     <ClInclude Include="kernel\document_model.h" />
-    <ClInclude Include="kernel\legacy_storage.h" />
     <ClInclude Include="acis.hxx" />
     <ClInclude Include="backend_api_client.h" />
     <ClInclude Include="common.hxx" />
     <ClInclude Include="access.hxx" />
     <ClInclude Include="ui\mainwindow_internal.h" />
-    <ClInclude Include="storage\access_internal.hxx" />
-    <ClInclude Include="storage\access_save_codec.hxx" />
-    <ClInclude Include="storage\access_restore_codec.hxx" />
 
-    <ClInclude Include="DbcadAPI.h" />
     <ClInclude Include="gme_dump_object.hxx" />
     <ClInclude Include="gme_mesh.hxx" />
-    <ClInclude Include="neo4j.hxx" />
-    <ClInclude Include="pg_store.hxx" />
     <ClInclude Include="collab_session.h" />
     <ClInclude Include="entity_graph_serializer.h" />
-    <ClInclude Include="entity_merge_engine.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="images\DBCAD.rc" />

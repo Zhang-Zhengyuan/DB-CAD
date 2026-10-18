@@ -50,6 +50,9 @@ def test_initial_pull_is_complete_and_readded_body_is_not_removed(monkeypatch):
         def list_after(self, project_id, version):
             return commits[version:]
 
+        def graph(self, project_id, version):
+            return commits[version - 1].content["entity_graph"]
+
     monkeypatch.setattr(main, "get_json_graph_store", Store)
 
     initial = main.get_json_delta("p", base_version=0, _=None)

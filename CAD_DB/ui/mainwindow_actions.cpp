@@ -150,13 +150,6 @@ void MainWindow::createActions() {
     QMenu *helpMenu = menuBar()->addMenu(tr("帮助(&H)"));
     QAction *aboutAct = helpMenu->addAction(tr("关于(&A)"), this, &MainWindow::about);
     aboutAct->setStatusTip(tr("显示系统说明"));
-    QAction *runTestAct = helpMenu->addAction(tr("运行测试neo4j(&T)"), this, &MainWindow::runTest);
-    runTestAct->setStatusTip(tr("使用./"
-                                "testcases目录下的SAT文件（2."
-                                "0版本，不含attrib类实体）作为测试用例，对基于neo4j数据库的几何模型存取接口进行功能和性"
-                                "能测试，测试报告以追加方式输出至./testlog.txt文件"));
-    QAction *incrementalTestAct = helpMenu->addAction(tr("增量存取测试"), this, &MainWindow::incrementalTest);
-    incrementalTestAct->setStatusTip(tr("增量存取测试"));
 
     // 设置存取模式
     QMenu *settingsMenu = menuBar()->addMenu(tr("设置存取模式(&S)"));
@@ -166,16 +159,6 @@ void MainWindow::createActions() {
     setACISModeAct->setCheckable(true);
     settingsMenu->addAction(setACISModeAct);
 
-    setNEO4JModeAct = new QAction(tr("neo4j图数据全量存取(&N)"), this);
-    setNEO4JModeAct->setStatusTip(tr("全量存取为neo4j图数据，通过Bolt协议连接到neo4j图数据库"));
-    setNEO4JModeAct->setCheckable(true);
-    settingsMenu->addAction(setNEO4JModeAct);
-
-    setNEO4JIncrementalModeAct = new QAction(tr("neo4j图数据增量存取(&I)"), this);
-    setNEO4JIncrementalModeAct->setStatusTip(tr("增量存取为neo4j图数据，通过Bolt协议连接到neo4j图数据库"));
-    setNEO4JIncrementalModeAct->setCheckable(true);
-    settingsMenu->addAction(setNEO4JIncrementalModeAct);
-
     setFASTAPIModeAct = new QAction(tr("FastAPI远程版本存取(&F)"), this);
     setFASTAPIModeAct->setStatusTip(tr("通过HTTP连接FastAPI后端，进行模型版本化远程存取"));
     setFASTAPIModeAct->setCheckable(true);
@@ -184,50 +167,15 @@ void MainWindow::createActions() {
     setModeActGroup = new QActionGroup(this);
     setModeActGroup->setExclusionPolicy(QActionGroup::ExclusionPolicy::Exclusive);
     setModeActGroup->addAction(setACISModeAct);
-    setModeActGroup->addAction(setNEO4JModeAct);
-    setModeActGroup->addAction(setNEO4JIncrementalModeAct);
     setModeActGroup->addAction(setFASTAPIModeAct);
     setACISModeAct->setChecked(true);
 
     settingsMenu->addSeparator();
-    QAction *setNEO4JConnectInfoAct =
-        settingsMenu->addAction(tr("设置neo4j连接信息"), this, &MainWindow::setNEO4JConnectInfo);
-    setNEO4JConnectInfoAct->setStatusTip(
-        tr("读取与程序相同目录下的neo4j_connect_info."
-           "conf文件，设置neo4j图数据库连接信息。该文件第1行是IP地址，第2行是Bolt协议端口号，第3行是用户名，第4行是密码"
-           "，不能包含空格和多余的换行符，编码须为UTF-8（无BOM）。"));
-    settingsMenu->addAction(setNEO4JConnectInfoAct);
     QAction *setFastAPIConnectInfoAct =
         settingsMenu->addAction(tr("设置FastAPI连接信息"), this, &MainWindow::setFastAPIConnectInfo);
     setFastAPIConnectInfoAct->setStatusTip(
         tr("配置FastAPI地址、作者名与连接密码，并保存到fastapi_connect_info.conf（前三行）。"));
     settingsMenu->addAction(setFastAPIConnectInfoAct);
-
-    // ----------------------------------------------------------------
-    // PostgreSQL 直存 SAT 文本（m_pgService 入口）。
-    // m_pgService (PgService wrapping PgStore/libpq)。连接配置在 pg_connect_info.conf
-    // (host/port/user/password/dbname 五行)，运行时可通过"设置 PostgreSQL 连接信息"覆盖。
-    // ----------------------------------------------------------------
-    QMenu *pgMenu = menuBar()->addMenu(tr("PostgreSQL(&P)"));
-    pgSaveAct = pgMenu->addAction(tr("保存当前模型到 PostgreSQL"), this, &MainWindow::pgSaveCurrentToDatabase);
-    pgSaveAct->setStatusTip(tr("将当前模型保存到 PostgreSQL。"));
-    pgLoadAct =
-        pgMenu->addAction(tr("从 PostgreSQL 加载到当前窗口..."), this, &MainWindow::pgLoadFromDatabaseToCurrent);
-    pgLoadAct->setStatusTip(
-        tr("输入零件名，从 PostgreSQL 加载模型。"));
-    pgListAct = pgMenu->addAction(tr("列出已存零件"), this, &MainWindow::pgListPartsInDatabase);
-    pgListAct->setStatusTip(tr("调 PgService::listParts，在弹窗里看 id/name/bytes/updated_at。"));
-    pgCountAct = pgMenu->addAction(tr("统计已存零件数"), this, &MainWindow::pgCountPartsInDatabase);
-    pgCountAct->setStatusTip(tr("调 PgService::countParts，结果通过 statusBar 显示。"));
-    pgDeleteAct = pgMenu->addAction(tr("删除指定零件..."), this, &MainWindow::pgDeleteByNameFromDatabase);
-    pgDeleteAct->setStatusTip(tr("弹框输入零件名，二次确认后调 PgService::deleteByName 删除该零件（不可撤销）。"));
-    pgMenu->addSeparator();
-    QAction *setPGConnectInfoAct =
-        pgMenu->addAction(tr("设置 PostgreSQL 连接信息"), this, &MainWindow::setPGConnectInfo);
-    setPGConnectInfoAct->setStatusTip(
-        tr("读取/写入 pg_connect_info.conf（前 5 行：host/port/user/password/dbname）；保存后会自动重建 PgService "
-           "并重连信号。"));
-    updatePgMenuState();
 
     QMenu *collabMenu = menuBar()->addMenu(tr("协作(&C)"));
     QAction *collabPushAct = collabMenu->addAction(tr("推送(Push)"), this, &MainWindow::onCollabPushButtonClicked);

@@ -1,5 +1,7 @@
 # 统一多人协作链路（2026-10-16）
 
+> 2026-10-18 头注：本文中"仍由菜单实际调用的单机 Neo4j 保存/恢复/历史与 PostgreSQL 实验功能保留"一节已过时——两者已在架构 v2 清理中删除（tag：`legacy/pre-architecture-v2`），现行架构见 [ARCHITECTURE.md](ARCHITECTURE.md)。协议与验证记录部分仍有效。
+
 > 本文保留协作收敛阶段记录。后续内核隔离将 UI 的 ACIS 调用迁入适配器，并将本地撤销改为文档/几何快照；当前边界见 [内核隔离与替换指南](KERNEL_ISOLATION.md)，后续验证见 [修复记录](KERNEL_ISOLATION_FIX_20261016.md)。
 
 ## 原有设计与本轮结果

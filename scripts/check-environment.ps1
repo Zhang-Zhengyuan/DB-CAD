@@ -1,14 +1,12 @@
-param([string]$DepsRoot = $env:DBCAD_DEPS_ROOT, [string]$QtRoot = $env:DBCAD_QT_ROOT, [string]$PostgresInclude = $env:DBCAD_POSTGRES_INCLUDE)
+﻿param([string]$DepsRoot = $env:DBCAD_DEPS_ROOT, [string]$QtRoot = $env:DBCAD_QT_ROOT)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $DepsRoot) { $DepsRoot = Join-Path $repoRoot '_deps' }
-if (-not $PostgresInclude) { $PostgresInclude = Join-Path $DepsRoot 'postgresql\include' }
 $missing = @()
-foreach ($relative in @('acis\include\api.hxx', 'acis\lib\SPAAcisDs.lib', 'acis\lib\SPAAcisDsd.lib', 'acis\bin\SPAAcisDs.dll', 'acis\bin\SPAAcisDsd.dll', 'glaze-5.5.2\include\glaze\glaze.hpp', 'glfw\lib\glfw3_64.lib', 'mgclient-1.4.2\mgclient.h', 'openssl\lib\libssl.lib', 'openssl\lib\libcrypto.lib', 'openssl\bin\libssl-3-x64.dll', 'openssl\bin\libcrypto-3-x64.dll', 'postgresql\lib\libpq.lib', 'postgresql\bin\libpq.dll')) {
+foreach ($relative in @('acis\include\api.hxx', 'acis\lib\SPAAcisDs.lib', 'acis\lib\SPAAcisDsd.lib', 'acis\bin\SPAAcisDs.dll', 'acis\bin\SPAAcisDsd.dll', 'glfw\lib\glfw3_64.lib')) {
     if (-not (Test-Path -LiteralPath (Join-Path $DepsRoot $relative))) { $missing += "Dependency: $relative" }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'CAD_DB\spatial_license.h'))) { $missing += 'CAD_DB/spatial_license.h: matching 2026 license header required; see docs/LOCAL_SETUP.md' }
-if (-not (Test-Path -LiteralPath (Join-Path $PostgresInclude 'libpq-fe.h'))) { $missing += 'libpq-fe.h: set DBCAD_POSTGRES_INCLUDE or supply _deps/postgresql/include' }
 foreach ($tool in @('uv', 'docker')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { $missing += "PATH: $tool" }
 }

@@ -1,5 +1,7 @@
 # 内核隔离与替换指南
 
+> 2026-10-18 头注：`access.cpp` 现仅保留 SAT 文件存取；`storage/`、`neo4j.cpp/hxx`、`kernel/legacy_storage.h` 已在架构 v2 清理中删除（tag：`legacy/pre-architecture-v2`），下表相关行按此理解。
+
 本文解释当前实现，供维护、评审和后续内核适配使用。核对日期：2026-10-17；代码基线：`fix/acis-kernel-isolation` / `ad93c4c`，另含同日评审修复（依赖自供给、回归脚本 PS 5.1 兼容、mesh 追踪默认静默）。后续代码变更应同步更新本文。
 
 关联任务：[issue #4：隔离项目逻辑与 ACIS 内核，为后续 CAD 内核替换建立适配边界](https://github.com/Zhang-Zhengyuan/DB-CAD/issues/4)。

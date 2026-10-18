@@ -1,40 +1,76 @@
-# 代码组织与维护边界
+# DBCAD 架构定稿（v2，2026-10-18）
 
-## 几何内核与项目层
+> 本文是当前有效的架构基准。旧的"代码组织与维护边界"版本见 git 历史（`legacy/pre-architecture-v2` 及更早）。
+> 分支：`refactor/architecture-v2`。本分支完成清理后，上层按此文件重建。
 
-```text
-CAD_DB：Qt UI / 文档编辑 / 协作会话 / HTTP / PG
-    │ GeometryKernel + ShapeHandle + 中立值类型 + DisplayData
-    ▼
-DbcadAcis：ACIS 运行时 / 原生对象注册表 / 建模 / 离散化
-    ├─ entity_graph_serializer/deserializer：ACIS 混合 JSON/SAT 表示
-    └─ access.cpp / storage/ / neo4j.cpp：旧库与历史兼容
+## 1. 总图
+
+```mermaid
+flowchart LR
+    subgraph CLIENT["客户端（虚线框内为客户端的全部）"]
+        subgraph CORE["核心进程（C++，与界面技术无关）"]
+            direction TB
+            K["几何内核<br/>建模 · 三角化 · 序列化"]
+            T["上层<br/>版本管理 · 同步协同 · 场景组织"]
+            K -->|"三角面片"| T
+        end
+        UI["UI 层<br/>Qt 或 Three.js，可整体替换"]
+        SAT[("本地 SAT 文件")]
+    end
+
+    SRV["服务端（已定）<br/>FastAPI + 数据库"]
+
+    K -- "① SAT 全量存取" --> SAT
+    T -- "② 序列化推送 / 增量拉取（唯一的网络口）" --> SRV
+    K -. "将来可选：SAT 直传" .-> SRV
+    T -- "渲染场景（本地接口）" --> UI
+    UI -. "操作命令" .-> T
 ```
 
-`kernel/model_types.h` 定义句柄、点、平移、颜色、包围盒和业务枚举；`kernel/document_model.h` 保存 UUID、依赖及显示设置；`kernel/geometry_kernel.h` 是业务调用的几何能力边界。原生指针由 `kernel/acis_kernel.cpp` 内部管理，渲染与拾取只消费普通网格数据。
+一句话：**客户端就两个部件——核心进程 + UI**。核心进程对内包着几何内核，对外只有两个口子（本地文件口、网络口）；UI 只跟核心打交道，可整体替换。
 
-`Window` 仍承担文档编辑和历史协调，尚未提取成独立无 UI 的业务核心。撤销/重做保存业务元数据及几何快照，恢复时重新获取句柄；Pull 后重建本地撤销基线。旧 Neo4j 原生历史由 `kernel/legacy_storage.h` 单独提供兼容入口，不作为多人协作增量机制。
+## 2. 部件职责
 
-两个构建目标为 `CAD_DB.vcxproj` 与 `DbcadAcis.vcxproj`。当前工厂固定创建 ACIS 实现，属于编译时选择；业务类型隔离不等于持久化协议已与 ACIS 无关，也不等于完整应用已经能脱离 SDK 构建。详细契约、兼容策略、替换步骤和 issue #4 验收缺口见 [内核隔离与替换指南](KERNEL_ISOLATION.md)。
+| 部件 | 职责 | 边界 |
+|---|---|---|
+| 几何内核 | 建模、三角化（供渲染的网格）、序列化（内存模型 ↔ 传输 JSON 的唯一翻译） | 全程序唯一触碰 ACIS 的地方；输出全是中立数据（句柄、坐标、JSON），不含 SDK 类型 |
+| 上层 | 版本管理、推送/拉取同步、协同冲突处置、把三角面片组织成可渲染场景 | 核心进程的一部分，无界面依赖；网络只在此处出现 |
+| UI 层 | 显示与输入，别的什么都不干 | 只消费纯渲染数据（坐标/索引/颜色）和发操作命令；现在是 Qt，将来可换 Three.js 等，换 UI 不动核心 |
+| 服务端 | FastAPI（版本管理、冲突检查、协同广播）+ 数据库（现为 Neo4j 图库，可换关系库） | 不加载几何内核，不解析 SAT；对客户端只有一个线协议 |
 
-## 协作链路
+## 3. 设计不变量（三条，定下来不再讨论）
 
-唯一可写版本链为 `JsonGraphVersion`。客户端通过 `POST /projects/{id}/json-delta` 提交，`GET` 增量 Pull；保存、另存、版本列表、历史打开均使用这条链路。WebSocket 只负责在线成员、版本通知和刷新。旧 Mode0、独立 EntityGraph 版本写入、Bridge 进程和路由已删除。
+1. **内核是唯一懂几何的地方**——建模、三角化、序列化都从这里出，别处不碰 ACIS。
+2. **存储是可换的后端**——就两条链路：SAT 全量（本地文件，内核原生读写）；序列化 JSON（经上层同步到服务端入库）。将来 SAT 直传云端、图库换关系库，都是加一条后端实现，不动内核和上层。
+3. **UI 与 AI 都是核心的"客户端"**——核心不关心对面是人、是界面还是 AI，只认"要场景数据"和"发操作"两种交互。AI 将来作为另一个操作者直接在上层命令入口发命令，与 UI 平级，不需要外挂协议。
 
-`entity_graph_serializer.cpp` 复用单机底层的 ACIS 拓扑/几何编码、风险识别和内核 SAT 片段保存。每个顶级组件携带 SAT：`on_failure` 优先细粒度重建，`sat_fragment` 用于已知有损组件。`entity_graph_deserializer.cpp` 按 UUID 分组件恢复，全部成功后才把结果交给 UI。
+## 4. 存储与线协议
 
-`ui/mainwindow_json.cpp` 负责变更提交、版本冲突与 Pull；`mainwindow_graph.cpp` 按 UUID 替换组件，保留无冲突的本地修改。重建失败不推进本地版本。`CollabSession` 管理提交与版本状态。
+- **两条存储链路**：SAT 全量本地存取（`access.cpp`，交换格式 + 测试正确性基准）；序列化 JSON 云端协作（客户端编码组件 → FastAPI 合并 → Neo4j 不可变组件 + 版本清单链）。SAT 片段作为组件属性随 JSON 走，服务端不解析。
+- **线协议冻结**：`POST/GET /projects/{id}/json-delta`（base_version 乐观锁、组件级整替合并）与 WS 通知协议保持不变，两侧测试（后端 44 项无 DB 回归 + L3 真 Neo4j 往返）是保护网。换数据库、升级库内物理表示，都不动协议。
+- **库内物理表示（待做）**：当前为打包字符串（labels_json/props_json，即收敛计划的兜底档）。下一步按 `STORAGE_CONSOLIDATION_PLAN` Phase B 升级为原生标签 + 一级扁平字段（"细"档），协议不变、客户端零改动。
+- **协同模型（目标）**：保持粗（组件级整替 + SAT 兜底）加细（JSON 实体载荷）混合粒度；工作流向业内成熟模型演进——自动微版本同步 + 显式定版、变更通知到达即自动拉取（无冲突时）、组件级编辑意图/在场提示、版本链升为分支 DAG、组件级 Keep/Merge/Replace 冲突处置。同组件并发写保持诚实拒绝，不做拓扑级自动合并（拓扑命名问题无解，业界同样不做）。
 
-## 存储
+## 5. 本轮清理记录（2026-10-18，refactor/architecture-v2）
 
-`backend/app/json_collab.py` 处理验证、拓扑闭包和组件合并。`json_graph_store.py` 保存不可变组件及版本清单，未改变组件可复用。SAT 是同一组件的属性，没有第二次数据库提交。后端不解析 SAT，不依赖 ACIS。
+删除（留档 tag：`legacy/pre-architecture-v2`）：
 
-`neo4j_store.py` 仅管理项目目录。`neo4j_webui/` 保留现有数据库的只读历史审计（包括旧模式记录），不构成协作写入链路。已有旧 Mode0 数据不会自动转换或删除。
+- **客户端 Bolt 直连 Neo4j 栈**：`storage/` 全部 12 文件、`neo4j.cpp/hxx`（mgclient 封装）、`kernel/legacy_storage.h`、`access.hxx`/`access.cpp` 中的 Neo4j 部分、`DbcadAPI` 兼容门面、内核里的 5000 圆柱打孔基准与直连诊断入口、对应菜单/模式/对话框/配置读取。
+- **PostgreSQL 实验**：`pg_service`、`pg_store`、`ui/mainwindow_postgres.cpp`、部署脚本（with_pg/pgadmin/build_pg_demo）及构建依赖（libpq/openssl/glaze/mgclient 路径）。
+- **死代码**：`entity_merge_engine`（零调用的三方合并引擎）；后端 `graph_diff`/`conflicting_ids`（未接线的旧冲突设计）与 `hasattr(store,"graph")` 不可达分支。
+- **过时文档**：`技术路线指导.md`（bridge 时代架构，与现状冲突）。
 
-`access.cpp` 和 `storage/` 中仍由单机 Neo4j 保存、恢复、历史菜单使用的实现保留；ACIS 文件存取和独立 PostgreSQL 菜单也保留。
+保留的存取模式只剩两个：**SAT 文件（本地）** 与 **FastAPI（云端协作）**。
 
-## 部署
+验证：客户端 Debug 编译通过（`x64/Debug/CAD_DB.exe`）；后端 `pytest -m 'not integration'` 43 项全绿。
 
-`deploy/start_dbcad_fullstack.ps1` 启动 Neo4j、FastAPI 和客户端。`deploy/lib/` 管理配置、运行时、Docker、进程和打包。打包同步后端静态资源；不复制或启动 Bridge。
+## 6. 重建路线（清理之后）
 
-验证边界与手工测试步骤见 [统一协作链路说明](HYBRID_COLLABORATION.md)。
+> 执行计划、任务分解与各里程碑验收标准见 [REFACTOR_PLAN.md](REFACTOR_PLAN.md)，本节只列方向。
+
+1. **上层重建**：把当前长在 MainWindow 里的协作编排（推送/拉取/版本状态/合并应用）下沉为无 UI 的核心库（会话/命令层），MainWindow 只留视图接线；网络调用异步化，消灭嵌套事件循环。
+2. **存储物理表示升级**（Phase B，可与 1 并行）：原生标签 + 扁平字段 + 一次性迁移脚本 + L3 结构断言。
+3. **协同工作流演进**：自动同步、定版/分支、在场提示、组件级冲突处置。
+4. **AI native**：作为"另一个操作者"接入上层命令入口，与 UI 平级；破坏性操作走审批。
+
+执行细节（命令记账、撤销栈、防回环、断线重连等）都属于上层内部实现，设计层面不在此展开。

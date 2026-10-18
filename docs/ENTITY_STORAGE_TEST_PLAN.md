@@ -1,5 +1,7 @@
 # 实体级存储单元测试计划（第二部分：数据库储存）
 
+> 2026-10-18 头注：栈 D（C++ Bolt 直写）已在本轮架构清理中删除（tag：`legacy/pre-architecture-v2`）；本文中栈 D 相关的 bug 清单转为历史记录。L1/L1.5/L2/L3/L3.5 测试基建与实体覆盖矩阵仍为现行资产。
+
 > 分支 `storage/entity-unit-tests`，工作树 `D:\DBCAD\DB-CAD-storage`。
 > 本期只解决**储存**问题；UI 前端渲染缺口放到下一阶段。
 

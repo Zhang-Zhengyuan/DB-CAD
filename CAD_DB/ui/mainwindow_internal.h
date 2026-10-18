@@ -1,9 +1,7 @@
 #pragma once
 // Private dependencies shared by MainWindow implementation units.
 #include "mainwindow.h"
-#include "pg_service.h"
 #include "collab_session.h"
-#include "entity_merge_engine.h"
 
 #include <QActionGroup>
 #include <QApplication>
@@ -59,7 +57,6 @@
 
 #include "window.h"
 #include "kernel/geometry_kernel.h"
-#include "kernel/legacy_storage.h"
 #include "backend_api_client.h"
 #include <filesystem>
 #include <format>
