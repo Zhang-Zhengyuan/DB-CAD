@@ -2,58 +2,61 @@
 
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
 
 namespace dbcad {
 
 SatFileBackend::SatFileBackend(GeometryKernel& geometryKernel) : kernel_(geometryKernel) {}
 
-std::optional<StorageDocument> SatFileBackend::open(const QString& location, QString* error) {
+void SatFileBackend::open(const QString& location, std::function<void(const StorageOpenResult&)> callback) {
+    StorageOpenResult result;
     QFile file(location);
     if (!file.open(QIODevice::ReadOnly)) {
-        if (error != nullptr)
-            *error = QString::fromUtf8("无法读取文件");
-        return std::nullopt;
+        result.error = QString::fromUtf8("无法读取文件");
+        return callback(result);
     }
     try {
-        StorageDocument document;
-        document.location = location;
-        document.shapes = kernel_.readNative(file.readAll());
-        return document;
+        result.document.location = location;
+        result.document.shapes = kernel_.readNative(file.readAll());
+        result.ok = true;
     } catch (const std::exception& e) {
-        if (error != nullptr)
-            *error = QString::fromUtf8(e.what());
-        return std::nullopt;
+        result = StorageOpenResult{};
+        result.error = QString::fromUtf8(e.what());
     }
+    callback(result);
 }
 
-std::optional<int> SatFileBackend::save(const QString& location, const SaveRequest& request, QString* error) {
+void SatFileBackend::save(const QString& location, const SaveRequest& request,
+                          std::function<void(const StorageSaveResult&)> callback) {
+    StorageSaveResult result;
     QFile file(location);
     if (!file.open(QIODevice::WriteOnly) || file.write(request.satPayload) != request.satPayload.size()) {
-        if (error != nullptr)
-            *error = QString::fromUtf8("无法写入文件：%1").arg(location);
-        return std::nullopt;
+        result.error = QString::fromUtf8("无法写入文件：%1").arg(location);
+        return callback(result);
     }
-    return 0;
+    result.ok = true;
+    callback(result);
 }
 
-QStringList SatFileBackend::list(const QString& scope, QString* error) {
+void SatFileBackend::list(const QString& scope, std::function<void(const StorageListResult&)> callback) {
+    StorageListResult result;
     QDir directory(scope.isEmpty() ? QStringLiteral(".") : scope);
     if (!directory.exists()) {
-        if (error != nullptr)
-            *error = QString::fromUtf8("目录不存在：%1").arg(scope);
-        return {};
+        result.error = QString::fromUtf8("目录不存在：%1").arg(scope);
+        return callback(result);
     }
-    return directory.entryList({QStringLiteral("*.sat")}, QDir::Files, QDir::Name);
+    result.ok = true;
+    result.entries = directory.entryList({QStringLiteral("*.sat")}, QDir::Files, QDir::Name);
+    callback(result);
 }
 
-bool SatFileBackend::remove(const QString& location, QString* error) {
+void SatFileBackend::remove(const QString& location, std::function<void(const StorageRemoveResult&)> callback) {
+    StorageRemoveResult result;
     if (!QFile::remove(location)) {
-        if (error != nullptr)
-            *error = QString::fromUtf8("无法删除文件：%1").arg(location);
-        return false;
+        result.error = QString::fromUtf8("无法删除文件：%1").arg(location);
+        return callback(result);
     }
-    return true;
+    result.ok = true;
+    callback(result);
 }
 
 } // namespace dbcad

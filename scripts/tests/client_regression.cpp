@@ -86,6 +86,36 @@ static void kernelChecks() {
     qputenv("TMP",oldTmp); qputenv("TEMP",oldTemp);
 }
 static QString compact(QJsonObject o) { return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)); }
+// M2.1 异步等待助手：真实 HTTP 经 QNAM 信号派发，用短事件循环收结果。
+static bool pushAndWait(MainWindow& main, const QString& reason) {
+    auto& collab = main.collabController();
+    bool ok = false, done = false;
+    QEventLoop loop; QTimer timeout; timeout.setSingleShot(true);
+    QObject::connect(&collab, &dbcad::CollabController::pushFinished, &loop, [&](const dbcad::CollabController::Outcome& o) { ok = o.ok; done = true; loop.quit(); });
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    collab.pushAsync(reason);
+    if (!done) { timeout.start(30000); loop.exec(); }
+    return ok && done;
+}
+static bool pullAndWait(MainWindow& main) {
+    auto& collab = main.collabController();
+    bool ok = false, done = false;
+    QEventLoop loop; QTimer timeout; timeout.setSingleShot(true);
+    QObject::connect(&collab, &dbcad::CollabController::pullFinished, &loop, [&](const dbcad::CollabController::Outcome& o) { ok = o.ok; done = true; loop.quit(); });
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    collab.pullAsync();
+    if (!done) { timeout.start(30000); loop.exec(); }
+    return ok && done;
+}
+template<typename Result, typename Starter>
+static Result awaitBackend(Starter start) {
+    Result result; bool done = false;
+    QEventLoop loop; QTimer timeout; timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    start([&](const Result& r) { result = r; done = true; loop.quit(); });
+    if (!done) { timeout.start(30000); loop.exec(); }
+    return result;
+}
 static void clientChecks(const QString& url) {
     QTemporaryDir temp; expect(temp.isValid(),"isolated client directory");
     QDir::setCurrent(temp.path());
@@ -94,7 +124,9 @@ static void clientChecks(const QString& url) {
     MainWindow main;
     auto window=main.findChild<Window*>(); expect(window!=nullptr,"real client document created");
     dbcad::CollabBackend peer; peer.configure(url,"peer",QString());
-    const auto project=peer.getOrCreateProject(QString("kernel-isolation-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    const auto project=awaitBackend<dbcad::CollabBackend::ProjectLookup>([&](auto cb) {
+        peer.getOrCreateProject(QString("kernel-isolation-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)), cb);
+    });
     expect(project.found,qPrintable("create project: "+project.error));
     QWebSocket observer; QEventLoop connected; QTimer timeout; timeout.setSingleShot(true);
     QObject::connect(&observer,&QWebSocket::connected,&connected,&QEventLoop::quit);
@@ -111,11 +143,11 @@ static void clientChecks(const QString& url) {
     HandleGrid h; auto cube=kernel().create(E_CUBE,h);
     auto row=window->addEntity(cube,"original",E_CUBE,h); const int id=row->index;
     const auto uuid=QString::fromStdString(row->uuid); window->captureHistory();
-    expect(collab.push("cold-start").ok,"real UI first Push succeeds");
+    expect(pushAndWait(main,"cold-start"),"real UI first Push succeeds");
     expect(collab.modelVersion()==1,"first Push advances v1");
     for(int i=0;i<10 && !announced;++i) { QEventLoop tick; QTimer::singleShot(20,&tick,&QEventLoop::quit); tick.exec(); }
     expect(announced,"peer receives WebSocket version notification");
-    auto remote=peer.fetchJsonDelta(project.project.id,0);
+    auto remote=awaitBackend<dbcad::CollabBackend::FetchResult>([&](auto cb) { peer.fetchJsonDelta(project.project.id,0,cb); });
     DecodedGraph decoded; QString error;
     expect(remote.status==dbcad::CollabBackend::FetchResult::Status::Ok && kernel().decodeGraph(QJsonDocument::fromJson(remote.payload.graphJson.toUtf8()).object(),decoded,error),"second client pulls and rebuilds v1");
     kernel().erase(shapes(decoded));
@@ -124,36 +156,40 @@ static void clientChecks(const QString& url) {
     for(int i=0;i<8;++i) { h.clear(); window->addEntity(kernel().create(E_CUBE,h),"additional",E_CUBE,h); }
     auto checkbox=window->findChild<QCheckBox*>(); checkbox->setChecked(false);
     expect(!window->getEntityItemByIndex(id)->visible,"selection identity survives vector growth");
-    window->captureHistory(); expect(collab.push("additional").ok,"multiple roots Push");
+    window->captureHistory(); expect(pushAndWait(main,"additional"),"multiple roots Push");
     window->changeEntity(cube,Translation{{2,0,0}});
-    expect(collab.push("move").ok,"translated Push");
+    expect(pushAndWait(main,"move"),"translated Push");
     window->restoreHistory(-1);
-    expect(collab.push("undo").ok,"undo followed by Push");
+    expect(pushAndWait(main,"undo"),"undo followed by Push");
     main.deleteEntityByIndexForCollaboration(id);
     window->restoreHistory(-1);
-    expect(window->getEntityItemByIndex(id)!=nullptr && collab.push("restore-deleted").ok,"delete undo Push retains UUID");
+    expect(window->getEntityItemByIndex(id)!=nullptr && pushAndWait(main,"restore-deleted"),"delete undo Push retains UUID");
     main.deleteEntityByIndexForCollaboration(id);
-    expect(collab.push("delete").ok,"deletion Push");
-    remote=peer.fetchJsonDelta(project.project.id,0);
+    expect(pushAndWait(main,"delete"),"deletion Push");
+    remote=awaitBackend<dbcad::CollabBackend::FetchResult>([&](auto cb) { peer.fetchJsonDelta(project.project.id,0,cb); });
     auto full=QJsonDocument::fromJson(remote.payload.graphJson.toUtf8()).object();
     bool present=false; for(auto n:full.value("nodes").toArray()) if(n.toObject().value("id").toString()==uuid) present=true;
     expect(!present,"peer snapshot excludes deleted UUID");
     h.clear(); auto sphere=kernel().create(E_SPHERE,h);
     auto peerGraph=kernel().encodeGraph({{0,"peer-sphere"}},{sphere}); kernel().erase({sphere});
-    auto accepted=peer.pushJsonDelta(project.project.id,"peer",compact(peerGraph),"[]",{},remote.payload.version);
+    auto accepted=awaitBackend<dbcad::CollabBackend::PushResult>([&](auto cb) {
+        peer.pushJsonDelta(project.project.id,"peer",compact(peerGraph),"[]",{},remote.payload.version,cb);
+    });
     expect(accepted.status==dbcad::CollabBackend::PushResult::Status::Created,"peer Push accepted");
-    const auto pulled=collab.pull();
-    window->refreshAfterDocumentChange(pulled.retiredDisplayData);
+    expect(pullAndWait(main),"real client Pull applies remote delta");
     bool imported=false; for(const auto& item:window->getEntityTree()) if(item.uuid=="peer-sphere") imported=item.operatorType==OPERATOR_IMPORT && item.subOperatorType==-1 && item.handles.empty();
-    expect(imported && pulled.ok && collab.modelVersion()==accepted.version,"real client Pull imports neutral geometry");
+    expect(imported && collab.modelVersion()==accepted.version,"real client Pull imports neutral geometry");
     const auto liveBefore=window->getEntityList();
     QJsonObject malformed{{"nodes",QJsonArray{QJsonObject{{"id","broken"},{"labels",QJsonArray{"body"}},{"props",QJsonObject{{"top_level",true},{"fallback","sat_fragment"},{"sat_fragment","invalid"}}}}}},{"rels",QJsonArray{}}};
     expect(!main.documentSession().applyRemoteGraph(accepted.version+1,malformed,true,{},{}).ok && window->getEntityList()==liveBefore,"failed remote decode preserves entire document");
-    expect(peer.pushJsonDelta(project.project.id,"peer",compact(peerGraph),"[]",{},remote.payload.version).status==dbcad::CollabBackend::PushResult::Status::Conflict,"stale peer Push rejected");
+    const auto stalePeer=awaitBackend<dbcad::CollabBackend::PushResult>([&](auto cb) {
+        peer.pushJsonDelta(project.project.id,"peer",compact(peerGraph),"[]",{},remote.payload.version,cb);
+    });
+    expect(stalePeer.status==dbcad::CollabBackend::PushResult::Status::Conflict,"stale peer Push rejected");
     const int nextBefore=window->getEntityTree().back().index;
     window->clear(); h.clear(); row=window->addEntity(kernel().create(E_CUBE,h),"after-clear",E_CUBE,h);
     expect(row->index>nextBefore,"clear never reuses document index");
-    window->captureHistory(); expect(collab.push("clear-readd").ok,"clear readd Push");
+    window->captureHistory(); expect(pushAndWait(main,"clear-readd"),"clear readd Push");
     // Rebuilding a multi-output operation replaces the group rather than appending duplicates.
     window->clear(); h.clear(); auto left=kernel().create(E_CUBE,h);
     const int leftId=window->addEntity(left,"left",E_CUBE,h)->index;

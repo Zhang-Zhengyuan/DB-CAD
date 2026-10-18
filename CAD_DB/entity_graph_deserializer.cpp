@@ -1,6 +1,7 @@
 #include <QScopeGuard>
 // JSON graph restoration: skeletons, geometry and topology retain their original order.
 #include "entity_graph_serializer.h"
+#include "core/log.h"
 #include "kernel/acis_sat_io.hxx"
 
 #include <acis/include/api.hxx>
@@ -521,9 +522,9 @@ static bool deserializeACISEntityGraphComponent(const QJsonObject &graphJson, De
                                 QString *errorMessage) {
     using namespace JsonDeserialize;
 
-    fprintf(stderr, "[Collab] entity_graph_serializer deserialize build=uvsafe-topology-v5-bounded\n");
+    DBCAD_TRACE( "[Collab] entity_graph_serializer deserialize build=uvsafe-topology-v5-bounded\n");
 
-    fprintf(stderr, "[Collab] deserializeACISEntityGraph: ENTER, nodes=%lld\n",
+    DBCAD_TRACE( "[Collab] deserializeACISEntityGraph: ENTER, nodes=%lld\n",
             (long long)graphJson.value("nodes").toArray().size());
 
     if (errorMessage)
@@ -613,7 +614,7 @@ static bool deserializeACISEntityGraphComponent(const QJsonObject &graphJson, De
                     ok=true;
                 }
             } catch(const std::exception& error) {
-                fprintf(stderr,"[Collab] SAT restore failed: %s\n",error.what());
+                dbcad::logWarn() << "[Collab] SAT restore failed:" << error.what();
             }
             if(!ok && restored.count()) api_del_entity_list(restored);
             if (!ok) {
@@ -794,7 +795,7 @@ static bool deserializeACISEntityGraphComponent(const QJsonObject &graphJson, De
                        << "loop=" << createdLoop << "coedge=" << createdCoedge << "edge=" << createdEdge
                        << "vertex=" << createdVertex << "transform=" << createdTransform << "skipped=" << skippedUnknown
                        << "satFragments=" << fragmentBodies << "idToEntity.size=" << idToEntity.size();
-    fprintf(stderr, "[Collab] deserialize: PASS 2 (geometry attrs)\n");
+    DBCAD_TRACE( "[Collab] deserialize: PASS 2 (geometry attrs)\n");
 
     // pcurve 装配所需的拓扑反查：coedge → owner loop → face（宿主曲面）
     QHash<QString, QString> loopToFace, coedgeToOwnerLoop;
@@ -899,7 +900,7 @@ static bool deserializeACISEntityGraphComponent(const QJsonObject &graphJson, De
         }
     }
 
-    fprintf(stderr, "[Collab] deserialize: PASS 2 done\n");
+    DBCAD_TRACE( "[Collab] deserialize: PASS 2 done\n");
     // Pass 2.5：pcurve 装配。惰性 pcurve 在序列化端常未物化（cur()==null），
     // 统一处理：有 bs2 载荷用载荷；否则 pcurve(3D 曲线, 曲面, 容差) 由 ACIS
     // 重新拟合——与原版语义等价（原 pcurve 即同一对曲线/曲面的拟合）。
@@ -991,9 +992,9 @@ static bool deserializeACISEntityGraphComponent(const QJsonObject &graphJson, De
                 fittedPcurve++;
             }
         }
-        fprintf(stderr, "[Collab] deserialize: pcurve assembly payload=%d fitted=%d\n", payloadPcurve, fittedPcurve);
+        DBCAD_TRACE( "[Collab] deserialize: pcurve assembly payload=%d fitted=%d\n", payloadPcurve, fittedPcurve);
     }
-    fprintf(stderr, "[Collab] deserializeACISEntityGraph: PASS 3 (topology links)\n");
+    DBCAD_TRACE( "[Collab] deserializeACISEntityGraph: PASS 3 (topology links)\n");
     // =========================================================================
     // Pass 3: 处理拓扑链接（参考 access.cpp api_restore_entity_list_neo4j）
     // 关系类型名与序列化端一致，不带 _ptr 后缀
@@ -1187,13 +1188,13 @@ static bool deserializeACISEntityGraphComponent(const QJsonObject &graphJson, De
         }
         API_END;
         if (loopClassSet)
-            fprintf(stderr, "[Collab] deserialize: loop classification restored x%d\n", loopClassSet);
+            DBCAD_TRACE( "[Collab] deserialize: loop classification restored x%d\n", loopClassSet);
         pendingLoopClass.clear();
     }
 
     qDebug().noquote() << "[Collab] deserialize: pass3 done. linkSuccess=" << linkSuccess << "linkFail=" << linkFail
                        << "rels.size=" << rels.size();
-    fprintf(stderr, "[Collab] deserializeACISEntityGraph: EXIT, returning %s\n",
+    DBCAD_TRACE( "[Collab] deserializeACISEntityGraph: EXIT, returning %s\n",
             outResult->entities->count() > 0 ? "true" : "false");
 
     // Do not facet here.  Pull runs on the Qt GUI thread, and ACIS faceting
@@ -1201,7 +1202,7 @@ static bool deserializeACISEntityGraphComponent(const QJsonObject &graphJson, De
     // restored without PCURVEs.  The display layer performs one bounded facet
     // attempt when it builds the mesh and has a planar fallback for faces that
     // remain unfaceted.
-    fprintf(stderr, "[Collab] deserialize: structure-only complete; faceting deferred to display\n");
+    DBCAD_TRACE( "[Collab] deserialize: structure-only complete; faceting deferred to display\n");
     if (reconstructionFailed || skippedUnknown || linkFail || idToEntity.size() + fragmentIds.size() != nodes.size()) {
         if (errorMessage) *errorMessage = QStringLiteral("Incomplete geometry or topology reconstruction");
         return false;

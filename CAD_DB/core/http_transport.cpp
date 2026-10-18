@@ -1,20 +1,19 @@
 #include "core/http_transport.h"
 
-#include <QEventLoop>
-#include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QTimer>
-#include <QUrl>
 
 namespace dbcad {
 
-HttpResponse QtHttpTransport::send(const HttpRequest& request) {
-    HttpResponse result;
+QString HttpTransport::timeoutErrorText() {
+    return QString::fromUtf8("连接FastAPI超时（10秒）");
+}
 
+void QtHttpTransport::send(const HttpRequest& request, std::function<void(const HttpResponse&)> callback) {
     if (!request.url.isValid()) {
-        result.error = QString::fromUtf8("FastAPI地址无效");
-        return result;
+        callback(HttpResponse{-1, {}, QString::fromUtf8("FastAPI地址无效")});
+        return;
     }
 
     QNetworkRequest networkRequest(request.url);
@@ -22,38 +21,37 @@ HttpResponse QtHttpTransport::send(const HttpRequest& request) {
     for (const auto& header : request.headers) {
         networkRequest.setRawHeader(header.first, header.second);
     }
-    QNetworkAccessManager manager;
+    // QNAM 在信号回调到达前保持活动；超时通过挂在 reply 上的 QTimer 中止。
     QNetworkReply* reply = nullptr;
     if (request.method == QLatin1String("GET")) {
-        reply = manager.get(networkRequest);
+        reply = manager_.get(networkRequest);
     } else if (request.method == QLatin1String("POST")) {
-        reply = manager.post(networkRequest, request.payload);
+        reply = manager_.post(networkRequest, request.payload);
     } else {
-        result.error = QString::fromUtf8("不支持的HTTP方法");
-        return result;
+        callback(HttpResponse{-1, {}, QString::fromUtf8("不支持的HTTP方法")});
+        return;
     }
 
-    QEventLoop loop;
-    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    QTimer timer;
-    timer.setSingleShot(true);
-    QObject::connect(&timer, &QTimer::timeout, &loop, [&]() {
+    auto* timer = new QTimer(reply);
+    timer->setSingleShot(true);
+    QObject::connect(timer, &QTimer::timeout, reply, [reply]() {
         if (reply->isRunning()) {
             reply->abort();
-            result.error = QString::fromUtf8("连接FastAPI超时（10秒）");
         }
     });
-    timer.start(10000);
-    loop.exec();
-    timer.stop();
-
-    result.statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    result.body = reply->readAll();
-    if (reply->error() != QNetworkReply::NoError && result.error.isEmpty()) {
-        result.error = reply->errorString();
-    }
-    reply->deleteLater();
-    return result;
+    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, callback]() {
+        HttpResponse result;
+        result.statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        result.body = reply->readAll();
+        if (reply->error() != QNetworkReply::NoError) {
+            result.error = reply->error() == QNetworkReply::OperationCanceledError
+                               ? HttpTransport::timeoutErrorText()
+                               : reply->errorString();
+        }
+        callback(result);
+        reply->deleteLater();
+    });
+    timer->start(10000);
 }
 
 } // namespace dbcad

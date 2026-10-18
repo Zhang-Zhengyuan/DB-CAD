@@ -117,3 +117,19 @@ FakeGeometryKernel（可注入会话）+ MemoryTransport（内存实现 json-del
 
 **已知保留（按计划留给后续里程碑）：** HTTP 仍同步（嵌套事件循环 + 整窗禁用，M2.1 拆除，saveToProject 内的等待循环已标注）；`fprintf(stderr)` 调试残留未清（M2.3）；撤销仍为快照式全量记账（M2.4）；协作后端 list/remove 因服务端无对应端点而显式报"不支持"。
 
+
+## 5. M2 变更记录（已完成，2026-10-18）
+
+**M2.1 网络全面异步化（删除嵌套事件循环与整窗禁用）：**
+- `HttpTransport`/`QtHttpTransport`：QNAM 原生异步（finished 信号派发，10 秒超时挂 reply 上的 QTimer），回调式接口，生产代码中 `QEventLoop` 数量为 0（grep 审计）。
+- `CollabBackend`：全部 HTTP 方法回调式重写；`StorageBackend` 接口随之异步化（SAT 文件后端回调内联完成——快 IO 契约）。
+- `CollabController`：`pushAsync/pullAsync/openProjectAsync/openProjectAtAsync/saveToProjectAsync` + `*Finished` 信号；busy 闸门串行化在飞操作；`saveToProject` 的等连接改为信号等待（connected/error/5s 超时一次性接线），无嵌套循环。
+- MainWindow：按钮只启动操作；`updateCollabPanelUi` 在 busy 时禁用协作按钮（其余界面可用——"网络慢/断时界面不冻结"）；`closeEvent` 在操作在飞时拒绝退出（防"保存未完成即退出"的数据丢失）。
+
+**M2.2 对话框可注入：** `InteractionSurface`（askSaveModified/showError），Qt 实现为默认；maybeSave 与 Outcome 错误展示经此面，无头化留口。
+
+**M2.3 日志统一：** 新增 `core/log.h`（logInfo/logWarn/logCritical + `DBCAD_TRACE` 编译开关）。glwidget 调试轨迹删除；codec（serializer/deserializer）全部轨迹收口到 DBCAD_TRACE（默认关闭，`/DDBCAD_TRACE_ENABLED` 打开），SAT 恢复失败改 qWarning；gme_mesh 的 MESH_TRACE 挂到同一开关。业务代码 fprintf(stderr) 仅剩 main.cpp 的环境变量门控日志重定向功能本身。
+
+**M2.4 撤销记账对齐：** `restoreHistory` 按 uuid 差量化记账——消失记 REMOVE、新增/复活记 ADD、存续记 MODIFY（替代旧的全树 REMOVE+ADD 全量记账）；复活组件的 ADD 覆盖此前 REMOVE，推送语义与基线一致（客户端回归"undo/delete/restore-deleted Push"全绿）。命令级 undo（CommandBus 逆操作）评估后留待后续：撤销栈现为内核快照式，逆操作化收益集中在记账粒度，差量化已消解其推送层问题。
+
+**测试与门禁（全绿）：** core_unit_tests 104 项（协议测试改异步信号等待，覆盖 busy 闸门下的串行拒绝语义）；`run-client-regression.ps1` 内核契约 77 项 + 真客户端异步 HTTP 场景 26 项（pushAndWait/pullAndWait 事件循环等待真实 QNAM 应答）；后端 pytest 43 项；build.ps1 Debug。

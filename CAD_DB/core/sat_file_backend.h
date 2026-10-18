@@ -4,6 +4,7 @@
 //
 // 包裹 kernel().writeNative / readNative：本地持久化与交换格式的唯一入口。
 // SAT 片段作为测试正确性基准（docs/ARCHITECTURE.md §4）。
+// 本地快 IO：回调在调用内同步完成（接口契约允许）。
 
 #include "core/storage_backend.h"
 
@@ -17,10 +18,11 @@ public:
     bool isConfigured() const override { return true; }
     bool isCollaborative() const override { return false; }
 
-    std::optional<StorageDocument> open(const QString& location, QString* error) override;
-    std::optional<int> save(const QString& location, const SaveRequest& request, QString* error) override;
-    QStringList list(const QString& scope, QString* error) override;
-    bool remove(const QString& location, QString* error) override;
+    void open(const QString& location, std::function<void(const StorageOpenResult&)> callback) override;
+    void save(const QString& location, const SaveRequest& request,
+              std::function<void(const StorageSaveResult&)> callback) override;
+    void list(const QString& scope, std::function<void(const StorageListResult&)> callback) override;
+    void remove(const QString& location, std::function<void(const StorageRemoveResult&)> callback) override;
 
 private:
     GeometryKernel& kernel_;

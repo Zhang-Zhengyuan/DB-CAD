@@ -3,12 +3,15 @@
 // HttpTransport —— HTTP 传输抽象（架构 v2 核心库）。
 //
 // CollabBackend 的所有 HTTP 调用经由本接口发出；生产环境用 QtHttpTransport
-// （QNetworkAccessManager + 本地事件循环，M1 保持同步语义，异步化留给 M2），
-// 单元测试注入假传输（内存实现 json-delta 线协议语义），实现
-// "对 MemoryStore/假服务器的协议测试"（REFACTOR_PLAN M1.4 验收）。
+// （QNetworkAccessManager 原生异步，回调经 finished 信号在 GUI 线程派发，
+// M2 起没有嵌套事件循环），单元测试注入假传输（内存实现 json-delta 线协议
+// 语义）。
+
+#include <functional>
 
 #include <QByteArray>
 #include <QList>
+#include <QNetworkAccessManager>
 #include <QPair>
 #include <QString>
 #include <QUrl>
@@ -31,14 +34,22 @@ struct HttpResponse {
 class HttpTransport {
 public:
     virtual ~HttpTransport() = default;
-    virtual HttpResponse send(const HttpRequest& request) = 0;
+    // 异步发送；回调在发起线程被调用（生产实现经 Qt 信号派发）。
+    // 实现保证回调恰好调用一次。
+    virtual void send(const HttpRequest& request, std::function<void(const HttpResponse&)> callback) = 0;
+
+protected:
+    static QString timeoutErrorText(); // 统一超时文案（10 秒）
 };
 
-// 生产实现：QNetworkAccessManager，10 秒超时，同步返回（嵌套事件循环）。
-// 注意：调用期间会处理事件（M2 将把网络调用移出 GUI 线程）。
+// 生产实现：QNetworkAccessManager，10 秒超时，回调经 finished 信号派发。
 class QtHttpTransport : public HttpTransport {
 public:
-    HttpResponse send(const HttpRequest& request) override;
+    QtHttpTransport() = default;
+    void send(const HttpRequest& request, std::function<void(const HttpResponse&)> callback) override;
+
+private:
+    QNetworkAccessManager manager_;
 };
 
 } // namespace dbcad

@@ -17,7 +17,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QEventLoop>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QUrlQuery>
 
 #include <cstdio>
@@ -35,6 +37,31 @@ static void expect(bool value, const char* message) {
     ++checks;
     printf("PASS %s\n", message);
     fflush(stdout);
+}
+
+// ------------------------------------------------------------ 异步等待助手
+// MemoryTransport 回调内联完成，但控制器入口是异步（信号）——用短事件循环等信号。
+using ControllerOutcome = dbcad::CollabController::Outcome;
+template<typename Starter>
+static ControllerOutcome waitForOutcome(dbcad::CollabController& controller, Starter start,
+                                        void (dbcad::CollabController::*finished)(const ControllerOutcome&)) {
+    ControllerOutcome outcome;
+    bool done = false;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&controller, finished, &loop, [&](const ControllerOutcome& result) {
+        outcome = result;
+        done = true;
+        loop.quit();
+    });
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    start();
+    if (!done) {
+        timeout.start(5000);
+        loop.exec();
+    }
+    return outcome;
 }
 
 // ---------------------------------------------------------------- FakeKernel
@@ -165,7 +192,7 @@ public:
     std::map<QString, Project> projects;
     int nextId = 0;
 
-    HttpResponse send(const HttpRequest& request) override {
+    void send(const HttpRequest& request, std::function<void(const HttpResponse&)> callback) override {
         HttpResponse response;
         const QString path = request.url.path();
         const QUrlQuery query(request.url);
@@ -179,20 +206,20 @@ public:
                 response.statusCode = 200;
                 response.body = projectJson(it->second);
             }
-            return response;
+            { callback(response); return; }
         }
         if (request.method == "POST" && path == "/projects") {
             const QJsonObject payload = QJsonDocument::fromJson(request.payload).object();
             const QString name = payload.value("name").toString();
             if (findByName(name) != projects.end()) {
                 response.statusCode = 409;
-                return response;
+                { callback(response); return; }
             }
             const QString id = QStringLiteral("p-%1").arg(++nextId);
             projects[id] = Project{id, name, 0, {}};
             response.statusCode = 201;
             response.body = projectJson(projects[id]);
-            return response;
+            { callback(response); return; }
         }
         if (request.method == "POST" && path.endsWith("/json-delta")) {
             const QString id = path.section('/', 2, 2);
@@ -200,14 +227,14 @@ public:
             if (it == projects.end()) {
                 response.statusCode = 404;
                 response.body = errorBody("project not found");
-                return response;
+                { callback(response); return; }
             }
             const QJsonObject payload = QJsonDocument::fromJson(request.payload).object();
             const QJsonValue baseValue = payload.value("base_version");
             if (!baseValue.isNull() && baseValue.toInt() != it->second.version) {
                 response.statusCode = 409;
                 response.body = errorBody("base_version mismatch");
-                return response;
+                { callback(response); return; }
             }
             ++it->second.version;
             QJsonObject body;
@@ -215,7 +242,7 @@ public:
             it->second.versionGraphs[it->second.version] = deltaBody(it->second, payload);
             response.statusCode = 201;
             response.body = QJsonDocument(body).toJson(QJsonDocument::Compact);
-            return response;
+            { callback(response); return; }
         }
         if (request.method == "GET" && path.endsWith("/json-delta")) {
             const QString id = path.section('/', 2, 2);
@@ -223,7 +250,7 @@ public:
             if (it == projects.end()) {
                 response.statusCode = 404;
                 response.body = errorBody("project not found");
-                return response;
+                { callback(response); return; }
             }
             response.statusCode = 200;
             if (it->second.version == 0) {
@@ -239,11 +266,11 @@ public:
                     QJsonDocument(it->second.versionGraphs.rbegin()->second).toJson(QJsonDocument::Compact);
             }
             Q_UNUSED(query);
-            return response;
+            { callback(response); return; }
         }
         response.statusCode = 404;
         response.body = errorBody("no such endpoint");
-        return response;
+        callback(response);
     }
 
     int versionOf(const QString& projectId) const {
@@ -547,13 +574,13 @@ static void testPushPullProtocol() {
     session.beginChangeTracking();
 
     // 无待提交 → nothing to do。
-    auto nothing = controller.push("t");
+    auto nothing = waitForOutcome(controller, [&] { controller.pushAsync("t"); }, &dbcad::CollabController::pushFinished);
     expect(nothing.ok && nothing.nothingToDo, "push with no pending changes is a no-op");
 
     // 首推 v1。
     const int cubeIndex = session.addEntity(kernel.create(E_CUBE, emptyGrid), "cube", E_CUBE)->index;
     const QString cubeUuid = QString::fromStdString(session.itemByIndex(cubeIndex)->uuid);
-    auto pushed = controller.push("t");
+    auto pushed = waitForOutcome(controller, [&] { controller.pushAsync("t"); }, &dbcad::CollabController::pushFinished);
     expect(pushed.ok && pushed.version == 1, "first push creates v1");
     expect(controller.modelVersion() == 1, "model version advanced");
     expect(session.pendingChanges().isEmpty(), "pending cleared after push");
@@ -561,7 +588,7 @@ static void testPushPullProtocol() {
 
     // 再推（同一实体修改）→ v2。
     session.recordEntityModified(cubeIndex);
-    auto pushed2 = controller.push("t");
+    auto pushed2 = waitForOutcome(controller, [&] { controller.pushAsync("t"); }, &dbcad::CollabController::pushFinished);
     expect(pushed2.ok && pushed2.version == 2, "second push advances v2");
 
     // 对端（peer）以合法基线推到 v3。
@@ -571,18 +598,21 @@ static void testPushPullProtocol() {
     const auto peerGraph = QString::fromUtf8(
         QJsonDocument(graphWith(kernel, {{QStringLiteral("peer-body"), kernel.create(E_SPHERE, emptyGrid)}}))
             .toJson(QJsonDocument::Compact));
-    const auto peerPush = peer.pushJsonDelta("p-x", "peer", peerGraph, "[]", {}, 2);
+    CollabBackend::PushResult peerPush;
+    peer.pushJsonDelta("p-x", "peer", peerGraph, "[]", {}, 2, [&](const CollabBackend::PushResult& result) {
+        peerPush = result;
+    });
     expect(peerPush.status == CollabBackend::PushResult::Status::Created && peerPush.version == 3,
            "peer push accepted at v3");
 
     // 本地仍在 v2：推 → 409 → Conflict + 回滚。
     session.recordEntityModified(cubeIndex);
-    auto stale = controller.push("t");
+    auto stale = waitForOutcome(controller, [&] { controller.pushAsync("t"); }, &dbcad::CollabController::pushFinished);
     expect(!stale.ok && stale.conflict, "stale push surfaces Conflict");
     expect(!controller.state().isSubmitInFlight(), "conflict rolls back submit");
 
     // 拉取：v3 合入（delta：peer-body 追加，本地 cube 保留）。
-    auto pulled = controller.pull();
+    auto pulled = waitForOutcome(controller, [&] { controller.pullAsync(); }, &dbcad::CollabController::pullFinished);
     expect(pulled.ok && pulled.version == 3, "pull applies v3");
     expect(controller.modelVersion() == 3, "pull advances model version");
     expect(findByUuid(session, QStringLiteral("peer-body")) != nullptr, "peer component imported");
@@ -593,22 +623,24 @@ static void testPushPullProtocol() {
     expect(peerRow != nullptr, "peer row present for conflict setup");
     const ShapeHandle oldPeerShape = peerRow->shape;
     session.recordEntityModified(peerRow->index);
-    const auto peerPush2 = peer.pushJsonDelta("p-x", "peer", peerGraph, "[]", {}, controller.modelVersion());
+    CollabBackend::PushResult peerPush2;
+    peer.pushJsonDelta("p-x", "peer", peerGraph, "[]", {}, controller.modelVersion(),
+                       [&](const CollabBackend::PushResult& result) { peerPush2 = result; });
     expect(peerPush2.status == CollabBackend::PushResult::Status::Created && peerPush2.version == 4,
            "peer advances same component to v4");
-    auto conflictPull = controller.pull();
+    auto conflictPull = waitForOutcome(controller, [&] { controller.pullAsync(); }, &dbcad::CollabController::pullFinished);
     expect(!conflictPull.ok && conflictPull.conflict, "pull conflicts with unpushed local edit");
     expect(findByUuid(session, QStringLiteral("peer-body"))->shape == oldPeerShape,
            "conflicting pull does not touch document");
 
     // 放弃本地未提交 → pull 应用 v4。
     session.discardPendingChanges();
-    auto applied = controller.pull();
+    auto applied = waitForOutcome(controller, [&] { controller.pullAsync(); }, &dbcad::CollabController::pullFinished);
     expect(applied.ok && applied.version == 4, "pull applies after conflict resolved");
     expect(findByUuid(session, QStringLiteral("peer-body"))->shape != oldPeerShape, "peer body replaced by v4");
 
     // 已是最新。
-    auto upToDate = controller.pull();
+    auto upToDate = waitForOutcome(controller, [&] { controller.pullAsync(); }, &dbcad::CollabController::pullFinished);
     expect(upToDate.ok && upToDate.nothingToDo, "pull up-to-date is a no-op");
 
     // 打开项目：不存在 → 创建空项目（版本 0）。
@@ -617,12 +649,12 @@ static void testPushPullProtocol() {
     CollabController openController(openSession, backend);
     openSession.beginChangeTracking();
     openSession.addEntity(openKernel.create(E_CUBE, emptyGrid), "pre", E_CUBE);
-    auto opened = openController.openProject(QStringLiteral("fresh-project"));
+    auto opened = waitForOutcome(openController, [&] { openController.openProjectAsync(QStringLiteral("fresh-project")); }, &dbcad::CollabController::openProjectFinished);
     expect(opened.ok && openController.modelVersion() == 0 && openSession.entities().empty(),
            "openProject creates empty project and clears canvas");
     expect(openController.projectName() == QStringLiteral("fresh-project"), "project name bound");
     // 再次打开（服务端有版本 0）→ 仍成功，画布为空。
-    auto reopened = openController.openProject(QStringLiteral("fresh-project"));
+    auto reopened = waitForOutcome(openController, [&] { openController.openProjectAsync(QStringLiteral("fresh-project")); }, &dbcad::CollabController::openProjectFinished);
     expect(reopened.ok, "reopen empty project succeeds");
 }
 
@@ -630,7 +662,7 @@ static void testPushPullProtocol() {
 static void testStorageBackends() {
     FakeKernel kernel;
 
-    // SAT 文件后端。
+    // SAT 文件后端（回调内联完成的契约）。
     SatFileBackend sat(kernel);
     QTemporaryDir dir;
     expect(dir.isValid(), "temp dir for SAT backend");
@@ -639,15 +671,20 @@ static void testStorageBackends() {
     auto shapeA = kernel.create(E_CUBE, emptyGrid);
     auto shapeB = kernel.create(E_SPHERE, emptyGrid);
     request.satPayload = kernel.writeNative({shapeA, shapeB});
-    QString error;
-    expect(sat.save(path, request, &error).has_value() && QFile::exists(path), "SatFileBackend save writes file");
-    const auto opened = sat.open(path, &error);
-    expect(opened.has_value() && opened->shapes.size() == 2, "SatFileBackend open restores shapes");
-    const auto listed = sat.list(dir.path(), &error);
-    expect(listed.contains("model.sat"), "SatFileBackend list finds file");
-    expect(sat.remove(path, &error) && !QFile::exists(path), "SatFileBackend remove deletes file");
+    dbcad::StorageSaveResult saveResult;
+    sat.save(path, request, [&](const dbcad::StorageSaveResult& result) { saveResult = result; });
+    expect(saveResult.ok && QFile::exists(path), "SatFileBackend save writes file");
+    dbcad::StorageOpenResult openResult;
+    sat.open(path, [&](const dbcad::StorageOpenResult& result) { openResult = result; });
+    expect(openResult.ok && openResult.document.shapes.size() == 2, "SatFileBackend open restores shapes");
+    dbcad::StorageListResult listResult;
+    sat.list(dir.path(), [&](const dbcad::StorageListResult& result) { listResult = result; });
+    expect(listResult.ok && listResult.entries.contains("model.sat"), "SatFileBackend list finds file");
+    dbcad::StorageRemoveResult removeResult;
+    sat.remove(path, [&](const dbcad::StorageRemoveResult& result) { removeResult = result; });
+    expect(removeResult.ok && !QFile::exists(path), "SatFileBackend remove deletes file");
 
-    // 协作后端实现同一接口。
+    // 协作后端实现同一接口（内存传输，回调内联完成）。
     MemoryTransport* memory = new MemoryTransport;
     CollabBackend collab;
     collab.setTransport(memory);
@@ -656,24 +693,28 @@ static void testStorageBackends() {
            "collab backend identity");
     expect(sat.backendName() == QStringLiteral("sat-file") && !sat.isCollaborative(), "sat backend identity");
 
-    QString openError;
-    const auto missing = collab.open(QStringLiteral("no-such-project"), &openError);
-    expect(!missing.has_value() && openError.contains(QString::fromUtf8("不存在")),
+    dbcad::StorageOpenResult missing;
+    collab.open(QStringLiteral("no-such-project"), [&](const dbcad::StorageOpenResult& result) { missing = result; });
+    expect(!missing.ok && missing.error.contains(QString::fromUtf8("不存在")),
            "collab open of missing project reports not-found");
 
     dbcad::SaveRequest collabSave;
     collabSave.deltaGraph = graphWith(kernel, {{QStringLiteral("uuid-1"), kernel.create(E_CUBE, emptyGrid)}});
     collabSave.changesJson = "[]";
-    QString saveError;
-    const auto version = collab.save(QStringLiteral("brand-new"), collabSave, &saveError);
-    expect(version.has_value() && *version == 1, "collab save creates project and pushes v1");
-    const auto reopenedDoc = collab.open(QStringLiteral("brand-new"), &openError);
-    expect(reopenedDoc.has_value() && reopenedDoc->version == 1 && !reopenedDoc->projectId.isEmpty(),
+    dbcad::StorageSaveResult collabSaveResult;
+    collab.save(QStringLiteral("brand-new"), collabSave,
+                [&](const dbcad::StorageSaveResult& result) { collabSaveResult = result; });
+    expect(collabSaveResult.ok && collabSaveResult.version == 1, "collab save creates project and pushes v1");
+    dbcad::StorageOpenResult reopenedDoc;
+    collab.open(QStringLiteral("brand-new"), [&](const dbcad::StorageOpenResult& result) { reopenedDoc = result; });
+    expect(reopenedDoc.ok && reopenedDoc.document.version == 1 && !reopenedDoc.document.projectId.isEmpty(),
            "collab open returns latest version");
-    QString listError;
-    expect(collab.list({}, &listError).isEmpty() && !listError.isEmpty(), "collab list unsupported by server");
-    QString removeError;
-    expect(!collab.remove(QStringLiteral("brand-new"), &removeError), "collab remove unsupported by server");
+    dbcad::StorageListResult listError;
+    collab.list({}, [&](const dbcad::StorageListResult& result) { listError = result; });
+    expect(listError.entries.isEmpty() && !listError.error.isEmpty(), "collab list unsupported by server");
+    dbcad::StorageRemoveResult removeError;
+    collab.remove(QStringLiteral("brand-new"), [&](const dbcad::StorageRemoveResult& result) { removeError = result; });
+    expect(!removeError.ok, "collab remove unsupported by server");
 }
 
 // ------------------------------------------------ M1.6 CommandBus 骨架测试

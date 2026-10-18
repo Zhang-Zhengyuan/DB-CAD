@@ -16,6 +16,7 @@
  */
 
 #include "entity_graph_serializer.h"
+#include "core/log.h"
 #include "kernel/acis_sat_io.hxx"
 
 #include <acis/include/api.hxx>
@@ -470,7 +471,7 @@ static QString genNodeId(const void *ptr, int typeId) {
 // 序列化入口
 QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUuid,
                                      const ENTITY_LIST &topLevelEntities) {
-    std::fprintf(stderr, "[Collab] entity_graph_serializer build=uvsafe-topology-v5-bounded\n");
+    DBCAD_TRACE( "[Collab] entity_graph_serializer build=uvsafe-topology-v5-bounded\n");
     QJsonArray nodesJson;
     QJsonArray relsJson;
 
@@ -1233,13 +1234,13 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
             const QJsonObject g = n.props.value("geometry").toObject();
             if (n.label == "face") {
                 if (g.isEmpty()) {
-                    fprintf(stderr, "[Collab] serialize: fallback-trigger face-no-geometry id=%s\n",
+                    DBCAD_TRACE( "[Collab] serialize: fallback-trigger face-no-geometry id=%s\n",
                             n.id.toUtf8().constData());
                     return true;
                 }
                 const QString t = g.value("type").toString();
                 if (t == "unknown_surface") {
-                    fprintf(stderr, "[Collab] serialize: fallback-trigger unknown-surface id=%s\n",
+                    DBCAD_TRACE( "[Collab] serialize: fallback-trigger unknown-surface id=%s\n",
                             n.id.toUtf8().constData());
                     return true;
                 }
@@ -1248,7 +1249,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     // 44=rot_spl_sur 已支持过程载荷精确重建（R2b）；67=sweepsur
                     // 实测 NURBS 偏差 3.1e-4 且三律非空无公共构造 API → 片段为终态
                     if (sub != 37 && sub != 60 && sub != 63 && sub != 44) {
-                        fprintf(stderr, "[Collab] serialize: fallback-trigger procedural-spline subtype=%d id=%s\n", sub,
+                        DBCAD_TRACE( "[Collab] serialize: fallback-trigger procedural-spline subtype=%d id=%s\n", sub,
                                 n.id.toUtf8().constData());
                         return true;
                     }
@@ -1257,13 +1258,13 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                 // 注：无 geometry 的边是合法退化结构（如圆锥锥顶边），不算风险
                 const QString t = g.value("type").toString();
                 if (t == "unknown_curve" || g.contains("nobs3")) {
-                    fprintf(stderr, "[Collab] serialize: fallback-trigger edge-curve-risk(%s%s) id=%s\n",
+                    DBCAD_TRACE( "[Collab] serialize: fallback-trigger edge-curve-risk(%s%s) id=%s\n",
                             t.toUtf8().constData(), g.contains("nobs3") ? "+nobs3" : "", n.id.toUtf8().constData());
                     return true;
                 }
             } else if (n.label == "coedge") {
                 if (g.contains("nobs2")) {
-                    fprintf(stderr, "[Collab] serialize: fallback-trigger pcurve-nobs2 id=%s\n",
+                    DBCAD_TRACE( "[Collab] serialize: fallback-trigger pcurve-nobs2 id=%s\n",
                             n.id.toUtf8().constData());
                     return true;
                 }
@@ -1274,7 +1275,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
             ENTITY *en = idToEnt.value(n.id, nullptr);
             if (en) {
                 if (en->attrib() != nullptr) {
-                    fprintf(stderr, "[Collab] serialize: fallback-trigger attrib-chain id=%s label=%s\n",
+                    DBCAD_TRACE( "[Collab] serialize: fallback-trigger attrib-chain id=%s label=%s\n",
                             n.id.toUtf8().constData(), n.label.toUtf8().constData());
                     return true;
                 }
@@ -1289,7 +1290,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     geoms[3] = (ENTITY *)((VERTEX *)en)->geometry();
                 for (ENTITY *g2 : geoms) {
                     if (g2 && g2->attrib() != nullptr) {
-                        fprintf(stderr, "[Collab] serialize: fallback-trigger attrib-on-geometry id=%s label=%s\n",
+                        DBCAD_TRACE( "[Collab] serialize: fallback-trigger attrib-on-geometry id=%s label=%s\n",
                                 n.id.toUtf8().constData(), n.label.toUtf8().constData());
                         return true;
                     }
@@ -1353,11 +1354,11 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
                     break;
                 }
             }
-            fprintf(stderr, "[Collab] serialize: sat_fragment fallback body=%s nodes=%zu bytes=%zu\n",
+            DBCAD_TRACE( "[Collab] serialize: sat_fragment fallback body=%s nodes=%zu bytes=%zu\n",
                     bodyId.toUtf8().constData(), closure.size(), (size_t)frag.size());
         }
         if (fragCount == 0)
-            fprintf(stderr, "[Collab] serialize: no fallback needed (all components fine-grained)\n");
+            DBCAD_TRACE( "[Collab] serialize: no fallback needed (all components fine-grained)\n");
     }
 
     QHash<QString, QString> rootRenames;
@@ -1382,7 +1383,7 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
         relsJson[i] = rel;
     }
     // 构建最终 JSON
-    fprintf(stderr, "[Collab] serializeACISEntityGraph: nodes total=%zu\n", orderedNodes.size());
+    DBCAD_TRACE( "[Collab] serializeACISEntityGraph: nodes total=%zu\n", orderedNodes.size());
     int bodyIdx = 0;
     for (const auto &entry : orderedNodes) {
         const IntNode &n = entry.second;
@@ -1391,14 +1392,14 @@ QJsonObject serializeACISEntityGraph(const QHash<int, QString> &entityIndexToUui
         nodeJson["labels"] = QJsonArray{n.label};
         nodeJson["props"] = n.props;
         if (n.label == "body") {
-            fprintf(stderr, "[Collab] serialize: body node idx=%d id=%s\n", bodyIdx, n.id.toUtf8().constData());
+            DBCAD_TRACE( "[Collab] serialize: body node idx=%d id=%s\n", bodyIdx, n.id.toUtf8().constData());
             bodyIdx++;
         }
         if (n.label == "face") {
             // 调试：打印 face 的完整 props（含 geometry 字段）
             QJsonDocument fd(n.props);
             QString fs = QString::fromUtf8(fd.toJson(QJsonDocument::Compact));
-            fprintf(stderr, "[Collab] serialize: face id=%s props=%s\n", n.id.toUtf8().constData(),
+            DBCAD_TRACE( "[Collab] serialize: face id=%s props=%s\n", n.id.toUtf8().constData(),
                     fs.toUtf8().constData());
         }
         nodesJson.append(nodeJson);

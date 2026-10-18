@@ -49,12 +49,13 @@ void MainWindow::setFastAPIConnectInfo() {
 
         dbcad::CollabBackend probe;
         probe.configure(url, authorEdit.text().trimmed(), passwordEdit.text());
-        QString error;
-        if (!probe.testConnection(&error)) {
-            QMessageBox::warning(this, tr("FastAPI连接测试"), tr("连接失败：%1").arg(error));
-        } else {
-            QMessageBox::information(this, tr("FastAPI连接测试"), tr("连接成功。"));
-        }
+        probe.testConnection([this](bool ok, const QString& error) {
+            if (!ok) {
+                QMessageBox::warning(this, tr("FastAPI连接测试"), tr("连接失败：%1").arg(error));
+            } else {
+                QMessageBox::information(this, tr("FastAPI连接测试"), tr("连接成功。"));
+            }
+        });
     });
 
     if (dialog.exec() != QDialog::Accepted) {

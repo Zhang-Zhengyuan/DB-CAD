@@ -188,6 +188,7 @@
     <ClInclude Include="core\document_session.h" />
     <ClInclude Include="core\entity_change.h" />
     <ClInclude Include="core\http_transport.h" />
+    <ClInclude Include="core\log.h" />
     <ClInclude Include="core\sat_file_backend.h" />
     <ClInclude Include="core\storage_backend.h" />
   </ItemGroup>

@@ -1,12 +1,10 @@
 #include "core/collab_controller.h"
 
-#include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QSet>
-#include <QTimer>
 
 #include <algorithm>
 
@@ -15,10 +13,18 @@
 namespace dbcad {
 
 CollabController::CollabController(DocumentSession& session, CollabBackend& backend, QObject* parent)
-    : QObject(parent), session_(session), backend_(backend) {}
+    : QObject(parent), session_(session), backend_(backend) {
+    saveWaitTimer_ = new QTimer(this);
+    saveWaitTimer_->setSingleShot(true);
+    saveWaitTimer_->setInterval(5000);
+}
 
-void CollabController::emitInfo(const QString& message, int duration) {
-    emit infoMessage(message, duration);
+void CollabController::clearSaveWait() {
+    for (const auto& connection : saveWaitConnections_)
+        QObject::disconnect(connection);
+    saveWaitConnections_.clear();
+    saveWaitTimer_->stop();
+    saveWaitCompleted_ = true;
 }
 
 // ---------- 项目绑定 ----------
@@ -30,6 +36,7 @@ void CollabController::bindProject(const QString& projectId, const QString& proj
 }
 
 void CollabController::leaveProject() {
+    clearSaveWait();
     disconnectChannel();
     state_.setProjectId(QString());
     state_.setModelVersion(0);
@@ -41,7 +48,7 @@ void CollabController::leaveProject() {
 
 void CollabController::connectProject() {
     // 先断开：状态机复位 + 关旧 socket；真正转 Connected 发生在 WS 连上时
-    // （channelConnected → onReconnect，由视图接线）。
+    // （channelConnected → onChannelConnected，由视图接线）。
     disconnectChannel();
     backend_.openChannel(state_.projectId());
 }
@@ -70,7 +77,7 @@ void CollabController::onLocalEdit() {
     }
     // 本地编辑只改变协作状态；用户经协作面板显式推送，这里绝不在编辑操作内发起网络请求。
     if (state_.pendingRemoteVersion() > state_.modelVersion()) {
-        emitInfo(QString::fromUtf8("远端有未拉取版本，请先点击「拉取(Pull)」再推送本地修改"), 4000);
+        emit infoMessage(QString::fromUtf8("远端有未拉取版本，请先点击「拉取(Pull)」再推送本地修改"), 4000);
         state_.onRemotePending(state_.pendingRemoteVersion());
     }
     if (state_.isSubmitInFlight()) {
@@ -88,7 +95,7 @@ void CollabController::onRemoteVersionNotified(int remoteVersion) {
     // 永远不在 WS 通知里直接应用远端图；Pull 经 HTTP 只取变更的拓扑组件。
     if (remoteVersion > state_.modelVersion()) {
         state_.onRemotePending(remoteVersion);
-        emitInfo(QString::fromUtf8("远端有 JSON 协作版本 v%1，请点击 Pull 合并").arg(remoteVersion), 5000);
+        emit infoMessage(QString::fromUtf8("远端有 JSON 协作版本 v%1，请点击 Pull 合并").arg(remoteVersion), 5000);
         emit stateChanged();
     }
 }
@@ -102,20 +109,90 @@ bool CollabController::canPullNow(QString* reason) const {
     return true;
 }
 
-// ---------- 推送（原 submitMode1JsonDelta） ----------
+// ---------- 异步操作闸门 ----------
 
-CollabController::Outcome CollabController::push(const QString& reason) {
-    Outcome outcome;
+bool CollabController::beginOperation(const Done& done) {
+    if (operationInFlight_) {
+        Outcome outcome;
+        outcome.message = busyMessage();
+        done(outcome);
+        return false;
+    }
+    operationInFlight_ = true;
+    emit stateChanged();
+    return true;
+}
+
+void CollabController::finishOperation() {
+    operationInFlight_ = false;
+    emit stateChanged();
+}
+
+void CollabController::pushAsync(const QString& reason) {
+    const auto emitDone = [this](const Outcome& outcome) {
+        finishOperation();
+        emit pushFinished(outcome);
+    };
+    if (!beginOperation(emitDone))
+        return;
+    executePush(reason, emitDone);
+}
+
+void CollabController::pullAsync() {
+    const auto emitDone = [this](const Outcome& outcome) {
+        finishOperation();
+        emit pullFinished(outcome);
+    };
+    if (!beginOperation(emitDone))
+        return;
+    executePull(emitDone);
+}
+
+void CollabController::openProjectAsync(const QString& projectName) {
+    const auto emitDone = [this](const Outcome& outcome) {
+        finishOperation();
+        emit openProjectFinished(outcome);
+    };
+    if (!beginOperation(emitDone))
+        return;
+    runOpenProject(projectName, emitDone);
+}
+
+void CollabController::openProjectAtAsync(const QString& projectName, int generation) {
+    const auto emitDone = [this](const Outcome& outcome) {
+        finishOperation();
+        emit openProjectAtFinished(outcome);
+    };
+    if (!beginOperation(emitDone))
+        return;
+    runOpenProjectAt(projectName, generation, emitDone);
+}
+
+void CollabController::saveToProjectAsync(const QString& projectName) {
+    const auto emitDone = [this](const Outcome& outcome) {
+        finishOperation();
+        emit saveToProjectFinished(outcome);
+    };
+    if (!beginOperation(emitDone))
+        return;
+    runSaveToProject(projectName, emitDone);
+}
+
+// ---------- 推送（原 submitMode1JsonDelta，M2.1 异步化） ----------
+
+void CollabController::executePush(const QString& reason, const Done& finish) {
     if (state_.projectId().isEmpty() || !state_.isConnected()) {
+        Outcome outcome;
         outcome.message = QString::fromUtf8("协作通道未连接");
-        return outcome;
+        return finish(outcome);
     }
     if (session_.pendingChanges().isEmpty()) {
+        Outcome outcome;
         outcome.ok = true;
         outcome.nothingToDo = true;
         outcome.messageDuration = 2000;
         outcome.message = QString::fromUtf8("没有未推送的本地修改");
-        return outcome;
+        return finish(outcome);
     }
     // 同一实体多次变更只保留最后一笔；已不在树上的实体按 REMOVE 结算。
     QHash<QString, EntityChange> lastChange;
@@ -131,8 +208,9 @@ CollabController::Outcome CollabController::push(const QString& reason) {
     const QList<EntityChange> submittedChanges = lastChange.values();
     const auto decision = state_.tryBeginSubmit(reason);
     if (decision.kind != CollabState::SubmitDecision::Allow) {
+        Outcome outcome;
         outcome.message = decision.reason;
-        return outcome;
+        return finish(outcome);
     }
 
     // 只序列化发生变更的顶级实体。稳定 UUID 按紧凑位置作键，而不是画布的单调索引。
@@ -155,8 +233,10 @@ CollabController::Outcome CollabController::push(const QString& reason) {
         deltaGraph = session_.kernel().encodeGraph(serializerUuidByPosition, entities);
     } catch (const std::exception& ex) {
         state_.rollbackSubmit();
+        Outcome outcome;
+        outcome.messageDuration = 6000;
         outcome.message = QString::fromUtf8("序列化失败：%1").arg(QString::fromUtf8(ex.what()));
-        return outcome;
+        return finish(outcome);
     }
     QHash<QString, QString> rootNames;
     for (const auto& item : session_.entities())
@@ -190,285 +270,347 @@ CollabController::Outcome CollabController::push(const QString& reason) {
     }
 
     const int base = state_.modelVersion();
-    const auto result = backend_.pushJsonDelta(state_.projectId(), backend_.author(), graphJson, jsonOnlyChangesText,
-                                               removedIds, base > 0 ? std::optional<int>(base) : std::nullopt,
-                                               backend_.clientId());
-    if (result.status != CollabBackend::PushResult::Status::Created) {
-        state_.rollbackSubmit();
-        if (result.status == CollabBackend::PushResult::Status::Conflict) {
-            outcome.conflict = true;
-            // 409：对端先推了，立刻刷新远端版本通知，引导用户走 Pull。
-            backend_.sendSyncNow();
-        }
-        outcome.messageDuration = 6000;
-        outcome.message = QString::fromUtf8("Mode1 JSON Push 失败：%1").arg(result.error);
-        return outcome;
-    }
-
-    state_.onSubmitAccepted(result.version);
-    state_.setPushedVersion(result.version);
-    session_.discardPendingChanges();
-    session_.setDirty(false);
-    outcome.ok = true;
-    outcome.version = result.version;
-    outcome.message = QString::fromUtf8("Mode1 JSON Push 成功 v%1").arg(result.version);
-    emit stateChanged();
-    return outcome;
+    backend_.pushJsonDelta(state_.projectId(), backend_.author(), graphJson, jsonOnlyChangesText, removedIds,
+                           base > 0 ? std::optional<int>(base) : std::nullopt,
+                           [this, finish](const CollabBackend::PushResult& result) {
+                               Outcome outcome;
+                               if (result.status != CollabBackend::PushResult::Status::Created) {
+                                   state_.rollbackSubmit();
+                                   if (result.status == CollabBackend::PushResult::Status::Conflict) {
+                                       outcome.conflict = true;
+                                       // 409：对端先推了，立刻刷新远端版本通知，引导用户走 Pull。
+                                       backend_.sendSyncNow();
+                                   }
+                                   outcome.messageDuration = 6000;
+                                   outcome.message = QString::fromUtf8("Mode1 JSON Push 失败：%1").arg(result.error);
+                                   return finish(outcome);
+                               }
+                               state_.onSubmitAccepted(result.version);
+                               state_.setPushedVersion(result.version);
+                               session_.discardPendingChanges();
+                               session_.setDirty(false);
+                               outcome.ok = true;
+                               outcome.version = result.version;
+                               outcome.message = QString::fromUtf8("Mode1 JSON Push 成功 v%1").arg(result.version);
+                               finish(outcome);
+                           },
+                           backend_.clientId());
 }
 
-// ---------- 拉取（原 pullMode1JsonDelta） ----------
+// ---------- 拉取（原 pullMode1JsonDelta，M2.1 异步化） ----------
 
-CollabController::Outcome CollabController::pull() {
-    Outcome outcome;
+void CollabController::executePull(const Done& finish) {
     if (state_.projectId().isEmpty() || !state_.isConnected()) {
+        Outcome outcome;
         outcome.message = QString::fromUtf8("协作通道未连接");
-        return outcome;
+        return finish(outcome);
     }
     const int base = state_.modelVersion();
-    const auto result = backend_.fetchJsonDelta(state_.projectId(), base);
-    if (result.status != CollabBackend::FetchResult::Status::Ok) {
-        outcome.messageDuration = 6000;
-        outcome.message = QString::fromUtf8("Mode1 JSON Pull 失败：%1").arg(result.error);
-        return outcome;
-    }
-    if (result.payload.version <= base) {
-        outcome.ok = true;
-        outcome.nothingToDo = true;
-        outcome.version = result.payload.version;
-        outcome.messageDuration = 3000;
-        outcome.message = QString::fromUtf8("Mode1 JSON 已是最新版本 v%1").arg(result.payload.version);
-        return outcome;
-    }
+    backend_.fetchJsonDelta(state_.projectId(), base,
+                            [this, finish, base](const CollabBackend::FetchResult& result) {
+        if (result.status != CollabBackend::FetchResult::Status::Ok) {
+            Outcome outcome;
+            outcome.messageDuration = 6000;
+            outcome.message = QString::fromUtf8("Mode1 JSON Pull 失败：%1").arg(result.error);
+            return finish(outcome);
+        }
+        if (result.payload.version <= base) {
+            Outcome outcome;
+            outcome.ok = true;
+            outcome.nothingToDo = true;
+            outcome.version = result.payload.version;
+            outcome.messageDuration = 3000;
+            outcome.message = QString::fromUtf8("Mode1 JSON 已是最新版本 v%1").arg(result.payload.version);
+            return finish(outcome);
+        }
 
-    QJsonParseError parseError;
-    const QJsonDocument graphDoc = QJsonDocument::fromJson(result.payload.graphJson.toUtf8(), &parseError);
-    if (parseError.error != QJsonParseError::NoError || !graphDoc.isObject()) {
-        outcome.message = QString::fromUtf8("Mode1 JSON Pull 的图格式无效");
-        return outcome;
-    }
-    QSet<QString> remoteChangedIds;
-    for (const QJsonValue& value : graphDoc.object().value("nodes").toArray()) {
-        const QJsonObject node = value.toObject();
-        if (node.value("labels").toArray().contains(QJsonValue(QStringLiteral("body"))) ||
-            node.value("props").toObject().value("top_level").toBool()) {
-            const QString id = node.value("id").toString().trimmed();
-            if (!id.isEmpty())
-                remoteChangedIds.insert(id);
+        QJsonParseError parseError;
+        const QJsonDocument graphDoc = QJsonDocument::fromJson(result.payload.graphJson.toUtf8(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !graphDoc.isObject()) {
+            Outcome outcome;
+            outcome.messageDuration = 6000;
+            outcome.message = QString::fromUtf8("Mode1 JSON Pull 的图格式无效");
+            return finish(outcome);
         }
-    }
-    for (const QString& id : result.payload.removedIds)
-        remoteChangedIds.insert(id);
-    QHash<QString, QString> remoteNames;
-    QJsonParseError changesParseError;
-    const QJsonDocument changesDoc = QJsonDocument::fromJson(result.payload.changesJson.toUtf8(), &changesParseError);
-    QJsonArray remoteChanges;
-    if (changesParseError.error == QJsonParseError::NoError) {
-        remoteChanges =
-            changesDoc.isArray() ? changesDoc.array() : changesDoc.object().value("changes").toArray();
-    }
-    for (const QJsonValue& value : remoteChanges) {
-        const QJsonObject change = value.toObject();
-        const QString uuid = change.value("uuid").toString().trimmed();
-        const QString name = change.value("name").toString().trimmed();
-        if (!uuid.isEmpty() && !name.isEmpty())
-            remoteNames.insert(uuid, name);
-    }
-    // 诚实拒绝：同组件并发修改不做拓扑级自动合并。
-    for (const auto& localChange : session_.pendingChanges()) {
-        if (remoteChangedIds.contains(localChange.uuid)) {
-            outcome.conflict = true;
-            outcome.message =
-                QString::fromUtf8("Pull 与本地未提交修改冲突：实体 %1，请先处理冲突").arg(localChange.uuid);
-            return outcome;
+        QSet<QString> remoteChangedIds;
+        for (const QJsonValue& value : graphDoc.object().value("nodes").toArray()) {
+            const QJsonObject node = value.toObject();
+            if (node.value("labels").toArray().contains(QJsonValue(QStringLiteral("body"))) ||
+                node.value("props").toObject().value("top_level").toBool()) {
+                const QString id = node.value("id").toString().trimmed();
+                if (!id.isEmpty())
+                    remoteChangedIds.insert(id);
+            }
         }
-    }
-    const auto apply = session_.applyRemoteGraph(result.payload.version, graphDoc.object(), true,
-                                                 result.payload.removedIds, remoteNames);
-    outcome.retiredDisplayData = apply.retiredDisplayData;
-    if (!apply.ok) {
-        outcome.message = QString::fromUtf8("Mode1 JSON Pull 重建 ACIS 失败");
-        return outcome;
-    }
-    state_.onRemoteApplied(result.payload.version);
-    state_.setPushedVersion(result.payload.version);
-    if (!session_.pendingChanges().isEmpty())
-        state_.onUserEdit();
-    session_.setDirty(!session_.pendingChanges().isEmpty());
-    outcome.ok = true;
-    outcome.version = result.payload.version;
-    outcome.message = QString::fromUtf8("Mode1 JSON Pull 完成 v%1").arg(result.payload.version);
-    emit stateChanged();
-    return outcome;
+        for (const QString& id : result.payload.removedIds)
+            remoteChangedIds.insert(id);
+        QHash<QString, QString> remoteNames;
+        QJsonParseError changesParseError;
+        const QJsonDocument changesDoc =
+            QJsonDocument::fromJson(result.payload.changesJson.toUtf8(), &changesParseError);
+        QJsonArray remoteChanges;
+        if (changesParseError.error == QJsonParseError::NoError) {
+            remoteChanges =
+                changesDoc.isArray() ? changesDoc.array() : changesDoc.object().value("changes").toArray();
+        }
+        for (const QJsonValue& value : remoteChanges) {
+            const QJsonObject change = value.toObject();
+            const QString uuid = change.value("uuid").toString().trimmed();
+            const QString name = change.value("name").toString().trimmed();
+            if (!uuid.isEmpty() && !name.isEmpty())
+                remoteNames.insert(uuid, name);
+        }
+        // 诚实拒绝：同组件并发修改不做拓扑级自动合并。
+        for (const auto& localChange : session_.pendingChanges()) {
+            if (remoteChangedIds.contains(localChange.uuid)) {
+                Outcome outcome;
+                outcome.conflict = true;
+                outcome.message =
+                    QString::fromUtf8("Pull 与本地未提交修改冲突：实体 %1，请先处理冲突").arg(localChange.uuid);
+                return finish(outcome);
+            }
+        }
+        const auto apply = session_.applyRemoteGraph(result.payload.version, graphDoc.object(), true,
+                                                     result.payload.removedIds, remoteNames);
+        Outcome outcome;
+        outcome.retiredDisplayData = apply.retiredDisplayData;
+        if (!apply.ok) {
+            outcome.messageDuration = 6000;
+            outcome.message = QString::fromUtf8("Mode1 JSON Pull 重建 ACIS 失败");
+            return finish(outcome);
+        }
+        state_.onRemoteApplied(result.payload.version);
+        state_.setPushedVersion(result.payload.version);
+        if (!session_.pendingChanges().isEmpty())
+            state_.onUserEdit();
+        session_.setDirty(!session_.pendingChanges().isEmpty());
+        outcome.ok = true;
+        outcome.version = result.payload.version;
+        outcome.message = QString::fromUtf8("Mode1 JSON Pull 完成 v%1").arg(result.payload.version);
+        finish(outcome);
+    });
 }
 
 // ---------- 打开/另存 ----------
 
-CollabController::Outcome CollabController::openProject(const QString& projectName) {
-    Outcome outcome;
-    outcome.showDialog = true;
+void CollabController::runOpenProject(const QString& projectName, const Done& finish) {
     if (!backend_.isConfigured()) {
+        Outcome outcome;
+        outcome.showDialog = true;
         outcome.message = QString::fromUtf8("FastAPI地址未配置，请先设置fastapi_connect_info.conf");
-        return outcome;
+        return finish(outcome);
     }
-    const auto lookup = backend_.findProject(projectName);
-    if (lookup.failed) {
-        outcome.message = lookup.error.isEmpty() ? QString::fromUtf8("查询协作项目失败") : lookup.error;
-        return outcome;
-    }
-    if (!lookup.found) {
-        const auto created = backend_.createProject(projectName);
-        if (!created.ok) {
-            outcome.message = QString::fromUtf8("创建协作项目失败：%1").arg(created.error);
-            return outcome;
+    backend_.findProject(projectName, [this, projectName, finish](const CollabBackend::ProjectLookup& lookup) {
+        const auto dialogError = [](Outcome& outcome, const QString& message) {
+            outcome.showDialog = true;
+            outcome.message = message;
+        };
+        if (lookup.failed) {
+            Outcome outcome;
+            dialogError(outcome, lookup.error.isEmpty() ? QString::fromUtf8("查询协作项目失败") : lookup.error);
+            return finish(outcome);
         }
-        outcome.retiredDisplayData = session_.clearAll();
-        // clearAll 记了 REMOVE 账；新项目从零开始，丢弃这些记录并清映射。
-        session_.discardPendingChanges();
-        session_.clearIndexToUuid();
-        bindProject(created.project.id, projectName);
-        connectProject();
-        state_.setModelVersion(0);
-        outcome.ok = true;
-        outcome.showDialog = false;
-        outcome.message = QString::fromUtf8("已创建并加入协作项目（当前无版本，请先保存模型）");
-        return outcome;
-    }
-    const auto fetch = backend_.fetchJsonDelta(lookup.project.id, 0);
-    if (fetch.status != CollabBackend::FetchResult::Status::Ok) {
-        outcome.message = QString::fromUtf8("读取 Mode1 JSON 项目失败：%1").arg(fetch.error);
-        return outcome;
-    }
-    bool restored = true;
-    QJsonObject graphObject;
-    if (fetch.payload.version > 0) {
-        QJsonParseError graphError;
-        const QJsonDocument graphDoc = QJsonDocument::fromJson(fetch.payload.graphJson.toUtf8(), &graphError);
-        restored = graphError.error == QJsonParseError::NoError && graphDoc.isObject();
-        if (restored) {
-            graphObject = graphDoc.object();
-            if (!graphObject.value("nodes").toArray().isEmpty()) {
-                const auto apply =
-                    session_.applyRemoteGraph(fetch.payload.version, graphObject, false, fetch.payload.removedIds, {});
-                outcome.retiredDisplayData = apply.retiredDisplayData;
-                restored = apply.ok;
+        if (!lookup.found) {
+            backend_.createProject(
+                projectName, [this, projectName, finish, dialogError](const CollabBackend::ProjectCreate& created) {
+                    if (!created.ok) {
+                        Outcome outcome;
+                        dialogError(outcome, QString::fromUtf8("创建协作项目失败：%1").arg(created.error));
+                        return finish(outcome);
+                    }
+                    Outcome outcome;
+                    outcome.retiredDisplayData = session_.clearAll();
+                    // clearAll 记了 REMOVE 账；新项目从零开始，丢弃这些记录并清映射。
+                    session_.discardPendingChanges();
+                    session_.clearIndexToUuid();
+                    bindProject(created.project.id, projectName);
+                    connectProject();
+                    state_.setModelVersion(0);
+                    outcome.ok = true;
+                    outcome.messageDuration = 4000;
+                    outcome.message = QString::fromUtf8("已创建并加入协作项目（当前无版本，请先保存模型）");
+                    finish(outcome);
+                });
+            return;
+        }
+        backend_.fetchJsonDelta(lookup.project.id, 0,
+                                [this, lookup, projectName, finish, dialogError](
+                                    const CollabBackend::FetchResult& fetch) {
+            Outcome outcome;
+            if (fetch.status != CollabBackend::FetchResult::Status::Ok) {
+                dialogError(outcome, QString::fromUtf8("读取 Mode1 JSON 项目失败：%1").arg(fetch.error));
+                return finish(outcome);
+            }
+            if (fetch.payload.version > 0) {
+                QJsonParseError graphError;
+                const QJsonDocument graphDoc =
+                    QJsonDocument::fromJson(fetch.payload.graphJson.toUtf8(), &graphError);
+                const bool parsed = graphError.error == QJsonParseError::NoError && graphDoc.isObject();
+                if (!parsed) {
+                    dialogError(outcome, QString::fromUtf8("Mode1 JSON 图无法重建，请检查序列化器兼容性"));
+                    return finish(outcome);
+                }
+                const QJsonObject graphObject = graphDoc.object();
+                if (!graphObject.value("nodes").toArray().isEmpty()) {
+                    const auto apply = session_.applyRemoteGraph(fetch.payload.version, graphObject, false,
+                                                                 fetch.payload.removedIds, {});
+                    outcome.retiredDisplayData = apply.retiredDisplayData;
+                    if (!apply.ok) {
+                        dialogError(outcome, QString::fromUtf8("Mode1 JSON 图无法重建，请检查序列化器兼容性"));
+                        return finish(outcome);
+                    }
+                } else {
+                    // 显式为空的最新快照是一个合法项目。
+                    outcome.retiredDisplayData = session_.clearAll();
+                }
             } else {
-                // 显式为空的最新快照是一个合法项目。
                 outcome.retiredDisplayData = session_.clearAll();
             }
-        }
-    } else {
-        outcome.retiredDisplayData = session_.clearAll();
-    }
-    if (!restored) {
-        outcome.message = QString::fromUtf8("Mode1 JSON 图无法重建，请检查序列化器兼容性");
-        return outcome;
-    }
-    session_.resetChangesFromTree();
-    bindProject(lookup.project.id, projectName);
-    state_.setModelVersion(fetch.payload.version);
-    connectProject();
-    outcome.ok = true;
-    outcome.showDialog = false;
-    outcome.version = fetch.payload.version;
-    return outcome;
+            session_.resetChangesFromTree();
+            bindProject(lookup.project.id, projectName);
+            state_.setModelVersion(fetch.payload.version);
+            connectProject();
+            outcome.ok = true;
+            outcome.version = fetch.payload.version;
+            finish(outcome);
+        });
+    });
 }
 
-CollabController::Outcome CollabController::openProjectAt(const QString& projectName, int generation) {
+void CollabController::runOpenProjectAt(const QString& projectName, int generation, const Done& finish) {
     Outcome outcome;
-    outcome.showDialog = true;
-    {
-        outcome.retiredDisplayData = session_.clearAll();
-        session_.discardPendingChanges();
-        session_.clearIndexToUuid();
-    }
+    outcome.retiredDisplayData = session_.clearAll();
+    session_.discardPendingChanges();
+    session_.clearIndexToUuid();
+
     if (!backend_.isConfigured()) {
+        outcome.showDialog = true;
         outcome.message = QString::fromUtf8("FastAPI地址未配置，请先设置fastapi_connect_info.conf");
-        return outcome;
+        return finish(outcome);
     }
-    const auto lookup = backend_.findProject(projectName);
-    if (lookup.failed) {
-        outcome.message = lookup.error;
-        return outcome;
-    }
-    if (!lookup.found) {
-        outcome.message = QString::fromUtf8("名为%1的项目(FastAPI)不存在。").arg(projectName);
-        return outcome;
-    }
-    const auto model = backend_.fetchJsonVersion(lookup.project.id, generation);
-    if (model.status == CollabBackend::FetchResult::Status::NotFound) {
-        outcome.message = QString::fromUtf8("协作项目存在，但指定版本不存在。");
-        return outcome;
-    }
-    if (model.status != CollabBackend::FetchResult::Status::Ok) {
-        outcome.message = model.error;
-        return outcome;
-    }
-    QJsonParseError parseError;
-    const auto doc = QJsonDocument::fromJson(model.payload.graphJson.toUtf8(), &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        outcome.message = QString::fromUtf8("历史版本无法重建");
-        return outcome;
-    }
-    const auto apply = session_.applyRemoteGraph(model.payload.version, doc.object(), false, {}, {});
-    outcome.retiredDisplayData.insert(outcome.retiredDisplayData.end(), apply.retiredDisplayData.begin(),
-                                      apply.retiredDisplayData.end());
-    if (!apply.ok) {
-        outcome.message = QString::fromUtf8("历史版本无法重建");
-        return outcome;
-    }
-    bindProject(lookup.project.id, projectName);
-    connectProject();
-    state_.setModelVersion(model.payload.version);
-    outcome.ok = true;
-    outcome.showDialog = false;
-    outcome.version = model.payload.version;
-    return outcome;
+    backend_.findProject(projectName, [this, projectName, generation, finish](const CollabBackend::ProjectLookup& lookup) {
+        Outcome outcome;
+        outcome.showDialog = true;
+        if (lookup.failed) {
+            outcome.message = lookup.error;
+            return finish(outcome);
+        }
+        if (!lookup.found) {
+            outcome.message = QString::fromUtf8("名为%1的项目(FastAPI)不存在。").arg(projectName);
+            return finish(outcome);
+        }
+        backend_.fetchJsonVersion(lookup.project.id, generation,
+                                  [this, lookup, projectName, finish](const CollabBackend::FetchResult& model) {
+            Outcome outcome;
+            outcome.showDialog = true;
+            if (model.status == CollabBackend::FetchResult::Status::NotFound) {
+                outcome.message = QString::fromUtf8("协作项目存在，但指定版本不存在。");
+                return finish(outcome);
+            }
+            if (model.status != CollabBackend::FetchResult::Status::Ok) {
+                outcome.message = model.error;
+                return finish(outcome);
+            }
+            QJsonParseError parseError;
+            const auto doc = QJsonDocument::fromJson(model.payload.graphJson.toUtf8(), &parseError);
+            if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                outcome.message = QString::fromUtf8("历史版本无法重建");
+                return finish(outcome);
+            }
+            const auto apply = session_.applyRemoteGraph(model.payload.version, doc.object(), false, {}, {});
+            outcome.retiredDisplayData = apply.retiredDisplayData;
+            if (!apply.ok) {
+                outcome.message = QString::fromUtf8("历史版本无法重建");
+                return finish(outcome);
+            }
+            outcome.showDialog = false;
+            bindProject(lookup.project.id, projectName);
+            connectProject();
+            state_.setModelVersion(model.payload.version);
+            outcome.ok = true;
+            outcome.version = model.payload.version;
+            finish(outcome);
+        });
+    });
 }
 
-CollabController::Outcome CollabController::saveToProject(const QString& projectName) {
-    Outcome outcome;
+void CollabController::waitForChannelThen(std::function<void()> proceed) {
+    // 一次性接线：connected / error / 5 秒超时任一到达即放行。
+    saveWaitCompleted_ = false;
+    const auto complete = [this, proceed]() {
+        if (saveWaitCompleted_)
+            return;
+        saveWaitCompleted_ = true;
+        clearSaveWait();
+        proceed(); // proceed 内部自行判定连接状态并给出结果
+    };
+    saveWaitConnections_.push_back(connect(&backend_, &CollabBackend::channelConnected, this, complete));
+    saveWaitConnections_.push_back(connect(&backend_, &CollabBackend::channelError, this, complete));
+    saveWaitConnections_.push_back(connect(saveWaitTimer_, &QTimer::timeout, this, complete));
+    saveWaitTimer_->start();
+}
+
+void CollabController::runSaveToProject(const QString& projectName, const Done& finish) {
+    // 已持有操作闸门；推送阶段直接复用 executePush（不再经过公共入口的闸门）。
+    const auto pushIfConnected = [this, finish]() {
+        if (!state_.isConnected()) {
+            Outcome outcome;
+            outcome.message = QString::fromUtf8("协作通道正在连接，请连接成功后再次保存");
+            return finish(outcome);
+        }
+        executePush(QStringLiteral("save"), finish);
+    };
+
     if (projectName != projectName_ || state_.projectId().isEmpty()) {
-        const auto lookup = backend_.getOrCreateProject(projectName);
-        if (!lookup.found) {
-            outcome.message = lookup.error;
-            return outcome;
-        }
-        const auto head = backend_.fetchJsonDelta(lookup.project.id, 0);
-        if (head.status != CollabBackend::FetchResult::Status::Ok) {
-            outcome.message = head.error;
-            return outcome;
-        }
-        if (head.payload.version > 0) {
-            outcome.message = QString::fromUtf8("目标项目已有版本，请先打开并 Pull，或使用新的项目名");
-            return outcome;
-        }
-        disconnectChannel();
-        bindProject(lookup.project.id, projectName);
-        state_.setModelVersion(0);
-        // 新项目收录全部本地 Body，包括先前已保存过的。
-        session_.discardPendingChanges();
-        for (const auto& item : session_.entities()) {
-            session_.recordEntityAdded(QString::fromStdString(item.uuid), QString::fromStdString(item.name),
-                                       QStringLiteral("body"), item.index);
-        }
-        connectProject();
+        backend_.getOrCreateProject(
+            projectName, [this, projectName, finish, pushIfConnected](const CollabBackend::ProjectLookup& lookup) {
+                if (!lookup.found) {
+                    Outcome outcome;
+                    outcome.message = lookup.error;
+                    return finish(outcome);
+                }
+                backend_.fetchJsonDelta(
+                    lookup.project.id, 0,
+                    [this, projectName, lookup, finish, pushIfConnected](const CollabBackend::FetchResult& head) {
+                        if (head.status != CollabBackend::FetchResult::Status::Ok) {
+                            Outcome outcome;
+                            outcome.message = head.error;
+                            return finish(outcome);
+                        }
+                        if (head.payload.version > 0) {
+                            Outcome outcome;
+                            outcome.message = QString::fromUtf8("目标项目已有版本，请先打开并 Pull，或使用新的项目名");
+                            return finish(outcome);
+                        }
+                        disconnectChannel();
+                        bindProject(lookup.project.id, projectName);
+                        state_.setModelVersion(0);
+                        // 新项目收录全部本地 Body，包括先前已保存过的。
+                        session_.discardPendingChanges();
+                        for (const auto& item : session_.entities()) {
+                            session_.recordEntityAdded(QString::fromStdString(item.uuid),
+                                                       QString::fromStdString(item.name), QStringLiteral("body"),
+                                                       item.index);
+                        }
+                        connectProject();
+                        if (state_.isConnected()) {
+                            return pushIfConnected();
+                        }
+                        // 等 WS 真正连上再推（最多 5 秒；信号等待，无嵌套事件循环）。
+                        waitForChannelThen(pushIfConnected);
+                    });
+            });
+        return;
     }
-    // M2 将删除这个嵌套事件循环：等待 WS 真正连上（最多 5 秒）。
-    if (!state_.isConnected() && backend_.channelOpening()) {
-        QEventLoop wait;
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        QObject::connect(&timeout, &QTimer::timeout, &wait, &QEventLoop::quit);
-        QObject::connect(&backend_, &CollabBackend::channelConnected, &wait, &QEventLoop::quit);
-        QObject::connect(&backend_, &CollabBackend::channelError, &wait, &QEventLoop::quit);
-        timeout.start(5000);
-        wait.exec();
+    if (state_.isConnected()) {
+        return pushIfConnected();
     }
-    if (!state_.isConnected()) {
+    if (!backend_.channelOpening()) {
+        Outcome outcome;
         outcome.message = QString::fromUtf8("协作通道正在连接，请连接成功后再次保存");
-        return outcome;
+        return finish(outcome);
     }
-    return push(QStringLiteral("save"));
+    waitForChannelThen(pushIfConnected);
 }
 
 } // namespace dbcad

@@ -20,6 +20,7 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QUuid>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QJsonArray>
 #include <cstdio>
@@ -574,11 +575,28 @@ void Window::restoreHistory(int direction) {
         session_->kernel().erase(cleanup); showMessage(tr("历史几何与文档标识不匹配"),5000); return;
     }
     session_->kernel().erase(session_->shapeList());
-    for(auto& item:session_->entitiesMutable()) { session_->recordEntityRemoved(item.index); delete item.ptrDisplayData; item.ptrDisplayData=nullptr; }
+    // M2.4 记账对齐：撤销恢复按 uuid 差量化记账——消失的记 REMOVE、新增/复活的
+    // 记 ADD、存续的记 MODIFY（不再对全树 REMOVE+ADD 全量记账；存续组件经 MODIFY
+    // 走组件替换，复活组件按 ADD 覆盖此前的 REMOVE，推送语义与基线一致）。
+    QSet<QString> restoredUuids;
+    for (const auto& item : snapshot.items) restoredUuids.insert(QString::fromStdString(item.uuid));
+    QSet<QString> previousUuids;
+    for (const auto& item : session_->entitiesMutable()) previousUuids.insert(QString::fromStdString(item.uuid));
+    for (auto& item : session_->entitiesMutable()) {
+        const QString uuid = QString::fromStdString(item.uuid);
+        if (!restoredUuids.contains(uuid))
+            session_->recordEntityRemoved(item.index);
+        delete item.ptrDisplayData;
+        item.ptrDisplayData = nullptr;
+    }
     session_->entitiesMutable()=snapshot.items;
     for(size_t i=0;i<session_->entities().size();++i) {
         auto& item=session_->entitiesMutable()[i]; item.shape=restored[i];
-        session_->recordEntityAdded(QString::fromStdString(item.uuid),QString::fromStdString(item.name),"body",item.index);
+        const QString uuid = QString::fromStdString(item.uuid);
+        if (previousUuids.contains(uuid))
+            session_->recordEntityModified(item.index);
+        else
+            session_->recordEntityAdded(uuid,QString::fromStdString(item.name),"body",item.index);
     }
     currentEntityIndex=-1; selected_entities.clear(); input_handles.clear(); imode=SELECTION;
     setCurrentEntity({});

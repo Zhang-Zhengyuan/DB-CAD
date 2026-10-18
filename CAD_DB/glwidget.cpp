@@ -317,8 +317,6 @@ void GLWidget::updateMeshData() {
     // 由 Qt 正确设置。在远程协作同步中，applyFastAPIRemoteSat 末尾的
     // QApplication::processEvents() 会同步分发 paint 事件完成上传和渲染。
     pendingGpuUpload = true;
-    std::fprintf(stderr, "[GLWidget::updateMeshData] pendingGpuUpload=true data_face=%zu data_edge=%zu count_face=%d count_edge=%d radius=%.1f\n",
-                 data_face.size(), data_edge.size(), count_face, count_edge, radius);
     update();
 }
 
@@ -339,20 +337,12 @@ void GLWidget::uploadMeshDataToGpu() {
     vbo_edge.allocate(data_edge.constData(), count_edge * sizeof(GLfloat));
     vbo_edge.release();
 
-    std::fprintf(stderr, "[GLWidget::uploadMeshDataToGpu] uploaded face=%d floats edge=%d floats\n",
-                 count_face, count_edge);
     pendingGpuUpload = false;
 }
 
 void GLWidget::paintGL() {
     if (pendingGpuUpload) {
-        std::fprintf(stderr, "[GLWidget::paintGL] pendingGpuUpload=true, calling uploadMeshDataToGpu\n");
         uploadMeshDataToGpu();
-    } else {
-        static int paintCount = 0;
-        if (++paintCount <= 3) {
-            std::fprintf(stderr, "[GLWidget::paintGL] pendingGpuUpload=false paintCount=%d\n", paintCount);
-        }
     }
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

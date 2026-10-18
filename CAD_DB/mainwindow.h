@@ -29,9 +29,20 @@ class QComboBox;
 
 const QStringList colorNames = QColor::colorNames();
 
-// MainWindow —— 视图接线（架构 v2 M1）：协作编排住在 core（DocumentSession /
+// 对话框式交互的可注入面（REFACTOR_PLAN M2.2）：无头化/换 UI 时替换实现，
+// Qt 实现是默认值。核心库不感知。
+class InteractionSurface {
+public:
+    virtual ~InteractionSurface() = default;
+    enum class SaveDecision { Save, Discard, Cancel };
+    virtual SaveDecision askSaveModified() { return SaveDecision::Cancel; } // 无头默认：取消
+    virtual void showError(const QString& message) { Q_UNUSED(message); }
+};
+
+// MainWindow —— 视图接线（架构 v2 M1/M2）：协作编排住在 core（DocumentSession /
 // CollabController / CollabBackend），本类只做菜单/面板/状态栏与对话框，
-// 不持有版本号或 HTTP/WS 细节。
+// 不持有版本号或 HTTP/WS 细节。M2.1 起全部协作操作异步：按钮启动操作，
+// 结果经 *Finished 信号回到本类显示；界面不再整窗冻结。
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -53,6 +64,9 @@ public:
     // 当前存取后端（模式切换 = 后端选择，取代 if/else 分支）。
     dbcad::StorageBackend* activeStorage() const { return activeStorage_; }
     bool usingCollabStorage() const { return activeStorage_ == collabBackend_.get(); }
+
+    // 对话框交互面注入（所有权归调用方；nullptr 恢复 Qt 实现）。
+    void setInteractionSurface(InteractionSurface* surface);
 
 protected:
     void loadFile(const QString& fileName);
@@ -80,7 +94,7 @@ private slots:
     void operation(const OPERATOR_TYPES ot, const int subOperatorType);
     void clear();
 
-    // 协作面板动作（转发到 controller/backend）
+    // 协作面板动作（启动异步操作，转发到 controller/backend）
     void onCollabPushButtonClicked();
     void onCollabPullButtonClicked();
     void requestFastAPISyncNow();
@@ -103,6 +117,14 @@ private:
     void handleBackendChannelError(const QString& message);
     void handleBackendCollaboratorsChanged();
     void displayOutcome(const dbcad::CollabController::Outcome& outcome);
+    void showErrorDialog(const QString& message); // 经 InteractionSurface
+
+    // 异步操作完成处理（M2.1）
+    void handlePushFinished(const dbcad::CollabController::Outcome& outcome);
+    void handlePullFinished(const dbcad::CollabController::Outcome& outcome);
+    void handleOpenProjectFinished(const dbcad::CollabController::Outcome& outcome);
+    void handleOpenProjectAtFinished(const dbcad::CollabController::Outcome& outcome);
+    void handleSaveToProjectFinished(const dbcad::CollabController::Outcome& outcome);
 
     Window* curWindow;
     QAction* setACISModeAct;
@@ -116,6 +138,14 @@ private:
     std::unique_ptr<dbcad::SatFileBackend> satBackend_;
     std::unique_ptr<dbcad::CommandBus> commandBus_;
     dbcad::StorageBackend* activeStorage_ = nullptr;
+
+    // ---------- 对话框交互面 ----------
+    std::unique_ptr<InteractionSurface> defaultInteraction_; // Qt 实现（默认）
+    InteractionSurface* interaction_ = nullptr;
+
+    // ---------- 异步操作上下文（完成后使用） ----------
+    QString pendingOpenName_;
+    QString pendingSaveName_;
 
     // ---------- 协作面板（纯视图） ----------
     QDockWidget* collabDock = nullptr;

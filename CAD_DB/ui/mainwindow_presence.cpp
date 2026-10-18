@@ -72,20 +72,21 @@ void MainWindow::updateCollabPanelUi() {
         }
     }
 
-    // 启用/禁用协作控件（需要连接到项目）
+    // 启用/禁用协作控件：需要连接到项目；操作在飞或提交中时禁用。
+    // （M2.1：取代整窗 setEnabled(false)，其余界面保持可用。）
     const bool connected = !controller.projectId().isEmpty() && collabBackend_->isConfigured();
-    const bool isSubmitting = controller.isSubmitInFlight();
+    const bool busy = controller.isBusy() || controller.isSubmitInFlight();
 
     if (collabPushButton != nullptr) {
-        collabPushButton->setEnabled(connected && !isSubmitting && controller.isConnected());
+        collabPushButton->setEnabled(connected && !busy && controller.isConnected());
     }
     if (collabPullButton != nullptr) {
-        collabPullButton->setEnabled(connected && !isSubmitting && controller.isConnected());
+        collabPullButton->setEnabled(connected && !busy && controller.isConnected());
     }
     if (collabSyncNowButton != nullptr) {
-        collabSyncNowButton->setEnabled(connected && !isSubmitting);
+        collabSyncNowButton->setEnabled(connected && !busy);
     }
     if (collabReconnectButton != nullptr) {
-        collabReconnectButton->setEnabled(connected);
+        collabReconnectButton->setEnabled(connected && !controller.isBusy());
     }
 }

@@ -5,8 +5,9 @@
 // Per-call mesh diagnostics. Off by default: traces on stderr break
 // run-client-regression.ps1 on Windows PowerShell 5.1 and pollute test logs.
 // Build with /DGME_MESH_TRACE (or -DGME_MESH_TRACE) to re-enable.
+#include "core/log.h"
 #ifdef GME_MESH_TRACE
-#define MESH_TRACE(...) std::fprintf(stderr, __VA_ARGS__)
+#define MESH_TRACE(...) DBCAD_TRACE(__VA_ARGS__)
 #else
 #define MESH_TRACE(...) ((void)0)
 #endif

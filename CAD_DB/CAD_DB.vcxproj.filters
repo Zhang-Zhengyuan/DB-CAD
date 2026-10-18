@@ -44,6 +44,7 @@
     <ClInclude Include="core\document_session.h"><Filter>core</Filter></ClInclude>
     <ClInclude Include="core\entity_change.h"><Filter>core</Filter></ClInclude>
     <ClInclude Include="core\http_transport.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="core\log.h"><Filter>core</Filter></ClInclude>
     <ClInclude Include="core\sat_file_backend.h"><Filter>core</Filter></ClInclude>
     <ClInclude Include="core\storage_backend.h"><Filter>core</Filter></ClInclude>
     <ClInclude Include="kernel\geometry_kernel.h"><Filter>kernel</Filter></ClInclude>

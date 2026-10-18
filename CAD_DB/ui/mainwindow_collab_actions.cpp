@@ -1,15 +1,21 @@
 #include "mainwindow_internal.h"
 
-// 协作动作：按钮/菜单 → 控制器；WS 消息分发（模式门控在此，语义在 core）。
+// 协作动作（M2.1 异步）：按钮/菜单只启动操作并立即返回；
+// 结果经 *Finished 信号回到 handle*Finished 显示。网络在飞期间界面保持可用，
+// 由 busy 闸门（控制器）+ 面板按钮禁用（updateCollabPanelUi）防止并发操作。
 
 void MainWindow::displayOutcome(const dbcad::CollabController::Outcome& outcome) {
     if (outcome.message.isEmpty())
         return;
     if (!outcome.ok && outcome.showDialog) {
-        QMessageBox::warning(this, tr("DBCAD"), outcome.message);
+        showErrorDialog(outcome.message);
     } else {
         showMessage(outcome.message, outcome.messageDuration);
     }
+}
+
+void MainWindow::showErrorDialog(const QString& message) {
+    interaction_->showError(message);
 }
 
 void MainWindow::notifyModelChangedForCollaboration() {
@@ -22,13 +28,12 @@ void MainWindow::notifyModelChangedForCollaboration() {
 void MainWindow::onCollabPushButtonClicked() {
     if (curWindow == nullptr)
         return;
-    // push 不改画布（只清脏标记与待提交账），无需视图刷新。
-    const bool wasEnabled = isEnabled();
-    setEnabled(false);
-    const auto outcome = collabController_->push(tr("manual-push"));
-    setEnabled(wasEnabled);
-    updateCollabPanelUi();
-    displayOutcome(outcome);
+    if (collabController_->isBusy()) {
+        showMessage(collabController_->busyMessage(), 3000);
+        return;
+    }
+    // push 不改画布（只清脏标记与待提交账）；完成回调里刷新面板即可。
+    collabController_->pushAsync(tr("manual-push"));
 }
 
 void MainWindow::onCollabPullButtonClicked() {
@@ -39,12 +44,11 @@ void MainWindow::onCollabPullButtonClicked() {
     }
     if (curWindow == nullptr)
         return;
-    const bool wasEnabled = isEnabled();
-    setEnabled(false);
-    const auto outcome = collabController_->pull();
-    setEnabled(wasEnabled);
-    curWindow->refreshAfterDocumentChange(outcome.retiredDisplayData);
-    displayOutcome(outcome);
+    if (collabController_->isBusy()) {
+        showMessage(collabController_->busyMessage(), 3000);
+        return;
+    }
+    collabController_->pullAsync();
 }
 
 void MainWindow::requestFastAPISyncNow() {
@@ -58,10 +62,64 @@ void MainWindow::reconnectFastAPISync() {
     collabController_->connectProject();
 }
 
+// ---------- 异步完成处理 ----------
+
+void MainWindow::handlePushFinished(const dbcad::CollabController::Outcome& outcome) {
+    displayOutcome(outcome);
+    updateCollabPanelUi();
+}
+
+void MainWindow::handlePullFinished(const dbcad::CollabController::Outcome& outcome) {
+    if (curWindow != nullptr)
+        curWindow->refreshAfterDocumentChange(outcome.retiredDisplayData);
+    displayOutcome(outcome);
+    updateCollabPanelUi();
+}
+
+void MainWindow::handleOpenProjectFinished(const dbcad::CollabController::Outcome& outcome) {
+#ifndef QT_NO_CURSOR
+    QGuiApplication::restoreOverrideCursor();
+#endif
+    if (curWindow != nullptr)
+        curWindow->refreshAfterDocumentChange(outcome.retiredDisplayData);
+    if (outcome.ok) {
+        curWindow->resetDocumentHistory();
+        curWindow->setIsModified(false);
+        setCurrentPartName(pendingOpenName_);
+        statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(collabController_->modelVersion()), 3000);
+    } else {
+        displayOutcome(outcome);
+    }
+    updateCollabPanelUi();
+}
+
+void MainWindow::handleOpenProjectAtFinished(const dbcad::CollabController::Outcome& outcome) {
+#ifndef QT_NO_CURSOR
+    QGuiApplication::restoreOverrideCursor();
+#endif
+    if (curWindow != nullptr)
+        curWindow->refreshAfterDocumentChange(outcome.retiredDisplayData);
+    if (outcome.ok) {
+        curWindow->resetDocumentHistory();
+        curWindow->setIsModified(false);
+        setCurrentPartName(pendingOpenName_);
+        statusBar()->showMessage(tr("零件已导入(FastAPI)，版本%1").arg(collabController_->modelVersion()), 3000);
+    } else {
+        displayOutcome(outcome);
+    }
+    updateCollabPanelUi();
+}
+
+void MainWindow::handleSaveToProjectFinished(const dbcad::CollabController::Outcome& outcome) {
+    displayOutcome(outcome);
+    if (outcome.ok)
+        setCurrentPartName(pendingSaveName_);
+    updateCollabPanelUi();
+}
+
 // 协作友好的本地删除：会话级联删除（内核删除 + 依赖清理 + REMOVE 记账）+
 // 视图刷新。仅记待提交账，不自动 Push；与添加实体同一行为契约（待 Push 按钮）。
 void MainWindow::deleteEntityByIndexForCollaboration(int index) {
-    qDebug().noquote() << "[Collab][Delta] deleteEntityByIndexForCollaboration ENTER index=" << index;
     if (curWindow == nullptr)
         return;
     if (documentSession_->itemByIndex(index) == nullptr) {

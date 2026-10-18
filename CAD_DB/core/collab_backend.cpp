@@ -122,22 +122,17 @@ bool CollabBackend::isConfigured() const {
     return !baseUrl_.isEmpty();
 }
 
-CollabBackend::HttpCall CollabBackend::sendJsonRequest(const QString& method, const QString& path,
-                                                       const QByteArray& payload) {
-    HttpCall call;
-    lastHttpStatus_ = -1;
-
+void CollabBackend::sendJsonRequest(const QString& method, const QString& path, const QByteArray& payload,
+                                    std::function<void(const HttpCall&)> callback) {
     if (baseUrl_.isEmpty()) {
-        call.networkError = QString::fromUtf8("FastAPI地址未配置，请先设置fastapi_connect_info.conf");
-        lastError_ = call.networkError;
-        return call;
+        callback(HttpCall{-1, {}, QString::fromUtf8("FastAPI地址未配置，请先设置fastapi_connect_info.conf")});
+        return;
     }
 
     const QUrl url(baseUrl_ + path);
     if (!url.isValid()) {
-        call.networkError = QString::fromUtf8("FastAPI地址无效");
-        lastError_ = call.networkError;
-        return call;
+        callback(HttpCall{-1, {}, QString::fromUtf8("FastAPI地址无效")});
+        return;
     }
 
     HttpRequest request;
@@ -147,142 +142,132 @@ CollabBackend::HttpCall CollabBackend::sendJsonRequest(const QString& method, co
     if (!apiPassword_.isEmpty()) {
         request.headers.append({QByteArrayLiteral("X-API-Password"), apiPassword_.toUtf8()});
     }
-    const HttpResponse response = transport_->send(request);
-    call.statusCode = response.statusCode;
-    call.body = response.body;
-    call.networkError = response.error;
-    lastHttpStatus_ = response.statusCode;
-
-    if (response.statusCode >= 400 || !response.error.isEmpty()) {
-        appendFastApiErrorLog(method, url.toString(), response.statusCode, response.error, response.body);
-    }
-    return call;
+    transport_->send(request, [method, url, callback](const HttpResponse& response) {
+        if (response.statusCode >= 400 || !response.error.isEmpty()) {
+            appendFastApiErrorLog(method, url.toString(), response.statusCode, response.error, response.body);
+        }
+        HttpCall call;
+        call.statusCode = response.statusCode;
+        call.body = response.body;
+        call.networkError = response.error;
+        callback(call);
+    });
 }
 
-CollabBackend::ProjectLookup CollabBackend::findProject(const QString& projectName) {
-    ProjectLookup lookup;
-    lastError_.clear();
+void CollabBackend::findProject(const QString& projectName, std::function<void(const ProjectLookup&)> callback) {
     const QString encodedName = QString::fromUtf8(QUrl::toPercentEncoding(projectName));
-    const HttpCall response = sendJsonRequest(QStringLiteral("GET"),
-                                              QString::fromUtf8("/projects/by-name/%1").arg(encodedName));
-
-    if (response.networkFailed()) {
-        lookup.failed = true;
-        lookup.error = response.networkError;
-        lastError_ = response.networkError;
-        return lookup;
-    }
-    if (response.statusCode == 404) {
-        return lookup; // found=false, failed=false
-    }
-    if (response.statusCode != 200) {
-        lookup.failed = true;
-        lookup.error = formatHttpErrorMessage(QString::fromUtf8("查询项目失败"), response.statusCode, response.body);
-        lastError_ = lookup.error;
-        return lookup;
-    }
-
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        lookup.failed = true;
-        lookup.error = QString::fromUtf8("查询项目返回数据格式错误");
-        lastError_ = lookup.error;
-        return lookup;
-    }
-    const QJsonObject obj = doc.object();
-    lookup.project.id = obj.value("id").toString();
-    lookup.project.name = obj.value("name").toString();
-    if (lookup.project.id.isEmpty() || lookup.project.name.isEmpty()) {
-        lookup.failed = true;
-        lookup.project = ProjectRef{};
-        lookup.error = QString::fromUtf8("查询项目返回数据缺少必要字段");
-        lastError_ = lookup.error;
-        return lookup;
-    }
-    lookup.found = true;
-    return lookup;
+    sendJsonRequest(QStringLiteral("GET"), QString::fromUtf8("/projects/by-name/%1").arg(encodedName), {},
+                    [callback](const HttpCall& response) {
+                        ProjectLookup lookup;
+                        if (response.networkFailed()) {
+                            lookup.failed = true;
+                            lookup.error = response.networkError;
+                            return callback(lookup);
+                        }
+                        if (response.statusCode == 404) {
+                            return callback(lookup); // found=false, failed=false
+                        }
+                        if (response.statusCode != 200) {
+                            lookup.failed = true;
+                            lookup.error = formatHttpErrorMessage(QString::fromUtf8("查询项目失败"),
+                                                                  response.statusCode, response.body);
+                            return callback(lookup);
+                        }
+                        QJsonParseError parseError;
+                        const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
+                        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                            lookup.failed = true;
+                            lookup.error = QString::fromUtf8("查询项目返回数据格式错误");
+                            return callback(lookup);
+                        }
+                        const QJsonObject obj = doc.object();
+                        lookup.project.id = obj.value("id").toString();
+                        lookup.project.name = obj.value("name").toString();
+                        if (lookup.project.id.isEmpty() || lookup.project.name.isEmpty()) {
+                            lookup.project = ProjectRef{};
+                            lookup.failed = true;
+                            lookup.error = QString::fromUtf8("查询项目返回数据缺少必要字段");
+                            return callback(lookup);
+                        }
+                        lookup.found = true;
+                        callback(lookup);
+                    });
 }
 
-CollabBackend::ProjectCreate CollabBackend::createProject(const QString& projectName) {
-    ProjectCreate create;
-    lastError_.clear();
-
+void CollabBackend::createProject(const QString& projectName, std::function<void(const ProjectCreate&)> callback) {
     QJsonObject payload;
     payload.insert("name", projectName);
-    const HttpCall response = sendJsonRequest(QStringLiteral("POST"), QStringLiteral("/projects"),
-                                              QJsonDocument(payload).toJson(QJsonDocument::Compact));
-
-    if (response.networkFailed()) {
-        create.error = response.networkError;
-        lastError_ = response.networkError;
-        return create;
-    }
-    if (response.statusCode == 409) {
-        return create; // 已存在：ok=false 且 error 为空（与旧语义一致）
-    }
-    if (response.statusCode != 201) {
-        create.error = formatHttpErrorMessage(QString::fromUtf8("创建项目失败"), response.statusCode, response.body);
-        lastError_ = create.error;
-        return create;
-    }
-
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        create.error = QString::fromUtf8("创建项目返回数据格式错误");
-        lastError_ = create.error;
-        return create;
-    }
-    const QJsonObject obj = doc.object();
-    create.project.id = obj.value("id").toString();
-    create.project.name = obj.value("name").toString();
-    if (create.project.id.isEmpty() || create.project.name.isEmpty()) {
-        create.project = ProjectRef{};
-        create.error = QString::fromUtf8("创建项目返回数据缺少必要字段");
-        lastError_ = create.error;
-        return create;
-    }
-    create.ok = true;
-    return create;
+    sendJsonRequest(QStringLiteral("POST"), QStringLiteral("/projects"),
+                    QJsonDocument(payload).toJson(QJsonDocument::Compact), [callback](const HttpCall& response) {
+                        ProjectCreate create;
+                        if (response.networkFailed()) {
+                            create.error = response.networkError;
+                            return callback(create);
+                        }
+                        if (response.statusCode == 409) {
+                            return callback(create); // 已存在：ok=false 且 error 为空
+                        }
+                        if (response.statusCode != 201) {
+                            create.error = formatHttpErrorMessage(QString::fromUtf8("创建项目失败"),
+                                                                  response.statusCode, response.body);
+                            return callback(create);
+                        }
+                        QJsonParseError parseError;
+                        const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
+                        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                            create.error = QString::fromUtf8("创建项目返回数据格式错误");
+                            return callback(create);
+                        }
+                        const QJsonObject obj = doc.object();
+                        create.project.id = obj.value("id").toString();
+                        create.project.name = obj.value("name").toString();
+                        if (create.project.id.isEmpty() || create.project.name.isEmpty()) {
+                            create.project = ProjectRef{};
+                            create.error = QString::fromUtf8("创建项目返回数据缺少必要字段");
+                            return callback(create);
+                        }
+                        create.ok = true;
+                        callback(create);
+                    });
 }
 
-CollabBackend::ProjectLookup CollabBackend::getOrCreateProject(const QString& projectName) {
-    ProjectLookup lookup = findProject(projectName);
-    if (lookup.found || lookup.failed) {
-        return lookup;
-    }
-    const ProjectCreate create = createProject(projectName);
-    if (create.ok) {
-        lookup.found = true;
-        lookup.project = create.project;
-        return lookup;
-    }
-    lookup.failed = true;
-    lookup.error = create.error.isEmpty() ? QString::fromUtf8("项目已存在但无法查询，请检查后端接口状态")
-                                          : create.error;
-    lastError_ = lookup.error;
-    return lookup;
+void CollabBackend::getOrCreateProject(const QString& projectName,
+                                       std::function<void(const ProjectLookup&)> callback) {
+    findProject(projectName, [this, projectName, callback](const ProjectLookup& lookup) {
+        if (lookup.found || lookup.failed) {
+            return callback(lookup);
+        }
+        createProject(projectName, [callback](const ProjectCreate& create) {
+            ProjectLookup result;
+            if (create.ok) {
+                result.found = true;
+                result.project = create.project;
+                return callback(result);
+            }
+            result.failed = true;
+            result.error = create.error.isEmpty()
+                               ? QString::fromUtf8("项目已存在但无法查询，请检查后端接口状态")
+                               : create.error;
+            callback(result);
+        });
+    });
 }
 
-CollabBackend::PushResult CollabBackend::pushJsonDelta(const QString& projectId, const QString& author,
-                                                       const QString& entityGraphJson, const QString& changesJson,
-                                                       const QStringList& removedIds, std::optional<int> baseVersion,
-                                                       const QString& sourceClientId) {
-    PushResult result;
-    lastError_.clear();
+void CollabBackend::pushJsonDelta(const QString& projectId, const QString& author, const QString& entityGraphJson,
+                                  const QString& changesJson, const QStringList& removedIds,
+                                  std::optional<int> baseVersion, std::function<void(const PushResult&)> callback,
+                                  const QString& sourceClientId) {
+    PushResult localError;
     QJsonParseError parseError;
     const QJsonDocument graphDoc = QJsonDocument::fromJson(entityGraphJson.toUtf8(), &parseError);
     if (parseError.error != QJsonParseError::NoError || !graphDoc.isObject()) {
-        result.error = QString::fromUtf8("Entity Graph JSON 格式错误");
-        lastError_ = result.error;
-        return result;
+        localError.error = QString::fromUtf8("Entity Graph JSON 格式错误");
+        return callback(localError);
     }
     const QJsonDocument changesDoc = QJsonDocument::fromJson(changesJson.toUtf8(), &parseError);
     if (parseError.error != QJsonParseError::NoError || (!changesDoc.isArray() && !changesDoc.isObject())) {
-        result.error = QString::fromUtf8("changes JSON 格式错误");
-        lastError_ = result.error;
-        return result;
+        localError.error = QString::fromUtf8("changes JSON 格式错误");
+        return callback(localError);
     }
     QJsonArray changes;
     if (changesDoc.isArray())
@@ -302,137 +287,125 @@ CollabBackend::PushResult CollabBackend::pushJsonDelta(const QString& projectId,
     if (!sourceClientId.isEmpty())
         payload.insert("source_client_id", sourceClientId);
 
-    const HttpCall response = sendJsonRequest(
-        QStringLiteral("POST"), QString::fromUtf8("/projects/%1/json-delta").arg(projectId),
-        QJsonDocument(payload).toJson(QJsonDocument::Compact));
-    if (response.networkFailed()) {
-        result.error = response.networkError;
-        lastError_ = response.networkError;
-        return result;
-    }
-    if (response.statusCode == 409) {
-        result.status = PushResult::Status::Conflict;
-        result.error = formatHttpErrorMessage(QString::fromUtf8("保存 JSON delta 失败"), response.statusCode,
-                                              response.body);
-        lastError_ = result.error;
-        return result;
-    }
-    if (response.statusCode != 201) {
-        result.error = formatHttpErrorMessage(QString::fromUtf8("保存 JSON delta 失败"), response.statusCode,
-                                              response.body);
-        lastError_ = result.error;
-        return result;
-    }
-    const QJsonDocument resultDoc = QJsonDocument::fromJson(response.body, &parseError);
-    const int version = resultDoc.object().value("version").toInt(0);
-    if (parseError.error != QJsonParseError::NoError || version <= 0) {
-        result.error = QString::fromUtf8("保存 JSON delta 返回版本无效");
-        lastError_ = result.error;
-        return result;
-    }
-    result.status = PushResult::Status::Created;
-    result.version = version;
-    return result;
+    sendJsonRequest(QStringLiteral("POST"), QString::fromUtf8("/projects/%1/json-delta").arg(projectId),
+                    QJsonDocument(payload).toJson(QJsonDocument::Compact),
+                    [callback](const HttpCall& response) {
+                        PushResult result;
+                        if (response.networkFailed()) {
+                            result.error = response.networkError;
+                            return callback(result);
+                        }
+                        if (response.statusCode == 409) {
+                            result.status = PushResult::Status::Conflict;
+                            result.error = formatHttpErrorMessage(QString::fromUtf8("保存 JSON delta 失败"),
+                                                                  response.statusCode, response.body);
+                            return callback(result);
+                        }
+                        if (response.statusCode != 201) {
+                            result.error = formatHttpErrorMessage(QString::fromUtf8("保存 JSON delta 失败"),
+                                                                  response.statusCode, response.body);
+                            return callback(result);
+                        }
+                        QJsonParseError parseError;
+                        const QJsonDocument resultDoc = QJsonDocument::fromJson(response.body, &parseError);
+                        const int version = resultDoc.object().value("version").toInt(0);
+                        if (parseError.error != QJsonParseError::NoError || version <= 0) {
+                            result.error = QString::fromUtf8("保存 JSON delta 返回版本无效");
+                            return callback(result);
+                        }
+                        result.status = PushResult::Status::Created;
+                        result.version = version;
+                        callback(result);
+                    });
 }
 
-CollabBackend::FetchResult CollabBackend::fetchJsonDelta(const QString& projectId, int baseVersion) {
-    FetchResult result;
-    lastError_.clear();
-    const HttpCall response = sendJsonRequest(
-        QStringLiteral("GET"), QString::fromUtf8("/projects/%1/json-delta?base_version=%2").arg(projectId).arg(baseVersion));
-    if (response.networkFailed()) {
-        result.error = response.networkError;
-        lastError_ = response.networkError;
-        return result;
-    }
-    if (response.statusCode == 404) {
-        result.status = FetchResult::Status::NotFound;
-        return result;
-    }
-    if (response.statusCode != 200) {
-        result.error = formatHttpErrorMessage(QString::fromUtf8("获取 JSON delta 失败"), response.statusCode,
-                                              response.body);
-        lastError_ = result.error;
-        return result;
-    }
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        result.error = QString::fromUtf8("获取 JSON delta 返回格式错误");
-        lastError_ = result.error;
-        return result;
-    }
-    const QJsonObject root = doc.object();
-    JsonGraphPayload& payload = result.payload;
-    payload.version = root.value("version").toInt(0);
-    if (!root.value("entity_graph").isObject()) {
-        result.error = QString::fromUtf8("获取 JSON delta 缺少实体图");
-        lastError_ = result.error;
-        return result;
-    }
-    payload.graphJson = compactJson(root.value("entity_graph").toObject());
-    payload.changesJson = compactJson(root.value("changes").toObject());
-    if (root.value("changes").isArray())
-        payload.changesJson = QString::fromUtf8(QJsonDocument(root.value("changes").toArray()).toJson(QJsonDocument::Compact));
-    for (const QJsonValue& value : root.value("removed_ids").toArray()) {
-        const QString id = value.toString().trimmed();
-        if (!id.isEmpty())
-            payload.removedIds.append(id);
-    }
-    payload.delta = root.value("delta").toBool(false);
-    payload.graphHash = root.value("graph_hash").toString();
-    if (payload.version < 0 || payload.graphJson.isEmpty()) {
-        result.error = QString::fromUtf8("获取 JSON delta 版本无效");
-        lastError_ = result.error;
-        return result;
-    }
-    result.status = FetchResult::Status::Ok;
-    return result;
+void CollabBackend::fetchJsonDelta(const QString& projectId, int baseVersion,
+                                   std::function<void(const FetchResult&)> callback) {
+    sendJsonRequest(
+        QStringLiteral("GET"),
+        QString::fromUtf8("/projects/%1/json-delta?base_version=%2").arg(projectId).arg(baseVersion), {},
+        [callback](const HttpCall& response) {
+            FetchResult result;
+            if (response.networkFailed()) {
+                result.error = response.networkError;
+                return callback(result);
+            }
+            if (response.statusCode != 200) {
+                result.error = formatHttpErrorMessage(QString::fromUtf8("获取 JSON delta 失败"),
+                                                      response.statusCode, response.body);
+                return callback(result);
+            }
+            QJsonParseError parseError;
+            const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
+            if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                result.error = QString::fromUtf8("获取 JSON delta 返回格式错误");
+                return callback(result);
+            }
+            const QJsonObject root = doc.object();
+            JsonGraphPayload& payload = result.payload;
+            payload.version = root.value("version").toInt(0);
+            if (!root.value("entity_graph").isObject()) {
+                result.error = QString::fromUtf8("获取 JSON delta 缺少实体图");
+                return callback(result);
+            }
+            payload.graphJson = compactJson(root.value("entity_graph").toObject());
+            payload.changesJson = compactJson(root.value("changes").toObject());
+            if (root.value("changes").isArray())
+                payload.changesJson =
+                    QString::fromUtf8(QJsonDocument(root.value("changes").toArray()).toJson(QJsonDocument::Compact));
+            for (const QJsonValue& value : root.value("removed_ids").toArray()) {
+                const QString id = value.toString().trimmed();
+                if (!id.isEmpty())
+                    payload.removedIds.append(id);
+            }
+            payload.delta = root.value("delta").toBool(false);
+            payload.graphHash = root.value("graph_hash").toString();
+            if (payload.version < 0 || payload.graphJson.isEmpty()) {
+                result.error = QString::fromUtf8("获取 JSON delta 版本无效");
+                return callback(result);
+            }
+            result.status = FetchResult::Status::Ok;
+            callback(result);
+        });
 }
 
-CollabBackend::FetchResult CollabBackend::fetchJsonVersion(const QString& projectId, int version) {
-    FetchResult result;
-    lastError_.clear();
-    const HttpCall response = sendJsonRequest(QStringLiteral("GET"),
-                                              QString::fromUtf8("/projects/%1/models/%2").arg(projectId).arg(version));
-    if (response.networkFailed()) {
-        result.error = response.networkError;
-        lastError_ = response.networkError;
-        return result;
-    }
-    if (response.statusCode == 404) {
-        result.status = FetchResult::Status::NotFound;
-        return result;
-    }
-    if (response.statusCode != 200) {
-        result.error = formatHttpErrorMessage(QString::fromUtf8("读取历史版本失败"), response.statusCode, response.body);
-        lastError_ = result.error;
-        return result;
-    }
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
-    const QJsonObject content = doc.object().value("content").toObject();
-    if (parseError.error != QJsonParseError::NoError || !content.value("entity_graph").isObject()) {
-        result.error = QString::fromUtf8("历史版本缺少实体图");
-        lastError_ = result.error;
-        return result;
-    }
-    result.payload.version = doc.object().value("version").toInt();
-    result.payload.graphJson = compactJson(content.value("entity_graph").toObject());
-    result.payload.changesJson =
-        QString::fromUtf8(QJsonDocument(content.value("changes").toArray()).toJson(QJsonDocument::Compact));
-    result.status = FetchResult::Status::Ok;
-    return result;
+void CollabBackend::fetchJsonVersion(const QString& projectId, int version,
+                                     std::function<void(const FetchResult&)> callback) {
+    sendJsonRequest(QStringLiteral("GET"), QString::fromUtf8("/projects/%1/models/%2").arg(projectId).arg(version),
+                    {}, [callback](const HttpCall& response) {
+                        FetchResult result;
+                        if (response.networkFailed()) {
+                            result.error = response.networkError;
+                            return callback(result);
+                        }
+                        if (response.statusCode == 404) {
+                            result.status = FetchResult::Status::NotFound;
+                            return callback(result);
+                        }
+                        if (response.statusCode != 200) {
+                            result.error = formatHttpErrorMessage(QString::fromUtf8("读取历史版本失败"),
+                                                                  response.statusCode, response.body);
+                            return callback(result);
+                        }
+                        QJsonParseError parseError;
+                        const QJsonDocument doc = QJsonDocument::fromJson(response.body, &parseError);
+                        const QJsonObject content = doc.object().value("content").toObject();
+                        if (parseError.error != QJsonParseError::NoError || !content.value("entity_graph").isObject()) {
+                            result.error = QString::fromUtf8("历史版本缺少实体图");
+                            return callback(result);
+                        }
+                        result.payload.version = doc.object().value("version").toInt();
+                        result.payload.graphJson = compactJson(content.value("entity_graph").toObject());
+                        result.payload.changesJson = QString::fromUtf8(
+                            QJsonDocument(content.value("changes").toArray()).toJson(QJsonDocument::Compact));
+                        result.status = FetchResult::Status::Ok;
+                        callback(result);
+                    });
 }
 
-bool CollabBackend::testConnection(QString* error) {
-    const ProjectLookup lookup = findProject(QStringLiteral("__dbcad_connection_test__"));
-    if (lookup.failed) {
-        if (error != nullptr)
-            *error = lookup.error;
-        return false;
-    }
-    return true;
+void CollabBackend::testConnection(std::function<void(bool, const QString&)> callback) {
+    findProject(QStringLiteral("__dbcad_connection_test__"),
+                [callback](const ProjectLookup& lookup) { callback(!lookup.failed, lookup.error); });
 }
 
 // ---------- WS 通道 ----------
@@ -583,97 +556,108 @@ void CollabBackend::processPresenceMessage(const QJsonObject& root, const QStrin
 
 // ---------- StorageBackend ----------
 
-std::optional<StorageDocument> CollabBackend::open(const QString& location, QString* error) {
-    const ProjectLookup lookup = findProject(location);
-    if (lookup.failed) {
-        if (error != nullptr)
-            *error = lookup.error.isEmpty() ? QString::fromUtf8("查询协作项目失败") : lookup.error;
-        return std::nullopt;
-    }
-    if (!lookup.found) {
-        if (error != nullptr)
-            *error = QString::fromUtf8("名为%1的项目(FastAPI)不存在。").arg(location);
-        return std::nullopt;
-    }
-    const FetchResult fetch = fetchJsonDelta(lookup.project.id, 0);
-    if (fetch.status != FetchResult::Status::Ok) {
-        if (error != nullptr)
-            *error = QString::fromUtf8("读取 Mode1 JSON 项目失败：%1").arg(fetch.error);
-        return std::nullopt;
-    }
-    StorageDocument document;
-    document.location = location;
-    document.projectId = lookup.project.id;
-    document.version = fetch.payload.version;
-    QJsonParseError parseError;
-    const QJsonDocument graphDoc = QJsonDocument::fromJson(fetch.payload.graphJson.toUtf8(), &parseError);
-    if (parseError.error != QJsonParseError::NoError || !graphDoc.isObject()) {
-        if (error != nullptr)
-            *error = QString::fromUtf8("获取 JSON delta 返回格式错误");
-        return std::nullopt;
-    }
-    document.graph = graphDoc.object();
-    document.removedIds = fetch.payload.removedIds;
-    return document;
+void CollabBackend::open(const QString& location, std::function<void(const StorageOpenResult&)> callback) {
+    findProject(location, [this, location, callback](const ProjectLookup& lookup) {
+        if (lookup.failed) {
+            StorageOpenResult result;
+            result.error = lookup.error.isEmpty() ? QString::fromUtf8("查询协作项目失败") : lookup.error;
+            return callback(result);
+        }
+        if (!lookup.found) {
+            StorageOpenResult result;
+            result.error = QString::fromUtf8("名为%1的项目(FastAPI)不存在。").arg(location);
+            return callback(result);
+        }
+        fetchJsonDelta(lookup.project.id, 0, [location, lookup, callback](const FetchResult& fetch) {
+            StorageOpenResult result;
+            if (fetch.status != FetchResult::Status::Ok) {
+                result.error = QString::fromUtf8("读取 Mode1 JSON 项目失败：%1").arg(fetch.error);
+                return callback(result);
+            }
+            result.document.location = location;
+            result.document.projectId = lookup.project.id;
+            result.document.version = fetch.payload.version;
+            QJsonParseError parseError;
+            const QJsonDocument graphDoc = QJsonDocument::fromJson(fetch.payload.graphJson.toUtf8(), &parseError);
+            if (parseError.error != QJsonParseError::NoError || !graphDoc.isObject()) {
+                result.error = QString::fromUtf8("获取 JSON delta 返回格式错误");
+                return callback(result);
+            }
+            result.document.graph = graphDoc.object();
+            result.document.removedIds = fetch.payload.removedIds;
+            result.ok = true;
+            callback(result);
+        });
+    });
 }
 
-std::optional<int> CollabBackend::save(const QString& location, const SaveRequest& request, QString* error) {
-    ProjectRef project;
-    const ProjectLookup lookup = findProject(location);
-    if (lookup.failed) {
-        if (error != nullptr)
-            *error = lookup.error;
-        return std::nullopt;
-    }
-    if (lookup.found) {
-        // 保存到当前打开的项目允许已有版本；换名保存要求目标为空项目。
-        if (lookup.project.id != channelProjectId_) {
-            const FetchResult head = fetchJsonDelta(lookup.project.id, 0);
-            if (head.status != FetchResult::Status::Ok) {
-                if (error != nullptr)
-                    *error = head.error;
-                return std::nullopt;
-            }
-            if (head.payload.version > 0) {
-                if (error != nullptr)
-                    *error = QString::fromUtf8("目标项目已有版本，请先打开并 Pull，或使用新的项目名");
-                return std::nullopt;
-            }
+void CollabBackend::save(const QString& location, const SaveRequest& request,
+                         std::function<void(const StorageSaveResult&)> callback) {
+    findProject(location, [this, location, request, callback](const ProjectLookup& lookup) {
+        if (lookup.failed) {
+            StorageSaveResult result;
+            result.error = lookup.error;
+            return callback(result);
         }
-        project = lookup.project;
-    } else {
-        const ProjectCreate create = createProject(location);
-        if (!create.ok) {
-            if (error != nullptr)
-                *error = create.error;
-            return std::nullopt;
+        const auto doPush = [this, request, callback](const ProjectRef& project) {
+            const QString author = request.author.isEmpty() ? author_ : request.author;
+            pushJsonDelta(project.id, author, compactJson(request.deltaGraph), request.changesJson,
+                          request.removedIds, request.baseVersion,
+                          [callback](const PushResult& push) {
+                              StorageSaveResult result;
+                              if (push.status != PushResult::Status::Created) {
+                                  result.error = push.error;
+                                  return callback(result);
+                              }
+                              result.ok = true;
+                              result.version = push.version;
+                              callback(result);
+                          },
+                          request.sourceClientId);
+        };
+        if (lookup.found) {
+            // 保存到当前打开的项目允许已有版本；换名保存要求目标为空项目。
+            if (lookup.project.id == channelProjectId_) {
+                return doPush(lookup.project);
+            }
+            fetchJsonDelta(lookup.project.id, 0, [lookup, doPush, callback](const FetchResult& head) {
+                if (head.status != FetchResult::Status::Ok) {
+                    StorageSaveResult result;
+                    result.error = head.error;
+                    return callback(result);
+                }
+                if (head.payload.version > 0) {
+                    StorageSaveResult result;
+                    result.error = QString::fromUtf8("目标项目已有版本，请先打开并 Pull，或使用新的项目名");
+                    return callback(result);
+                }
+                doPush(lookup.project);
+            });
+            return;
         }
-        project = create.project;
-    }
-
-    const PushResult push = pushJsonDelta(project.id, request.author.isEmpty() ? author_ : request.author,
-                                          compactJson(request.deltaGraph), request.changesJson, request.removedIds,
-                                          request.baseVersion, request.sourceClientId);
-    if (push.status != PushResult::Status::Created) {
-        if (error != nullptr)
-            *error = push.error;
-        return std::nullopt;
-    }
-    return push.version;
+        createProject(location, [doPush, callback](const ProjectCreate& create) {
+            if (!create.ok) {
+                StorageSaveResult result;
+                result.error = create.error;
+                return callback(result);
+            }
+            doPush(create.project);
+        });
+    });
 }
 
-QStringList CollabBackend::list(const QString& scope, QString* error) {
+void CollabBackend::list(const QString& scope, std::function<void(const StorageListResult&)> callback) {
     Q_UNUSED(scope);
-    if (error != nullptr)
-        *error = QString::fromUtf8("服务端未提供项目列表接口");
-    return {};
+    StorageListResult result;
+    result.error = QString::fromUtf8("服务端未提供项目列表接口");
+    callback(result);
 }
 
-bool CollabBackend::remove(const QString& location, QString* error) {
+void CollabBackend::remove(const QString& location, std::function<void(const StorageRemoveResult&)> callback) {
     Q_UNUSED(location);
-    if (error != nullptr)
-        *error = QString::fromUtf8("服务端未提供项目删除接口");
-    return false;
+    StorageRemoveResult result;
+    result.error = QString::fromUtf8("服务端未提供项目删除接口");
+    callback(result);
 }
 
 } // namespace dbcad

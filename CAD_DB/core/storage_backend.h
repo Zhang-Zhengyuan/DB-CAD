@@ -6,14 +6,15 @@
 // 内核原生读写）与序列化 JSON（经上层同步到服务端）。两者实现同一接口后，
 // 存取模式分支的 if/else 消失，改为后端选择。
 //
-// 语义约定：
-//   * location：SAT 后端是文件路径；协作后端是项目名。
-//   * open：SAT 后端读文件返回内核实体；协作后端解析项目并取最新 delta。
-//   * save：SAT 后端全量写文件；协作后端推送 json-delta（返回新版本号）。
-//   * list/remove：SAT 后端按目录列出/删除；协作后端由服务端能力决定。
-// 所有实现以 error 出参描述失败原因（面向用户的中文文案）。
+// 全接口异步（回调式）：协作后端的 open/save 走网络；本地文件后端的回调
+// 在调用内同步完成（快 IO，契约保证）。回调恰好调用一次，error 为面向
+// 用户的中文文案。
+//
+// location 语义：SAT 后端是文件路径；协作后端是项目名。
 
+#include <functional>
 #include <optional>
+
 #include <QString>
 #include <QStringList>
 
@@ -43,6 +44,26 @@ struct SaveRequest {
     QString sourceClientId;
 };
 
+struct StorageOpenResult {
+    bool ok = false;
+    StorageDocument document;
+    QString error;
+};
+struct StorageSaveResult {
+    bool ok = false;
+    int version = 0; // 协作后端：新版本号
+    QString error;
+};
+struct StorageListResult {
+    bool ok = false;
+    QStringList entries;
+    QString error;
+};
+struct StorageRemoveResult {
+    bool ok = false;
+    QString error;
+};
+
 class StorageBackend {
 public:
     virtual ~StorageBackend() = default;
@@ -52,12 +73,11 @@ public:
     // 协作后端需要项目解析/WS 连接等编排；视图据此决定工作流分支。
     virtual bool isCollaborative() const = 0;
 
-    // 打开文档。失败时返回空并写 *error。
-    virtual std::optional<StorageDocument> open(const QString& location, QString* error) = 0;
-    // 保存文档。返回值：协作后端为新版本号；SAT 后端成功时返回 0。
-    virtual std::optional<int> save(const QString& location, const SaveRequest& request, QString* error) = 0;
-    virtual QStringList list(const QString& scope, QString* error) = 0;
-    virtual bool remove(const QString& location, QString* error) = 0;
+    virtual void open(const QString& location, std::function<void(const StorageOpenResult&)> callback) = 0;
+    virtual void save(const QString& location, const SaveRequest& request,
+                      std::function<void(const StorageSaveResult&)> callback) = 0;
+    virtual void list(const QString& scope, std::function<void(const StorageListResult&)> callback) = 0;
+    virtual void remove(const QString& location, std::function<void(const StorageRemoveResult&)> callback) = 0;
 };
 
 } // namespace dbcad
