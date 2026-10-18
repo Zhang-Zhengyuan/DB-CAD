@@ -39,7 +39,12 @@ def _setup_file_logging() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _setup_file_logging()
-    crud.initialize_backend()
+    # v2 遗留端点（json-delta 族，P6 删除）：Neo4j 不可用时降级——对应端点
+    # 返回 503，v1（服务端权威）不受影响。
+    try:
+        crud.initialize_backend()
+    except Exception as exc:  # noqa: BLE001 - v2 is deprecated and optional
+        logger.warning("v2 legacy endpoints disabled (no storage): %s", exc)
     # v1 store：Neo4j 不可用时降级内存实现（本地/单测）；生产配 Neo4j 环境变量。
     try:
         initialize_v1_store()

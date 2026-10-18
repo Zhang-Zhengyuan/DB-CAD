@@ -7,6 +7,7 @@ import { api, ApiError, type ProjectInfo, type Scene, type VersionInfo } from ".
 
 export type DisplayMode = "shaded" | "shadedEdges" | "wireframe" | "edges";
 export type GizmoMode = "off" | "translate" | "rotate" | "scale";
+export type SectionAxis = "off" | "x" | "y" | "z";
 
 interface ViewerState {
   projects: ProjectInfo[];
@@ -18,6 +19,9 @@ interface ViewerState {
   selected: string[]; // 首个为主选（gizmo 目标）；布尔取前两个
   displayMode: DisplayMode;
   gizmoMode: GizmoMode;
+  measureMode: boolean;
+  measurePoints: number[][];
+  section: { axis: SectionAxis; position: number };
   viewRequest: { view: string; nonce: number } | null;
   presence: string[];
   intents: Record<string, string>;
@@ -34,6 +38,10 @@ interface ViewerState {
   setDisplayMode: (mode: DisplayMode) => void;
   setGizmoMode: (mode: GizmoMode) => void;
   setView: (view: string) => void;
+  setMeasureMode: (on: boolean) => void;
+  addMeasurePoint: (point: number[]) => void;
+  clearMeasure: () => void;
+  setSection: (axis: SectionAxis, position: number) => void;
   runCommand: (payload: Record<string, unknown>) => Promise<boolean>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
@@ -90,6 +98,9 @@ export const useViewer = create<ViewerState>((set, get) => {
     selected: [],
     displayMode: "shadedEdges",
     gizmoMode: "off",
+    measureMode: false,
+    measurePoints: [],
+    section: { axis: "off", position: 0 },
     viewRequest: null,
     presence: [],
     intents: {},
@@ -167,6 +178,11 @@ export const useViewer = create<ViewerState>((set, get) => {
     },
     setDisplayMode: (displayMode) => set({ displayMode }),
     setGizmoMode: (gizmoMode) => set({ gizmoMode }),
+    setMeasureMode: (on) => set({ measureMode: on, measurePoints: [] }),
+    addMeasurePoint: (point) =>
+      set((state) => ({ measurePoints: [...state.measurePoints, point].slice(-2) })),
+    clearMeasure: () => set({ measurePoints: [] }),
+    setSection: (axis, position) => set({ section: { axis, position } }),
     setView: (view) =>
       set((state) => ({ viewRequest: { view, nonce: (state.viewRequest?.nonce ?? 0) + 1 } })),
 

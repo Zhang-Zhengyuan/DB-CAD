@@ -6,7 +6,7 @@
 // 服务端烘焙几何后刷新回放——本地几何永远只读（ADR-1）。
 import { useEffect, useMemo, useRef } from "react";
 import { Canvas, useLoader, useThree } from "@react-three/fiber";
-import { OrbitControls, TransformControls } from "@react-three/drei";
+import { Html, OrbitControls, TransformControls } from "@react-three/drei";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import * as THREE from "three";
 import { api, type SceneComponent } from "./api";
@@ -43,6 +43,17 @@ function ComponentModel({ component }: { component: SceneComponent }) {
     [component.color],
   );
 
+  const section = useViewer((s) => s.section);
+  const sectionPlane = useMemo(() => {
+    if (section.axis === "off") return null;
+    const normal = new THREE.Vector3(
+      section.axis === "x" ? -1 : 0,
+      section.axis === "y" ? -1 : 0,
+      section.axis === "z" ? -1 : 0,
+    );
+    return new THREE.Plane(normal, section.position);
+  }, [section]);
+
   useEffect(() => {
     const showSolid = mode === "shaded" || mode === "shadedEdges" || mode === "wireframe";
     const showEdges = mode === "shadedEdges" || mode === "edges";
@@ -57,13 +68,17 @@ function ComponentModel({ component }: { component: SceneComponent }) {
         emissive: isSelected ? 0x2a5fbf : 0x000000,
         emissiveIntensity: isSelected ? 0.45 : 0,
         side: THREE.DoubleSide,
+        clippingPlanes: sectionPlane ? [sectionPlane] : [],
       });
     }
     for (const edge of meshes.edges) {
       edge.visible = showEdges;
-      edge.material = new THREE.LineBasicMaterial({ color: isSelected ? 0x4d8bff : 0x333333 });
+      edge.material = new THREE.LineBasicMaterial({
+        color: isSelected ? 0x4d8bff : 0x333333,
+        clippingPlanes: sectionPlane ? [sectionPlane] : [],
+      });
     }
-  }, [mode, isSelected, editingBy, meshes, baseColor]);
+  }, [mode, isSelected, editingBy, meshes, baseColor, sectionPlane]);
 
   useEffect(() => {
     const node = group.current;
@@ -74,15 +89,58 @@ function ComponentModel({ component }: { component: SceneComponent }) {
     };
   }, [component.component_id]);
 
+  const measureMode = useViewer((s) => s.measureMode);
+  const addMeasurePoint = useViewer((s) => s.addMeasurePoint);
+
   return (
     <group
       ref={group}
       onClick={(event) => {
         event.stopPropagation();
+        if (measureMode) {
+          addMeasurePoint([event.point.x, event.point.y, event.point.z]);
+          return;
+        }
         select(isSelected ? null : component.component_id);
       }}
     >
       <primitive object={gltf.scene} />
+    </group>
+  );
+}
+
+// 测量覆盖物：两个点标记 + 连线（drei Html 显示距离）。
+function MeasureOverlay() {
+  const points = useViewer((s) => s.measurePoints);
+  if (points.length === 0) return null;
+  const a = new THREE.Vector3(points[0][0], points[0][1], points[0][2]);
+  const b = points.length > 1 ? new THREE.Vector3(points[1][0], points[1][1], points[1][2]) : null;
+  const distance = b ? a.distanceTo(b) : null;
+  const tuple = (v: THREE.Vector3): [number, number, number] => [v.x, v.y, v.z];
+  return (
+    <group>
+      {points.map((point, index) => (
+        <mesh key={index} position={[point[0], point[1], point[2]]}>
+          <sphereGeometry args={[Math.max((distance ?? 1) * 0.02, 0.15), 12, 12]} />
+          <meshBasicMaterial color={0x4d8bff} />
+        </mesh>
+      ))}
+      {b && (
+        <>
+          <line>
+            <bufferGeometry>
+              <bufferAttribute
+                attach="attributes-position"
+                args={[new Float32Array([a.x, a.y, a.z, b.x, b.y, b.z]), 3]}
+              />
+            </bufferGeometry>
+            <lineBasicMaterial color={0x4d8bff} />
+          </line>
+          <Html position={tuple(a.clone().add(b).multiplyScalar(0.5))} center>
+            <span className="measure-label">{distance?.toFixed(3)}</span>
+          </Html>
+        </>
+      )}
     </group>
   );
 }
@@ -143,8 +201,7 @@ function Gizmo() {
 function CameraRig({ center, radius }: { center: [number, number, number]; radius: number }) {
   const { camera, controls } = useThree();
   const request = useViewer((s) => s.viewRequest);
-  useEffect(() => {
-    if (!request) return;
+  const applyView = (view: string) => {
     const d = Math.max(radius * 2.4, 4);
     const dirs: Record<string, [number, number, number]> = {
       front: [0, -d, 0],
@@ -156,7 +213,7 @@ function CameraRig({ center, radius }: { center: [number, number, number]; radiu
       iso: [d * 0.8, -d * 0.7, d * 0.7],
       fit: [d * 0.8, -d * 0.7, d * 0.7],
     };
-    const dir = dirs[request.view] ?? dirs.iso;
+    const dir = dirs[view] ?? dirs.iso;
     camera.position.set(center[0] + dir[0], center[1] + dir[1], center[2] + dir[2]);
     camera.up.set(0, 0, 1);
     camera.lookAt(...center);
@@ -165,6 +222,14 @@ function CameraRig({ center, radius }: { center: [number, number, number]; radiu
       orbit.target.set(...center);
       orbit.update?.();
     }
+  };
+  // 首帧自动等轴测对中：初始相机默认朝 -Z 平视，场景中心会落在视锥外。
+  useEffect(() => {
+    applyView("iso");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (request) applyView(request.view);
   }, [request, camera, controls, center, radius]);
   return null;
 }
@@ -195,7 +260,8 @@ export function Viewer() {
 
   return (
     <Canvas
-      style={{ flexGrow: 1, minHeight: 0 }}
+      className="canvas-host"
+      gl={{ localClippingEnabled: true }}
       camera={{
         position: [bounds.radius * 2, -bounds.radius * 2, bounds.radius * 1.7],
         fov: 45,
@@ -213,6 +279,7 @@ export function Viewer() {
         <ComponentModel key={component.component_id} component={component} />
       ))}
       <Gizmo />
+      <MeasureOverlay />
       <CameraRig center={bounds.center} radius={bounds.radius} />
       <OrbitControls makeDefault />
       <gridHelper args={[200, 40, 0x3a4148, 0x262b30]} position={[0, 0, 0]} />

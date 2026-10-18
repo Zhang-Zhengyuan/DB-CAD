@@ -92,9 +92,7 @@ def export_project(project_id: str, v: int | None = None, fmt: str = "sat") -> R
     )
     if version is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project has no versions")
-    if fmt == "stl":
-        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "STL export lands in P5")
-    if fmt not in ("sat", "glb"):
+    if fmt not in ("sat", "glb", "stl"):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "fmt must be sat|glb|stl")
 
     assets = get_component_store()
@@ -103,11 +101,16 @@ def export_project(project_id: str, v: int | None = None, fmt: str = "sat") -> R
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Component asset missing")
     try:
         gateway = get_worker_gateway()
-        payload = gateway.merge_sat(parts) if fmt == "sat" else gateway.export_glb(parts)  # type: ignore[arg-type]
+        if fmt == "sat":
+            payload = gateway.merge_sat(parts)  # type: ignore[arg-type]
+        elif fmt == "stl":
+            payload = gateway.export_stl(parts)  # type: ignore[arg-type]
+        else:
+            payload = gateway.export_glb(parts)  # type: ignore[arg-type]
     except WorkerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"geometry worker failed: {exc}") from exc
 
-    media = "application/octet-stream" if fmt == "sat" else "model/gltf-binary"
+    media = {"sat": "application/octet-stream", "glb": "model/gltf-binary", "stl": "model/stl"}[fmt]
     name = f"{project_id}-v{version.number}.{fmt}"
     return Response(
         content=payload,

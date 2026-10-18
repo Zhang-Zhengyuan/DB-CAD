@@ -47,6 +47,9 @@ class FakeWorker:
     def export_glb(self, parts: list[bytes]) -> bytes:
         return b"glTF-merged"
 
+    def export_stl(self, parts: list[bytes]) -> bytes:
+        return b"solid dbcad\nendsolid dbcad\n"
+
 
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -209,7 +212,7 @@ def test_export_sat_and_glb(client):
     glb = client.get(f"/api/v1/projects/{project_id}/files/export?fmt=glb&v=1")
     assert glb.status_code == 200 and glb.content == b"glTF-merged"
     stl = client.get(f"/api/v1/projects/{project_id}/files/export?fmt=stl")
-    assert stl.status_code == 501
+    assert stl.status_code == 200 and stl.content.startswith(b"solid dbcad")
 
 
 def test_command_schema_endpoint_contract(client):

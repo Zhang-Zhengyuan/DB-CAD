@@ -11,9 +11,10 @@ export default function App() {
   const conflict = useViewer((s) => s.conflict);
   const loading = useViewer((s) => s.loading);
   const presence = useViewer((s) => s.presence);
+  const measureCount = useViewer((s) => s.measurePoints.length);
 
   return (
-    <div className="app">
+    <div className="app" data-measure={measureCount}>
       <header className="header">
         <span className="brand">DB-CAD</span>
         <span className="project">

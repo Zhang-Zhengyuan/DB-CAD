@@ -104,6 +104,9 @@ class SubprocessWorkerGateway:
     def export_glb(self, parts: list[bytes]) -> bytes:
         return self._collect("export", parts, "--glb-out", ".glb")
 
+    def export_stl(self, parts: list[bytes]) -> bytes:
+        return self._collect("export", parts, "--stl-out", ".stl")
+
     def _collect(self, command: str, parts: list[bytes], out_flag: str, suffix: str) -> bytes:
         if not parts:
             raise WorkerError("no components to export")

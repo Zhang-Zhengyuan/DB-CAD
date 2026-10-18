@@ -1,7 +1,9 @@
 // 工具栏（显示模式/标准视图/建模操作）+ 属性面板（工业 CAD 入门配置）。
 // 建模操作全部走 POST /commands（服务端权威）；布尔需要恰好两个选中
 // （首=目标，次=工具），gizmo 只作用于主选组件。
-import { useViewer, type DisplayMode, type GizmoMode } from "./store";
+import { useMemo, useRef } from "react";
+import { api } from "./api";
+import { useViewer, type DisplayMode, type GizmoMode, type SectionAxis } from "./store";
 
 const DISPLAY_MODES: { id: DisplayMode; label: string }[] = [
   { id: "shaded", label: "着色" },
@@ -40,6 +42,37 @@ export function Toolbar() {
   const undo = useViewer((s) => s.undo);
   const redo = useViewer((s) => s.redo);
   const active = useViewer((s) => !!s.activeProject);
+  const measureMode = useViewer((s) => s.measureMode);
+  const setMeasureMode = useViewer((s) => s.setMeasureMode);
+  const clearMeasure = useViewer((s) => s.clearMeasure);
+  const section = useViewer((s) => s.section);
+  const setSection = useViewer((s) => s.setSection);
+  const scene = useViewer((s) => s.scene);
+  const openProject = useViewer((s) => s.openProject);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const projectId = useViewer((s) => s.activeProject?.id ?? null);
+
+  const sectionRange = useMemo(() => {
+    if (!scene || scene.components.length === 0) return { min: -50, max: 50 };
+    let min = Infinity;
+    let max = -Infinity;
+    const axisIndex = section.axis === "x" ? 0 : section.axis === "y" ? 1 : 2;
+    for (const component of scene.components) {
+      min = Math.min(min, component.bbox.min[axisIndex]);
+      max = Math.max(max, component.bbox.max[axisIndex]);
+    }
+    return { min, max };
+  }, [scene, section.axis]);
+
+  const onImportFile = async (file: File | undefined) => {
+    if (!file || !projectId) return;
+    try {
+      await api.importSat(projectId, file);
+      await openProject(projectId);
+    } catch (e) {
+      useViewer.setState({ error: `导入失败：${e instanceof Error ? e.message : String(e)}` });
+    }
+  };
 
   const boolean = async (op: "unite" | "subtract" | "intersect") => {
     if (selected.length !== 2) return;
@@ -108,6 +141,71 @@ export function Toolbar() {
           }
         >
           ✕ 删除
+        </button>
+        <button
+          className={measureMode ? "active" : ""}
+          disabled={!active}
+          onClick={() => {
+            setMeasureMode(!measureMode);
+            clearMeasure();
+          }}
+          title="点到点距离：依次点两个面点"
+        >
+          ⇔ 测量
+        </button>
+      </div>
+      <div className="segmented">
+        <span className="tool-label">剖切</span>
+        {(["off", "x", "y", "z"] as SectionAxis[]).map((axis) => (
+          <button
+            key={axis}
+            className={section.axis === axis ? "active" : ""}
+            disabled={!active}
+            onClick={() => setSection(axis, (sectionRange.min + sectionRange.max) / 2)}
+          >
+            {axis === "off" ? "关" : axis.toUpperCase()}
+          </button>
+        ))}
+        {section.axis !== "off" && (
+          <input
+            className="section-slider"
+            type="range"
+            min={sectionRange.min}
+            max={sectionRange.max}
+            step={(sectionRange.max - sectionRange.min) / 200}
+            value={section.position}
+            onChange={(event) => setSection(section.axis, Number(event.target.value))}
+          />
+        )}
+      </div>
+      <div className="segmented">
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".sat"
+          hidden
+          onChange={(event) => void onImportFile(event.target.files?.[0])}
+        />
+        <button disabled={!active} onClick={() => fileInput.current?.click()}>
+          ⬆ 导入 SAT
+        </button>
+        <button
+          disabled={!active || !scene}
+          onClick={() => projectId && window.open(api.exportUrl(projectId, "sat", scene?.version), "_blank")}
+        >
+          ⬇ SAT
+        </button>
+        <button
+          disabled={!active || !scene}
+          onClick={() => projectId && window.open(api.exportUrl(projectId, "glb", scene?.version), "_blank")}
+        >
+          ⬇ GLB
+        </button>
+        <button
+          disabled={!active || !scene}
+          onClick={() => projectId && window.open(api.exportUrl(projectId, "stl", scene?.version), "_blank")}
+        >
+          ⬇ STL
         </button>
       </div>
     </div>

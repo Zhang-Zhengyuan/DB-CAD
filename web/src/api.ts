@@ -102,6 +102,17 @@ export const api = {
     }),
   undo: (id: string) => request<Record<string, unknown>>(`/api/v1/projects/${id}/undo`, { method: "POST" }),
   redo: (id: string) => request<Record<string, unknown>>(`/api/v1/projects/${id}/redo`, { method: "POST" }),
+  importSat: async (projectId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("project_id", projectId);
+    form.append("author", userName);
+    const response = await fetch(`${BASE}/api/v1/files/import`, { method: "POST", body: form });
+    if (!response.ok) throw new ApiError(response.status, (await response.json())?.detail);
+    return (await response.json()) as { project_id: string; version: number };
+  },
+  exportUrl: (projectId: string, fmt: "sat" | "glb" | "stl", version?: number) =>
+    `${BASE}/api/v1/projects/${projectId}/files/export?fmt=${fmt}${version ? `&v=${version}` : ""}`,
   eventsUrl: (projectIds: string[]) =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${BASE}/api/v1/events?projects=${projectIds.join(",")}&user=${encodeURIComponent(userName)}`,
 };

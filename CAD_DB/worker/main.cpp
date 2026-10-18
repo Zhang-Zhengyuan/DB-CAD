@@ -267,21 +267,26 @@ int mergeSat(const std::vector<fs::path>& inputs, const fs::path& output) {
     return 0;
 }
 
-// exportGLB：合并网格为单一 GLB（fmt=glb）。STL 留给 P5。
-int exportGlb(const std::vector<fs::path>& inputs, const fs::path& output) {
-    dbcad::MeshData merged;
+// collectMesh：恢复组件 SAT 并把全部 BODY 的网格合并进 merged。
+int collectMesh(const std::vector<fs::path>& inputs, dbcad::MeshData& merged) {
     for (const fs::path& input : inputs) {
         ENTITY_LIST part;
         if (!restoreEntityList(input, part)) return fail("SAT restore failed: " + input.string());
         for (ENTITY* ent = part.first(); ent; ent = part.next()) {
-            if (!is_BODY(ent)) continue;
-            dbcad::MeshResult mesh = dbcad::MeshExtractor::extract(*(BODY*)ent,
-                                                                   dbcad::MeshQuality::MediumFine);
+            dbcad::MeshResult mesh = dbcad::MeshExtractor::extractEntity(*ent, dbcad::MeshQuality::MediumFine);
             if (!mesh.ok) return fail("export mesh failed: " + mesh.error);
             dbcad::appendMesh(merged, mesh.mesh);
         }
         api_del_entity_list(part);
     }
+    return 0;
+}
+
+// exportGLB：合并网格为单一 GLB（fmt=glb）。
+int exportGlb(const std::vector<fs::path>& inputs, const fs::path& output) {
+    dbcad::MeshData merged;
+    int code = collectMesh(inputs, merged);
+    if (code != 0) return code;
     std::string error;
     const std::vector<unsigned char> glb = dbcad::GlbWriter::write(merged, &error);
     if (glb.empty()) return fail("export glb failed: " + error);
@@ -289,6 +294,39 @@ int exportGlb(const std::vector<fs::path>& inputs, const fs::path& output) {
     stream.write(reinterpret_cast<const char*>(glb.data()), (std::streamsize)glb.size());
     if (!stream) return fail("export glb write failed");
     std::printf("[worker] export glb ok: %u triangles\n", merged.triangleCount());
+    return 0;
+}
+
+// exportStl：ASCII STL（P5；facet 顶点取自合并网格，法线按右手叉积）。
+int exportStl(const std::vector<fs::path>& inputs, const fs::path& output) {
+    dbcad::MeshData merged;
+    int code = collectMesh(inputs, merged);
+    if (code != 0) return code;
+    std::ofstream stream(output, std::ios::binary);
+    stream << "solid dbcad\n";
+    char line[256];
+    for (size_t t = 0; t + 2 < merged.indices.size(); t += 3) {
+        const size_t ia = 3 * (size_t)merged.indices[t];
+        const size_t ib = 3 * (size_t)merged.indices[t + 1];
+        const size_t ic = 3 * (size_t)merged.indices[t + 2];
+        const double ax = merged.positions[ia], ay = merged.positions[ia + 1], az = merged.positions[ia + 2];
+        const double bx = merged.positions[ib], by = merged.positions[ib + 1], bz = merged.positions[ib + 2];
+        const double cx = merged.positions[ic], cy = merged.positions[ic + 1], cz = merged.positions[ic + 2];
+        const double ux = bx - ax, uy = by - ay, uz = bz - az;
+        const double vx = cx - ax, vy = cy - ay, vz = cz - az;
+        double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+        const double len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 1e-12) { nx /= len; ny /= len; nz /= len; } else { nx = ny = 0; nz = 1; }
+        std::snprintf(line, sizeof(line), "  facet normal %.9g %.9g %.9g\n", nx, ny, nz);
+        stream << line << "    outer loop\n";
+        std::snprintf(line, sizeof(line), "      vertex %.9g %.9g %.9g\n", ax, ay, az); stream << line;
+        std::snprintf(line, sizeof(line), "      vertex %.9g %.9g %.9g\n", bx, by, bz); stream << line;
+        std::snprintf(line, sizeof(line), "      vertex %.9g %.9g %.9g\n", cx, cy, cz); stream << line;
+        stream << "    endloop\n  endfacet\n";
+    }
+    stream << "endsolid dbcad\n";
+    if (!stream) return fail("export stl write failed");
+    std::printf("[worker] export stl ok: %u triangles\n", merged.triangleCount());
     return 0;
 }
 
@@ -370,6 +408,19 @@ int main(int argc, char** argv) {
             start = comma + 1;
         }
         code = inputs.empty() ? fail("empty --sat-list") : mergeSat(inputs, argv[5]);
+    } else if (argc == 6 && command == "export" && std::string(argv[2]) == "--sat-list" &&
+               std::string(argv[4]) == "--stl-out") {
+        std::vector<fs::path> inputs;
+        std::string list = argv[3];
+        size_t start = 0;
+        while (start <= list.size()) {
+            const size_t comma = list.find(',', start);
+            const std::string one = list.substr(start, comma == std::string::npos ? comma : comma - start);
+            if (!one.empty()) inputs.push_back(one);
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+        code = inputs.empty() ? fail("empty --sat-list") : exportStl(inputs, argv[5]);
     } else if (argc == 6 && command == "export" && std::string(argv[2]) == "--sat-list" &&
                std::string(argv[4]) == "--glb-out") {
         std::vector<fs::path> inputs;

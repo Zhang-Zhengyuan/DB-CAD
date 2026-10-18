@@ -61,8 +61,10 @@ body {
 .swatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid #0006; }
 
 .viewport { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
-.viewport > div { flex: 1 1 0%; min-height: 0; position: relative; }
-.viewport > div > div { height: 100%; position: relative; }
+/* R3F 容器专属类（勿用 .viewport > div 泛匹配——会误伤工具栏使其
+   拉伸成整列高、覆盖画布点击）。 */
+.viewport > .canvas-host { flex: 1 1 0%; min-height: 0; position: relative; }
+.viewport > .canvas-host > div { height: 100%; position: relative; }
 .viewport canvas { display: block; width: 100% !important; height: 100% !important; }
 .toolbar {
   display: flex; gap: 16px; padding: 6px 10px;
@@ -127,3 +129,12 @@ body {
 
 .crash { padding: 24px; color: #ffb0b0; }
 .crash pre { white-space: pre-wrap; font-size: 11px; color: #ffd9d9; }
+
+/* P5：测量/剖切/导入导出 */
+.tool-label { color: var(--text-dim); font-size: 11px; align-self: center; padding: 0 4px; }
+.section-slider { width: 140px; accent-color: var(--accent); }
+.measure-label {
+  background: #16324f; color: #b9d7ff; padding: 2px 8px; border-radius: 4px;
+  font-size: 12px; font-family: Consolas, monospace; white-space: nowrap;
+  border: 1px solid #3d5a80;
+}
