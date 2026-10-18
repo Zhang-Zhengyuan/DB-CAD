@@ -48,8 +48,8 @@ flowchart LR
 
 - **两条存储链路**：SAT 全量本地存取（`access.cpp`，交换格式 + 测试正确性基准）；序列化 JSON 云端协作（客户端编码组件 → FastAPI 合并 → Neo4j 不可变组件 + 版本清单链）。SAT 片段作为组件属性随 JSON 走，服务端不解析。
 - **线协议冻结**：`POST/GET /projects/{id}/json-delta`（base_version 乐观锁、组件级整替合并）与 WS 通知协议保持不变，两侧测试（后端 44 项无 DB 回归 + L3 真 Neo4j 往返）是保护网。换数据库、升级库内物理表示，都不动协议。
-- **库内物理表示（待做）**：当前为打包字符串（labels_json/props_json，即收敛计划的兜底档）。下一步按 `STORAGE_CONSOLIDATION_PLAN` Phase B 升级为原生标签 + 一级扁平字段（"细"档），协议不变、客户端零改动。
-- **协同模型（目标）**：保持粗（组件级整替 + SAT 兜底）加细（JSON 实体载荷）混合粒度；工作流向业内成熟模型演进——自动微版本同步 + 显式定版、变更通知到达即自动拉取（无冲突时）、组件级编辑意图/在场提示、版本链升为分支 DAG、组件级 Keep/Merge/Replace 冲突处置。同组件并发写保持诚实拒绝，不做拓扑级自动合并（拓扑命名问题无解，业界同样不做）。
+- **库内物理表示（Phase B 已实施，2026-10-18）**：`JsonGraphEntity` 双表示——权威载荷 labels_json/props_json（graph() 读投影，迁移前后逐字节等价）+ 原生 Neo4j 标签与一级扁平字段（可查询投影，如 `MATCH (f:Face) WHERE f.geometry_type='spline'`；未识别类型显式落 `:Unknown`，绝不静默）。存量迁移脚本幂等（`backend/scripts/migrate_json_graph_native_v2.py`）。
+- **协同模型（M4.1–4.3 已实施）**：混合粒度不变；自动微版本同步 + 显式定版标签（`/json-delta/tags`）、变更通知到达即自动拉取（无冲突时；同组件并发仍诚实拒绝）、组件级编辑意图广播与软锁提示（edit_intent）。分支 DAG 与语义 diff 仍为路线图（REFACTOR_PLAN M4.4/4.5）。拓扑级自动合并不做（拓扑命名问题无解，业界同样不做）。
 
 ## 5. 本轮清理记录（2026-10-18，refactor/architecture-v2）
 
@@ -64,13 +64,14 @@ flowchart LR
 
 验证：客户端 Debug 编译通过（`x64/Debug/CAD_DB.exe`）；后端 `pytest -m 'not integration'` 43 项全绿。
 
-## 6. 重建路线（清理之后）
+## 6. 重建路线（2026-10-18 全部主里程碑完成）
 
-> 执行计划、任务分解与各里程碑验收标准见 [REFACTOR_PLAN.md](REFACTOR_PLAN.md)，本节只列方向。
+> 执行计划、任务分解与各里程碑验收标准见 [REFACTOR_PLAN.md](REFACTOR_PLAN.md)。
 
-1. **上层重建**：把当前长在 MainWindow 里的协作编排（推送/拉取/版本状态/合并应用）下沉为无 UI 的核心库（会话/命令层），MainWindow 只留视图接线；网络调用异步化，消灭嵌套事件循环。
-2. **存储物理表示升级**（Phase B，可与 1 并行）：原生标签 + 扁平字段 + 一次性迁移脚本 + L3 结构断言。
-3. **协同工作流演进**：自动同步、定版/分支、在场提示、组件级冲突处置。
-4. **AI native**：作为"另一个操作者"接入上层命令入口，与 UI 平级；破坏性操作走审批。
+1. **上层重建（M1/M2 已完成）**：协作编排已下沉 `CAD_DB/core/`（DocumentSession/CollabState/CollabController/CollabBackend/StorageBackend/CommandBus，仅 QtCore）；MainWindow/Qt 只剩壳；全部网络异步（无嵌套事件循环）。
+2. **存储物理表示升级（M3/Phase B 已完成）**：原生标签 + 扁平字段 + 幂等迁移 + L3 结构断言；协议与客户端零改动。
+3. **协同工作流（M4.1–4.3 已完成）**：自动拉取、在场感知（edit_intent 软锁提示）、定版标签；分支 DAG（M4.4）与语义 diff（M4.5）为后续路线图。
+4. **AI native（M6 第一步已具备）**：CommandBus 提供名→schema→执行器的程序化命令入口（AI 与 UI 平级调用同一注册表）；审批流为后续工作。
+5. **实体级增量（M5/Phase D）**：后续路线图，见 STORAGE_CONSOLIDATION_PLAN。
 
 执行细节（命令记账、撤销栈、防回环、断线重连等）都属于上层内部实现，设计层面不在此展开。

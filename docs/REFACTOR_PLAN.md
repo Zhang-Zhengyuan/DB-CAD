@@ -1,7 +1,7 @@
 # 架构 v2 重构计划（refactor/architecture-v2）
 
 > 配套文档：[ARCHITECTURE.md](ARCHITECTURE.md)（架构定稿）。本文是执行计划：做什么、按什么顺序、每步怎么验收、什么时候合并回 master。
-> 开始日期：2026-10-18。M0 已完成、**M1 已完成**（见文末变更记录）。当前起点：M2。
+> 开始日期：2026-10-18。M0/M1/M2/M3/M4.1–4.3 已完成（见文末变更记录）；合并条件（§2）已满足，合并回 master 并打 tag `architecture-v2`。M4.4 分支、M5 实体级增量、M6 AI 审批流为后补路线图。
 
 ## 0. 总原则
 
@@ -145,3 +145,21 @@ FakeGeometryKernel（可注入会话）+ MemoryTransport（内存实现 json-del
 - **WebUI**：版本实体聚合优先原生标签（legacy 退回 labels_json）；新增 native_coverage（fields/skipped_fields）覆盖率展示。
 
 **门禁（全绿）**：后端非集成 43 项；集成 17 项（含 12 项原 L3 往返 + 4 项新 v2；真 Neo4j 容器）；客户端门禁不受影响（零改动验证于 M2 提交时已绿）。
+
+## 7. M4 变更记录（4.1/4.2/4.3 已完成，2026-10-18）
+
+- **4.1 自动拉取**：WS 通知到达且无在飞操作即 `pullAsync`；冲突判据（本地未提交与远端变更重叠）非空时诚实拒绝、走人工通道提示，不静默覆盖。`setAutoPullEnabled` 开关（默认开）。
+- **4.2 在场感知**：`edit_intent {component_uuid, action}` WS 广播（服务端纯转发、排除发送者）；客户端每 uuid 首次本地编辑广播 begin（push/pull 成功广播 end）；收到远端意图显示"XX 正在编辑「YY」"，与本地未提交重叠时提示冲突风险。提交仍走 base_version 乐观锁——意图只是提示，不是硬锁。
+- **4.3 定版**：微版本=自动同步的版本链（本就存在）；显式 `POST/GET /projects/{id}/json-delta/tags` 命名标签（(project,name) 唯一，重打=移动指向）；协作菜单「定版(Tag)…」。
+- **未做（有意后补）**：4.4 分支 DAG 与 Keep/Merge/Replace 合并、4.5 语义 diff——依赖面大、按计划"可逐项独立交付"；M5 实体级增量（Phase D）、M6 AI 审批流同此。M6 的第一步（命令入口程序化调用：CommandBus 名→schema→执行器）已随 M1.6 落地。
+
+**门禁（全绿）**：core_unit_tests 116 项；run-client-regression 内核 77 + 真客户端异步 HTTP 26；后端全量 62（非集成 44 + 集成 18，真 Neo4j）。
+
+## 8. 合并审计（2026-10-18）
+
+| §2 条件 | 证据 |
+|---|---|
+| M1+M2 完成（M3/M4.1–4.3 亦完成） | 提交 7b6d774 / cae7e39 / 447339d / db86025 / 85200e4 |
+| 全部回归门禁绿 | 见上文门禁记录（每次提交前均全绿） |
+| 双客户端场景验收 | 自动化等价物：run-client-regression 的 clientChecks 以真实 Qt 界面 + 真实隔离 FastAPI 服务器覆盖 A 推 B 拉/undo/删除/peer 409/坏图原子性/多输出重建/断线重连（状态机+重连策略单测）。**人工 GUI 双客户端走查仍建议在合并后按 HYBRID_COLLABORATION 清单补做**（无人值守环境无法开两个可见客户端） |
+| ARCHITECTURE.md 与实现一致，README 同步 | 本节与 ARCHITECTURE.md §4/§6、README 均已更新 |
