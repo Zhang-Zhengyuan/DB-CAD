@@ -99,6 +99,7 @@ private slots:
     void onCollabPullButtonClicked();
     void requestFastAPISyncNow();
     void reconnectFastAPISync();
+    void onCollabTagVersionClicked();
 
 private:
     void createActions();

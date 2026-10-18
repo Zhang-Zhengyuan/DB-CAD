@@ -190,6 +190,7 @@ public:
         std::map<int, QJsonObject> versionGraphs; // version → delta 响应体
     };
     std::map<QString, Project> projects;
+    std::map<QString, std::map<QString, int>> tags; // project → name → version
     int nextId = 0;
 
     void send(const HttpRequest& request, std::function<void(const HttpResponse&)> callback) override {
@@ -219,6 +220,31 @@ public:
             projects[id] = Project{id, name, 0, {}};
             response.statusCode = 201;
             response.body = projectJson(projects[id]);
+            { callback(response); return; }
+        }
+        if (request.method == "POST" && path.endsWith("/json-delta/tags")) {
+            const QString id = path.section('/', 2, 2);
+            auto it = projects.find(id);
+            if (it == projects.end()) {
+                response.statusCode = 404;
+                response.body = errorBody("project not found");
+                { callback(response); return; }
+            }
+            const QJsonObject payload = QJsonDocument::fromJson(request.payload).object();
+            const int version = payload.value("version").toInt();
+            if (payload.value("name").toString().trimmed().isEmpty() || version < 1) {
+                response.statusCode = 400;
+                response.body = errorBody("bad tag");
+                { callback(response); return; }
+            }
+            if (version > it->second.version) {
+                response.statusCode = 404;
+                response.body = errorBody("Version not found");
+                { callback(response); return; }
+            }
+            tags[id][payload.value("name").toString()] = version;
+            response.statusCode = 201;
+            response.body = QJsonDocument(QJsonObject{{"version", version}}).toJson(QJsonDocument::Compact);
             { callback(response); return; }
         }
         if (request.method == "POST" && path.endsWith("/json-delta")) {
@@ -717,6 +743,20 @@ static void testAutoPullAndEditIntent() {
     expect(autoPulled && autoOutcome.ok && autoOutcome.version == 2, "WS notify triggers auto pull");
     expect(controller.modelVersion() == 2 && findByUuid(session, QStringLiteral("peer-body")) != nullptr,
            "auto pull applied remote delta");
+
+    // M4.3 定版：命名标签指向当前版本。
+    bool tagged = false;
+    QString tagError;
+    backend.tagVersion("p-x", "release-1", controller.modelVersion(),
+                       [&](bool ok, const QString& error) { tagged = ok; tagError = error; });
+    expect(tagged, "tagVersion names the current version");
+    backend.tagVersion("p-x", "  ", 1, [&](bool ok, const QString& error) {
+        tagged = ok;
+        tagError = error;
+    });
+    expect(!tagged && tagError.contains(QString::fromUtf8("标签名")), "empty tag name rejected locally");
+    backend.tagVersion("p-x", "ghost", 99, [&](bool ok, const QString&) { tagged = ok; });
+    expect(!tagged, "tagging unknown version rejected by server");
 
     // 冲突路径：本地未提交修改与远端重叠 → 自动拉取诚实拒绝 → 人工通道提示。
     CollabBackend::PushResult peerPush2;

@@ -230,3 +230,37 @@ def test_unknown_label_falls_back_explicitly():
     finally:
         _cleanup(store, project_id)
         store.close()
+
+
+def test_version_tags():
+    """M4.3 定版：命名标签创建/列举/移动（微版本链即自动同步）。"""
+    store = _store_or_skip()
+    project_id = str(uuid.uuid4())
+    try:
+        _ensure_project(store, project_id)
+        v1 = _push(store, project_id, solid_graph(SURFACE_CASES["plane"]), None)
+        with store._driver.session(database=settings.neo4j_database) as session:
+            session.run(
+                "CREATE CONSTRAINT json_graph_tag_unique IF NOT EXISTS "
+                "FOR (t:JsonGraphTag) REQUIRE (t.project_id, t.name) IS UNIQUE"
+            ).consume()
+        store.tag_version(project_id, "release-1", v1)
+        tags = store.list_tags(project_id)
+        assert tags == [{"name": "release-1", "version": v1, "created_at": tags[0]["created_at"]}]
+        # 同名重打 = 移动标签指向（新版本）。
+        v2 = _push(store, project_id, solid_graph(SURFACE_CASES["sphere"]), v1)
+        store.tag_version(project_id, "release-1", v2)
+        tags = store.list_tags(project_id)
+        assert len(tags) == 1 and tags[0]["version"] == v2
+        # 不存在的版本 → 404。
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException):
+            store.tag_version(project_id, "ghost", 999)
+    finally:
+        with store._driver.session(database=settings.neo4j_database) as session:
+            session.run(
+                "MATCH (t:JsonGraphTag {project_id: $pid}) DETACH DELETE t", pid=project_id
+            ).consume()
+        _cleanup(store, project_id)
+        store.close()

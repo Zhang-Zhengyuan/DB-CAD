@@ -235,3 +235,27 @@ def get_json_delta(
         "schema": latest.content.get("schema", "dbcad.entity_graph.v1"),
         "graph_hash": latest.content.get("graph_hash"),
     }
+
+
+@router.post("/projects/{project_id}/json-delta/tags", status_code=201)
+def tag_json_version(
+    project_id: str,
+    payload: schemas.JsonTagRequest,
+    _: None = Depends(verify_api_password),
+) -> dict[str, Any]:
+    """M4.3 定版：给版本打命名标签（微版本=自动同步的版本链，标签=显式定版）。"""
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Tag name must not be empty")
+    store = get_json_graph_store()
+    store.tag_version(project_id, name, payload.version)
+    return {"project_id": project_id, "name": name, "version": payload.version}
+
+
+@router.get("/projects/{project_id}/json-delta/tags")
+def list_json_tags(
+    project_id: str,
+    _: None = Depends(verify_api_password),
+) -> dict[str, Any]:
+    store = get_json_graph_store()
+    return {"project_id": project_id, "tags": store.list_tags(project_id)}

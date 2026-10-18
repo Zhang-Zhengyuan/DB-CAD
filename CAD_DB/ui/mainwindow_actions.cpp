@@ -200,6 +200,8 @@ void MainWindow::createActions() {
     collabSyncNowAct->setStatusTip(tr("主动请求服务器返回最新版本（仅刷新版本号，不修改画布）。"));
     QAction *collabReconnectAct = collabMenu->addAction(tr("重连协作通道"), this, &MainWindow::reconnectFastAPISync);
     collabReconnectAct->setStatusTip(tr("重建WebSocket协作连接。"));
+    QAction *collabTagAct = collabMenu->addAction(tr("定版(Tag)…"), this, &MainWindow::onCollabTagVersionClicked);
+    collabTagAct->setStatusTip(tr("给当前版本打命名标签（微版本=自动同步，标签=显式定版）。"));
 
     collabDock = new QDockWidget(tr("多人协作控制台"), this);
     collabDock->setObjectName("CollabDock");

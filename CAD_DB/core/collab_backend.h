@@ -100,6 +100,10 @@ public:
     void fetchJsonVersion(const QString& projectId, int version,
                           std::function<void(const FetchResult&)> callback);
 
+    // M4.3 定版：给版本打命名标签（服务端 /json-delta/tags）。
+    void tagVersion(const QString& projectId, const QString& name, int version,
+                    std::function<void(bool ok, const QString& error)> callback);
+
     // "测试连接"：收到任何 HTTP 应答即成功（404 也算连通）。
     void testConnection(std::function<void(bool ok, const QString& error)> callback);
 

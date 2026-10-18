@@ -574,6 +574,51 @@ class JsonGraphStore:
                 )
             return result
 
+    # ---------- M4.3 定版：命名标签（微版本 = 自动同步的版本链，本就存在） ----------
+
+    def tag_version(self, project_id: str, name: str, version: int) -> dict[str, Any]:
+        """把项目版本打上命名标签；(project_id, name) 唯一，重打=移动标签指向。"""
+        now = self._now()
+        with self._driver.session(database=self._database) as session:
+            existing_version = session.run(
+                "MATCH (p {id: $project_id})-[:HAS_JSON_GRAPH_VERSION]->"
+                "(v:JsonGraphVersion {version: $version}) RETURN v.version AS version",
+                project_id=project_id,
+                version=version,
+            ).single()
+            if existing_version is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Version not found"
+                )
+            session.run(
+                "MERGE (t:JsonGraphTag {project_id: $project_id, name: $name}) "
+                "ON CREATE SET t.created_at = $created_at "
+                "WITH t OPTIONAL MATCH (t)-[old:TAGS]->() DELETE old "
+                "WITH t MATCH (v:JsonGraphVersion {project_id: $project_id, version: $version}) "
+                "CREATE (t)-[:TAGS]->(v)",
+                project_id=project_id,
+                name=name,
+                version=version,
+                created_at=now.isoformat(),
+            ).consume()
+
+    def list_tags(self, project_id: str) -> list[dict[str, Any]]:
+        with self._driver.session(database=self._database) as session:
+            rows = session.run(
+                "MATCH (t:JsonGraphTag {project_id: $project_id})-[:TAGS]->(v:JsonGraphVersion) "
+                "RETURN t.name AS name, v.version AS version, t.created_at AS created_at "
+                "ORDER BY v.version",
+                project_id=project_id,
+            )
+            return [
+                {
+                    "name": str(row["name"]),
+                    "version": int(row["version"]),
+                    "created_at": str(row["created_at"]),
+                }
+                for row in rows
+            ]
+
 
 _store: JsonGraphStore | None = None
 

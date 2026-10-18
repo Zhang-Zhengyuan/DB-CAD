@@ -403,6 +403,30 @@ void CollabBackend::fetchJsonVersion(const QString& projectId, int version,
                     });
 }
 
+void CollabBackend::tagVersion(const QString& projectId, const QString& name, int version,
+                              std::function<void(bool, const QString&)> callback) {
+    if (name.trimmed().isEmpty()) {
+        callback(false, QString::fromUtf8("标签名不能为空"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert("name", name.trimmed());
+    payload.insert("version", version);
+    sendJsonRequest(
+        QStringLiteral("POST"), QString::fromUtf8("/projects/%1/json-delta/tags").arg(projectId),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact),
+        [callback](const HttpCall& response) {
+            if (response.networkFailed()) {
+                return callback(false, response.networkError);
+            }
+            if (response.statusCode != 201) {
+                return callback(
+                    false, formatHttpErrorMessage(QString::fromUtf8("定版失败"), response.statusCode, response.body));
+            }
+            callback(true, QString());
+        });
+}
+
 void CollabBackend::testConnection(std::function<void(bool, const QString&)> callback) {
     findProject(QStringLiteral("__dbcad_connection_test__"),
                 [callback](const ProjectLookup& lookup) { callback(!lookup.failed, lookup.error); });

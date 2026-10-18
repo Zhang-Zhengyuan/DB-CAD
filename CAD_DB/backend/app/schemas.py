@@ -17,6 +17,13 @@ class ProjectRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class JsonTagRequest(BaseModel):
+    """M4.3 显式定版：命名标签指向某一版本。"""
+
+    name: str = Field(min_length=1, max_length=120)
+    version: int = Field(ge=1)
+
+
 class JsonDeltaRequest(BaseModel):
     """Client serialized graph delta for the bridge-free Mode1 path."""
 

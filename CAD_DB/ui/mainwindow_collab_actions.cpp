@@ -62,6 +62,28 @@ void MainWindow::reconnectFastAPISync() {
     collabController_->connectProject();
 }
 
+// M4.3 定版：命名标签指向当前版本（对话框输入名称；结果经状态栏反馈）。
+void MainWindow::onCollabTagVersionClicked() {
+    if (!usingCollabStorage() || collabController_->projectId().isEmpty()) {
+        showMessage(tr("协作通道未连接"), 4000);
+        return;
+    }
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, tr("定版(Tag)"),
+                                               tr("标签名（将指向当前版本 v%1）：").arg(collabController().modelVersion()),
+                                               QLineEdit::Normal, QString(), &ok);
+    if (!ok || name.trimmed().isEmpty())
+        return;
+    const QString projectId = collabController_->projectId();
+    const int version = collabController_->modelVersion();
+    collabBackend_->tagVersion(projectId, name.trimmed(), version, [this, name, version](bool ok, const QString& error) {
+        if (ok)
+            showMessage(tr("已定版：%1 → v%2").arg(name).arg(version), 4000);
+        else
+            showErrorDialog(error);
+    });
+}
+
 // ---------- 异步完成处理 ----------
 
 void MainWindow::handlePushFinished(const dbcad::CollabController::Outcome& outcome) {
