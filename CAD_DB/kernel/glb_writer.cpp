@@ -126,17 +126,19 @@ std::vector<unsigned char> GlbWriter::write(const MeshData& mesh, std::string* e
         for (std::uint32_t index : edgeIndices) appendU32(bin, index);
     }
 
-    // ---- JSON：bufferView/accessor 按段顺序编号 -------------------------
+    // ---- JSON：bufferView 与 accessor 是两个独立数组，编号各自从 0 起 ----
+    // （曾共用车一个全局计数器：primitive 引用越界 accessor → GLTFLoader
+    // "reading 'bufferView'"，mesh_tests 已加交叉引用校验钉死。）
     std::string json;
     json += "{\"asset\":{\"version\":\"2.0\",\"generator\":\"DB-CAD v3 MeshExtractor\"},";
     json += "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0,\"name\":\"component\"}],";
 
-    int nextId = 0;
     int viewPosition = -1, viewNormal = -1, viewIndex = -1, viewEdgePosition = -1, viewEdgeIndex = -1;
     int accPosition = -1, accNormal = -1, accIndex = -1, accEdgePosition = -1, accEdgeIndex = -1;
     std::string viewsJson;
+    int nextView = 0;
     auto addView = [&](Section section) {
-        int id = nextId++;
+        int id = nextView++;
         if (!viewsJson.empty()) viewsJson += ",";
         viewsJson += "{\"buffer\":0,\"byteOffset\":" + num(section.offset) +
                      ",\"byteLength\":" + num(section.bytes) + "}";
@@ -154,9 +156,10 @@ std::vector<unsigned char> GlbWriter::write(const MeshData& mesh, std::string* e
     json += "\"bufferViews\":[" + viewsJson + "],";
 
     std::string accessorsJson;
+    int nextAccessor = 0;
     auto addAccessor = [&](int viewIdx, const char* type, int componentType, std::uint32_t count,
                            const char* extra) {
-        int id = nextId++;
+        int id = nextAccessor++;
         if (!accessorsJson.empty()) accessorsJson += ",";
         accessorsJson += "{\"bufferView\":" + num(viewIdx) + ",\"componentType\":" + num(componentType) +
                          ",\"count\":" + num(count) + ",\"type\":\"" + type + "\"" + extra + "}";

@@ -93,3 +93,37 @@ body {
 .properties dt { color: var(--text-dim); }
 .properties dd { margin: 0; font-variant-numeric: tabular-nums; word-break: break-all; }
 .hash { font-size: 10px; font-family: Consolas, monospace; }
+
+/* P4：建模与协同 */
+.toolbar { flex-wrap: wrap; row-gap: 4px; }
+.toolbar button:disabled { opacity: 0.45; cursor: default; }
+.toolbar button.primary, .insert-form button.primary {
+  background: #2b4a75; border-color: #3d5a80; color: #cfe1ff;
+}
+.insert-form { display: flex; flex-direction: column; gap: 8px; }
+.insert-form select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 6px;
+}
+.param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.param-grid label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--text-dim); }
+.param-grid input {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 3px; padding: 3px 6px; width: 100%;
+}
+.insert-form button.primary { border-radius: 4px; border: 1px solid #3d5a80; padding: 5px; cursor: pointer; }
+.presence { margin-left: auto; display: flex; gap: 4px; }
+.user-chip {
+  background: #3a3325; color: #ffd98a; border-radius: 10px; padding: 1px 8px; font-size: 11px;
+}
+.user-chip.self { background: #25313a; color: #9ecbff; }
+.intent-badge {
+  background: #4a3d1a; color: #ffd98a; border-radius: 3px; padding: 0 4px;
+  font-size: 10px; margin-left: 4px;
+}
+.conflict-banner {
+  background: #5b4a23; color: #ffe9b0; padding: 6px 14px; font-size: 12px;
+}
+
+.crash { padding: 24px; color: #ffb0b0; }
+.crash pre { white-space: pre-wrap; font-size: 11px; color: #ffd9d9; }

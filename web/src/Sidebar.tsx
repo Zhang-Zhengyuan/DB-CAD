@@ -1,5 +1,7 @@
-// 左侧栏：项目列表 / 版本时间线（微版本+定版标签）/ 组件树。
-import { useEffect } from "react";
+// 左侧栏：项目列表 / 版本时间线（微版本+定版标签）/ 组件树 / 参数化插入。
+// 插入表单由 /api/v1/schema/commands 驱动生成（契约即表单）。
+import { useEffect, useState } from "react";
+import { api, type CommandSchemas } from "./api";
 import { useViewer } from "./store";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -11,6 +13,93 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function InsertForm() {
+  const active = useViewer((s) => s.activeProject);
+  const runCommand = useViewer((s) => s.runCommand);
+  const [schemas, setSchemas] = useState<CommandSchemas | null>(null);
+  const [kind, setKind] = useState("cube");
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [position, setPosition] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    api
+      .schemas()
+      .then((data) => setSchemas(data))
+      .catch(() => setSchemas(null));
+  }, []);
+
+  if (!active) return null;
+  const create = schemas?.commands["component.create"];
+  const params = create?.params ?? {};
+  const numericFields = Object.entries(params).filter(
+    ([name, spec]) =>
+      name !== "kind" && name !== "position" && spec.type.startsWith("number"),
+  );
+
+  const submit = async () => {
+    const numeric: Record<string, number | number[]> = {};
+    for (const [name] of numericFields) {
+      const raw = values[name];
+      if (raw !== undefined && raw !== "") numeric[name] = Number(raw);
+    }
+    const pos = ["x", "y", "z"].map((axis) => Number(position[axis] || 0));
+    if (pos.some((v) => Number.isFinite(v) && v !== 0)) {
+      numeric.position = pos;
+    }
+    const ok = await runCommand({
+      action: "component.create",
+      params: { kind, ...numeric },
+    });
+    if (ok) {
+      setValues({});
+      setPosition({});
+    }
+  };
+
+  return (
+    <Section title="插入图元">
+      <div className="insert-form">
+        <select value={kind} onChange={(e) => setKind(e.target.value)}>
+          {(params.kind?.enum ?? ["cube"]).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <div className="param-grid">
+          {numericFields.map(([name, spec]) => (
+            <label key={name}>
+              <span title={spec.type}>{name}</span>
+              <input
+                type="number"
+                step="any"
+                placeholder="默认"
+                value={values[name] ?? ""}
+                onChange={(e) => setValues((prev) => ({ ...prev, [name]: e.target.value }))}
+              />
+            </label>
+          ))}
+          {(["x", "y", "z"] as const).map((axis) => (
+            <label key={axis}>
+              <span>{axis}</span>
+              <input
+                type="number"
+                step="any"
+                placeholder="0"
+                value={position[axis] ?? ""}
+                onChange={(e) => setPosition((prev) => ({ ...prev, [axis]: e.target.value }))}
+              />
+            </label>
+          ))}
+        </div>
+        <button className="primary" onClick={() => void submit()}>
+          插入
+        </button>
+      </div>
+    </Section>
+  );
+}
+
 export function Sidebar() {
   const projects = useViewer((s) => s.projects);
   const activeProject = useViewer((s) => s.activeProject);
@@ -18,10 +107,12 @@ export function Sidebar() {
   const tags = useViewer((s) => s.tags);
   const scene = useViewer((s) => s.scene);
   const selected = useViewer((s) => s.selected);
+  const intents = useViewer((s) => s.intents);
   const loadProjects = useViewer((s) => s.loadProjects);
   const openProject = useViewer((s) => s.openProject);
   const showVersion = useViewer((s) => s.showVersion);
   const select = useViewer((s) => s.select);
+  const toggleSelect = useViewer((s) => s.toggleSelect);
 
   useEffect(() => {
     void loadProjects();
@@ -75,23 +166,42 @@ export function Sidebar() {
       )}
 
       {scene && (
-        <Section title={`组件 · v${scene.version}`}>
+        <Section title={`组件 · v${scene.version}（Ctrl+点多选）`}>
           <ul className="component-list">
-            {scene.components.map((component) => (
-              <li
-                key={component.component_id}
-                className={selected === component.component_id ? "active" : ""}
-                onClick={() => select(selected === component.component_id ? null : component.component_id)}
-              >
-                <span className="swatch" style={{ background: rgbCss(component.color) }} />
-                <span className="name">{component.name}</span>
-                <span className="meta">{component.triangles} △</span>
-              </li>
-            ))}
+            {scene.components.map((component) => {
+              const editor = Object.entries(intents).find(
+                ([, id]) => id === component.component_id,
+              )?.[0];
+              return (
+                <li
+                  key={component.component_id}
+                  className={selected.includes(component.component_id) ? "active" : ""}
+                  onClick={(event) => {
+                    if (event.ctrlKey || event.metaKey)
+                      toggleSelect(component.component_id);
+                    else
+                      select(
+                        selected[0] === component.component_id
+                          ? null
+                          : component.component_id,
+                      );
+                  }}
+                >
+                  <span className="swatch" style={{ background: rgbCss(component.color) }} />
+                  <span className="name">
+                    {component.name}
+                    {editor && <span className="intent-badge">✏ {editor}</span>}
+                  </span>
+                  <span className="meta">{component.triangles} △</span>
+                </li>
+              );
+            })}
             {scene.components.length === 0 && <li className="empty">空场景</li>}
           </ul>
         </Section>
       )}
+
+      <InsertForm />
     </aside>
   );
 }

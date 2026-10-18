@@ -15,6 +15,8 @@
 #include "kernel/mesh_extractor.h"
 #include "kernel/glb_writer.h"
 
+#include "vendor/nlohmann/json.hpp"
+
 #include "acis.hxx"
 
 #include "acis/include/acistype.hxx"
@@ -210,6 +212,34 @@ void testGlbStructure(BODY& body) {
     expect(json.find("\"faceRanges\":[") != std::string::npos &&
                json.find("\"edgeRuns\":[") != std::string::npos,
            "glb: extras carry faceRanges/edgeRuns");
+
+    // JSON 交叉引用校验（nlohmann）：primitive→accessor→bufferView 全部在界。
+    // 曾因 view/accessor 共用计数器导致 primitive 引用越界 accessor，浏览器
+    // GLTFLoader 才炸——此断言钉死该类缺陷。
+    {
+        const nlohmann::json doc = nlohmann::json::parse(json, nullptr, false);
+        expect(!doc.is_discarded(), "glb: JSON chunk parses");
+        if (!doc.is_discarded()) {
+            const auto& accessors = doc.at("accessors");
+            const auto& views = doc.at("bufferViews");
+            bool refsOk = true;
+            for (const auto& primitive : doc.at("meshes").at(0).at("primitives")) {
+                for (const auto& [key, value] : primitive.at("attributes").items())
+                    if (!value.is_number_integer() || value.get<int>() >= (int)accessors.size())
+                        refsOk = false;
+                const auto& indices = primitive.at("indices");
+                if (!indices.is_number_integer() || indices.get<int>() >= (int)accessors.size())
+                    refsOk = false;
+            }
+            expect(refsOk, "glb: primitive accessor references in range");
+            bool viewsOk = true;
+            for (const auto& accessor : accessors) {
+                const auto& view = accessor.at("bufferView");
+                if (!view.is_number_integer() || view.get<int>() >= (int)views.size()) viewsOk = false;
+            }
+            expect(viewsOk, "glb: accessor bufferView references in range");
+        }
+    }
 
     // 固定 BIN 布局逐字节校验（布局是 GlbWriter 的公开契约，见 glb_writer.h）。
     const size_t positionBytes = mesh.positions.size() * 4;

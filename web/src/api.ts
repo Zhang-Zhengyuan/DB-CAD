@@ -14,7 +14,12 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { ...init?.headers, ...(init?.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}) },
+    headers: {
+      ...init?.headers,
+      ...(init?.body && !(init.body instanceof FormData)
+        ? { "Content-Type": "application/json" }
+        : {}),
+    },
   });
   if (!response.ok) {
     let detail: unknown = response.statusText;
@@ -67,6 +72,21 @@ export interface VersionList {
   tags: { name: string; version: number }[];
 }
 
+export interface CommandSchemas {
+  schema: string;
+  commands: Record<string, { description: string; params: Record<string, { type: string; required?: boolean; enum?: string[] }> }>;
+}
+
+// 本地身份：sessionStorage 按标签页隔离——同浏览器多开两个标签即是两个
+// 协作者（双端回归场景的最小演示形态）。
+export const userName =
+  sessionStorage.getItem("dbcad.user") ??
+  (() => {
+    const name = `user-${Math.random().toString(36).slice(2, 6)}`;
+    sessionStorage.setItem("dbcad.user", name);
+    return name;
+  })();
+
 export const api = {
   projects: () => request<ProjectInfo[]>("/api/v1/projects"),
   openProject: (id: string) => request<ProjectInfo>(`/api/v1/projects/${id}`),
@@ -74,11 +94,14 @@ export const api = {
   scene: (id: string, version?: number) =>
     request<Scene>(`/api/v1/projects/${id}/scene${version ? `?v=${version}` : ""}`),
   assetUrl: (hash: string, kind: "sat" | "glb") => `${BASE}/api/v1/assets/${hash}.${kind}`,
+  schemas: () => request<CommandSchemas>("/api/v1/schema/commands"),
   command: (id: string, payload: Record<string, unknown>) =>
-    request<Record<string, unknown>>(`/api/v1/projects/${id}/commands`, {
+    request<{ version: number; components: SceneComponent[] }>(`/api/v1/projects/${id}/commands`, {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ author: userName, ...payload }),
     }),
   undo: (id: string) => request<Record<string, unknown>>(`/api/v1/projects/${id}/undo`, { method: "POST" }),
   redo: (id: string) => request<Record<string, unknown>>(`/api/v1/projects/${id}/redo`, { method: "POST" }),
+  eventsUrl: (projectIds: string[]) =>
+    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${BASE}/api/v1/events?projects=${projectIds.join(",")}&user=${encodeURIComponent(userName)}`,
 };

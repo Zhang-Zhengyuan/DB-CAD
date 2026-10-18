@@ -23,6 +23,16 @@ from pathlib import Path as _Path  # noqa: E402
 _WEB_DIST = _Path(__file__).resolve().parents[3] / "web" / "dist"
 if _WEB_DIST.exists():
     app.mount("/web", StaticFiles(directory=str(_WEB_DIST), html=True), name="web")
+
+
+@app.middleware("http")
+async def web_entry_no_cache(request: Request, call_next):
+    # 入口 HTML 禁缓存：构建产物是内容哈希命名（可长缓存），但 index.html
+    # 换构建后旧引用的哈希资源已被清空——缓存的旧 index 会白屏。
+    response = await call_next(request)
+    if request.url.path in ("/web", "/web/") or request.url.path.endswith("/index.html"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 app.include_router(neo4j_webui.router)
 app.add_route("/webui", neo4j_webui.serve_webui, ["GET"])
 app.add_route("/", neo4j_webui.serve_webui, ["GET"])

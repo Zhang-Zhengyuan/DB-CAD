@@ -222,25 +222,54 @@ def test_command_schema_endpoint_contract(client):
     assert "boolean.unite" in schema["commands"]
 
 
+def _receive_until(ws, event_type: str, limit: int = 10) -> dict:
+    """跳过 presence 等伴随事件，等到目标类型。"""
+    for _ in range(limit):
+        event = ws.receive_json()
+        if event["type"] == event_type:
+            return event
+    raise AssertionError(f"event {event_type} not received")
+
+
 def test_websocket_receives_commit_events(client):
     client, _fake = client
-    with client.websocket_connect("/api/v1/events?projects=p1") as ws:
+    with client.websocket_connect("/api/v1/events?projects=p1&user=alice") as ws:
         assert ws.receive_json()["type"] == "subscribed"
+        join = _receive_until(ws, "presence")
+        assert join["action"] == "join" and join["user"] == "alice"
+        assert join["users"] == ["alice"]
         _import_project(client, "ws-project")
-        # p1 未订阅本项目：只应收到订阅回执后无事件（超时由测试框架抛）。
+        # p1 未订阅本项目：该项目不会收到 version 事件（超时由测试框架抛）。
     created = client.get("/api/v1/projects").json()
     target = next(p for p in created if p["name"] == "ws-project")
-    with client.websocket_connect(f"/api/v1/events?projects={target['id']}") as ws:
-        ws.receive_json()
+    with client.websocket_connect(f"/api/v1/events?projects={target['id']}&user=bob") as ws:
+        assert ws.receive_json()["type"] == "subscribed"
         second = client.post(
             "/api/v1/files/import",
             files={"file": ("m.sat", SAT_BYTES, "application/octet-stream")},
             data={"project_id": target["id"]},
         )
         assert second.status_code == 201
-        event = ws.receive_json()
-        assert event["type"] == "version.committed"
+        event = _receive_until(ws, "version.committed")
         assert event["version"] == 2
+
+
+def test_websocket_edit_intent_broadcast(client):
+    client, _fake = client
+    project_id = _import_project(client, "intent")["project_id"]
+    with client.websocket_connect(f"/api/v1/events?projects={project_id}&user=alice") as ws:
+        ws.receive_json()
+        _receive_until(ws, "presence")
+        with client.websocket_connect(
+            f"/api/v1/events?projects={project_id}&user=bob"
+        ) as bob_ws:
+            bob_ws.receive_json()
+            seen = _receive_until(ws, "presence")
+            assert set(seen["users"]) == {"alice", "bob"}
+            bob_ws.send_json({"type": "edit_intent", "component": "comp-x"})
+            intent = _receive_until(ws, "edit_intent")
+            assert intent["user"] == "bob"
+            assert intent["intents"] == {"bob": "comp-x"}
 
 
 def test_component_store_content_addressing(tmp_path: Path):
