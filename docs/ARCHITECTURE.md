@@ -94,6 +94,6 @@ flowchart LR
 3. **协同工作流（M4.1–4.3 已完成）**：自动拉取、在场感知（edit_intent 软锁提示）、定版标签；分支 DAG（M4.4）与语义 diff（M4.5）为后续路线图。
 4. **AI native（M6 第一步已具备）**：CommandBus 提供名→schema→执行器的程序化命令入口（AI 与 UI 平级调用同一注册表）；审批流为后续工作。
 5. **实体级增量（M5/Phase D）**：已提级进 v3——P6 全量投影 + P8 实体级增量（见下条第 6 点与 V3_PLAN.md），设计参照 STORAGE_CONSOLIDATION_PLAN。
-6. **v3（P0–P5 已完成，剩余 P6–P8）**：新 API v1 + 服务端权威命令执行 + 工业级 Web 客户端；剩余 **P6 实体级图投影（ADR-3）→ P7 拆除 Qt 与旧协议（原 P6，范围收缩：序列化器先搬家进 worker）→ P8 实体级增量（Phase D，接管 M5）**。本条接管上文 M4.4/M4.5/M5/M6 的排序——M4.4 分支并入 v3 P2（协议预留）/P5（合并 UI），M5 提级为 P6/P8，M6 AI 入口随服务端 CommandBus 自然落地。见 [V3_PLAN.md](V3_PLAN.md)。
+6. **v3（P0–P7 已完成，tag `v3`；剩余 P8）**：新 API v1 + 服务端权威命令执行 + 工业级 Web 客户端 + **P6 实体级图投影（ADR-3）+ P7 旧物拆除（json-delta 族/旧 WS/旧 WebUI 端点与 Qt 客户端物理删除，构建无 Qt，浏览器为唯一客户端，`neo4j_webui` 改造为 V1 模型+投影浏览）**；剩余 **P8 实体级增量（Phase D，接管 M5）**。M4.4 分支并入 v3 P2（协议预留）/P5（合并 UI），M6 AI 入口随服务端 CommandBus 自然落地。见 [V3_PLAN.md](V3_PLAN.md)。
 
 执行细节（命令记账、撤销栈、防回环、断线重连等）都属于上层内部实现，设计层面不在此展开。

@@ -1,6 +1,10 @@
-# DBCAD 一键部署和启动
+# DBCAD 一键部署和启动（v3）
 
-协作统一采用 Mode1 JSON + SAT 组件备份：启动 Neo4j 与 FastAPI。Mode0 / C++ Bridge 及其启动参数已移除。首次环境准备见 [新成员指南](../docs/GETTING_STARTED.md)。
+v3 架构（V3_PLAN P7 起）：**浏览器是唯一客户端**。启动 Neo4j 与 FastAPI
+（`/api/v1` + `/web` 静态托管 Web 客户端 + `/webui` Neo4j 管理台），几何
+计算在服务端 C++ worker（`x64/<Configuration>/dbcad_worker.exe`，启动器
+按配置自动定位）。Qt 客户端与 C++ Bridge 已移除。首次环境准备见
+[新成员指南](../docs/GETTING_STARTED.md)。
 
 统一部署入口：
 
@@ -8,26 +12,13 @@
 .\CAD_DB\deploy\start_dbcad_fullstack.cmd
 ```
 
-双客户端入口：
+启动链路：Neo4j 容器 → FastAPI → 打开浏览器 `http://127.0.0.1:8000/web/`。
+worker 由 FastAPI 按需拉起（GeometryPool 每项目一进程），无需手工启动；
+构建入口 `scripts/build.ps1`（解决方案默认目标即 `dbcad_worker.exe`）。
 
-```powershell
-.\CAD_DB\deploy\start_dbcad_two_clients.cmd
-```
-
-构建和启动统一使用仓库根目录的 `x64/Debug/CAD_DB.exe` 或 `x64/Release/CAD_DB.exe`。Visual Studio 解决方案构建、直接 vcxproj 构建和 `scripts/build.ps1` 的输出目录一致，不再需要复制到 `CAD_DB/x64/`。启动器默认在这两个目录中选择最新构建；不使用旧目录或旧 dist 包作为源码构建的兜底。
-
-Qt 打包工具优先从所选构建的 `x64/obj/CAD_DB/<Configuration>/qt/qtvars.xml` 自动读取，使用与 exe 相同的 kit；也可显式传 `-WinDeployQtPath`。Debug/Release 根据 exe 的 PE 导入判断，不根据旁边残留的 DLL 猜测。找不到打包工具即停止，不能带着缺失 DLL 的包继续启动。每次源码打包清理包内旧二进制和 Qt 插件，按当前构建生成；保留模型、日志和数据库。启动前检查 x64 DLL 的传递依赖和 Qt 平台插件，不依赖维护者机器的 PATH。
-
-`neo4j-apoc` 是 `dbcad.local.env` 中的默认容器名称，`neo4j` 是数据库名称，镜像版本为配置中的 `neo4j:5.15`。它们与客户端代码是否重构无关。保持容器名是为了复用原数据库；更名不会升级代码，切勿为了更名重置数据。
-
-日常双客户端测试可以明确使用 Debug：
-
-```powershell
-.\scripts\build.ps1 -Configuration Debug
-.\CAD_DB\deploy\start_dbcad_two_clients.cmd -Configuration Debug
-```
-
-双击 cmd 时保持默认 `Auto`；指定 Release 使用 `-Configuration Release`。启动时自动把选中的 exe、运行时、最新后端模块、静态资源和部署辅助脚本同步到部署包，然后从包中启动两份客户端。日志的 `Source executable` 显示源构建，`Client executable` 显示自动复制后的部署文件。
+`neo4j-apoc` 是 `dbcad.local.env` 中的默认容器名称，`neo4j` 是数据库名称，
+镜像版本为配置中的 `neo4j:5.15`。保持容器名是为了复用原数据库；更名不会
+升级代码，切勿为了更名重置数据。
 
 停止入口：
 
@@ -39,12 +30,6 @@ Qt 打包工具优先从所选构建的 `x64/obj/CAD_DB/<Configuration>/qt/qtvar
 
 ```powershell
 .\CAD_DB\deploy\reset_dbcad_deployment.cmd
-```
-
-重新生成 `dist` 并启动最新构建（保留数据库）：
-
-```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd
 ```
 
 ## 统一密码管理
@@ -67,22 +52,18 @@ DBCAD_NEO4J_HTTP_PORT=7474
 DBCAD_NEO4J_USER=neo4j
 DBCAD_FASTAPI_HOST=0.0.0.0
 DBCAD_FASTAPI_PORT=8000
-DBCAD_BRIDGE_HOST=127.0.0.1
-DBCAD_BRIDGE_PORT=8100
-DBCAD_AUTHOR=dbcad-exe
+DBCAD_AUTHOR=dbcad-web
 ```
 
 规则：
 
 1. Neo4j Docker 的 `NEO4J_AUTH` 使用 `DBCAD_NEO4J_USER/DBCAD_PASSWORD`。
-2. FastAPI 直接连接 Neo4j；服务器不需要 ACIS。
-3. FastAPI 的访问密码也使用 `DBCAD_PASSWORD`。
-4. 客户端 `fastapi_connect_info.conf` 由启动器生成，第三行写入同一个密码。
-5. 旧的 `DBCAD_NEO4J_PASSWORD`、`DBCAD_API_PASSWORD`、`neo4j_connect_info.conf`、`neo4j_connect_info.config` 不再作为密码来源。
+2. FastAPI 直接连接 Neo4j；FastAPI 进程本身不加载 ACIS，几何命令经
+   worker 进程执行（ADR-1/ADR-2）。
+3. FastAPI 的访问密码使用 `DBCAD_PASSWORD`（空密码 = 关闭鉴权，仅限本地测试）。
 
-FastAPI 密码为空时，后端会关闭鉴权，所以空密码和任意密码都会测试通过。当前启动器默认不再生成空密码，也会把旧的弱密码配置迁移成强 `DBCAD_PASSWORD`。
-
-修改密码后，需要重建本地 Neo4j 数据，因为 Neo4j 只会在首次初始化数据库时应用 `NEO4J_AUTH`：
+修改密码后，需要重建本地 Neo4j 数据，因为 Neo4j 只会在首次初始化数据库时
+应用 `NEO4J_AUTH`：
 
 ```powershell
 .\CAD_DB\deploy\start_dbcad_fullstack.cmd -ResetNeo4jDockerData
@@ -90,86 +71,16 @@ FastAPI 密码为空时，后端会关闭鉴权，所以空密码和任意密码
 
 ## Docker Neo4j 和 APOC
 
-启动器会自动创建或启动 `neo4j-apoc` 容器，并使用 `neo4j-runtime` 保存本地数据：
-
-```text
-neo4j-runtime\
-```
-
-在 Windows PowerShell 下不要直接手写 `-e NEO4J_PLUGINS='["apoc"]'`，Docker 可能收到错误的 `[apoc]`，导致日志出现：
-
-```text
-parse error: Invalid numeric literal
-```
-
-启动器现在使用环境变量名称传递，确保 Docker 收到完整 JSON：
-
-```powershell
-$env:NEO4J_AUTH = "neo4j/<DBCAD_PASSWORD>"
-$env:NEO4J_PLUGINS = '["apoc"]'
-docker run -d --name neo4j-apoc `
-  -p 7474:7474 `
-  -p 7687:7687 `
-  -v <repo>\neo4j-runtime\conf:/conf `
-  -v <repo>\neo4j-runtime\data:/data `
-  -v <repo>\neo4j-runtime\plugins:/plugins `
-  -e NEO4J_AUTH `
-  -e NEO4J_PLUGINS `
-  -e NEO4J_apoc_export_file_enabled=true `
-  -e NEO4J_apoc_import_file_enabled=true `
-  -e NEO4J_apoc_import_file_use__neo4j__config=true `
-  neo4j:5.15
-```
-
-启动器会在 Bolt 端口可用后执行 `RETURN apoc.version() AS apoc;`。如果 APOC 没有正确加载，启动会直接失败，而不是等到保存数据时报错。
-
-## 生成目录
-
-统一部署包目录：
-
-```text
-dist\DBCAD-fullstack-package
-```
-
-启动器会把 `CAD_DB\deploy\dbcad.local.env` 同步到部署包根目录，确保直接运行 `dist\DBCAD-fullstack-package\start_dbcad_fullstack.cmd` 时仍使用同一套密码。
-
-不要手工维护 `dist\client`、`dist\client-Release`、`dist\backend-package` 这类旧目录。需要重建时运行：
-
-```powershell
-.\CAD_DB\deploy\reset_dbcad_deployment.cmd
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -ResetNeo4jDockerData
-```
+启动器会自动创建或启动 `neo4j-apoc` 容器，并使用 `neo4j-runtime` 保存本地
+数据。启动器使用环境变量名称传递插件配置，避免 PowerShell 引号折叠问题；
+Bolt 端口可用后执行 `RETURN apoc.version()` 验证 APOC 加载，失败即停止。
 
 ## 常用命令
 
-只生成部署包，不启动服务：
+不自动打开浏览器：
 
 ```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -PrepareOnly
-```
-
-只启动 Docker 和 FastAPI，不打开桌面客户端：
-
-```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -SkipClient
-```
-
-同时启动两个客户端：
-
-```powershell
-.\CAD_DB\deploy\start_dbcad_two_clients.cmd
-```
-
-强制使用某个 exe：
-
-```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -Configuration Release
-```
-
-指定 `windeployqt`：
-
-```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -WinDeployQtPath D:\Qt\6.9.0\msvc2022_64\bin\windeployqt.exe
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd -SkipBrowser
 ```
 
 使用外部 Neo4j，不让脚本管理 Docker：
@@ -182,52 +93,41 @@ dist\DBCAD-fullstack-package
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:7474
-Invoke-RestMethod http://127.0.0.1:8100/health
-Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8000/health   # collaboration_mode: v3_server_authoritative
 ```
 
-FastAPI 文档：
+FastAPI 文档与入口：
 
 ```text
-http://127.0.0.1:8000/docs
+http://127.0.0.1:8000/docs    OpenAPI（/api/v1 契约）
+http://127.0.0.1:8000/web/    Web 客户端
+http://127.0.0.1:8000/webui   Neo4j 管理台（V1 模型 + 实体投影浏览）
 ```
 
 ---
 
 ## 启动器参数参考
 
-唯一入口是 `deploy/start_dbcad_fullstack.cmd`（推荐用 .cmd 版），其他 .ps1 都是它的封装。
-
-### 核心参数
+唯一入口是 `deploy/start_dbcad_fullstack.cmd`（推荐用 .cmd 版），其他
+.ps1 都是它的封装。
 
 | 参数 | 用途 |
 |---|---|
 | `-ConfigPath` | 指定统一配置文件，默认 `CAD_DB\deploy\dbcad.local.env` |
-| `-ResetNeo4jDockerData` | 删除并重建本地 Neo4j Docker 容器和 `neo4j-runtime` 数据。修改 `DBCAD_PASSWORD` 后需要使用 |
+| `-ResetNeo4jDockerData` | 删除并重建本地 Neo4j 容器与 `neo4j-runtime` 数据。修改 `DBCAD_PASSWORD` 后需要使用 |
 | `-SkipNeo4jDocker` | 不创建、不启动 Docker 容器。适合使用外部 Neo4j |
 | `-FastApiHost` / `-FastApiPort` | FastAPI 监听地址和端口，默认来自 `dbcad.local.env` |
 | `-Neo4jHost` / `-Neo4jPort` | Neo4j Bolt 地址，默认来自 `dbcad.local.env` |
-| `-Neo4jUser` / `-Neo4jPassword` | Neo4j 认证信息。默认使用 `DBCAD_NEO4J_USER` 和统一的 `DBCAD_PASSWORD`。命令行参数优先级高于配置文件 |
-| `-ApiPassword` | FastAPI 访问密码。默认使用统一的 `DBCAD_PASSWORD`。不建议传空值；空 FastAPI 密码会关闭鉴权 |
-| `-Configuration` | Auto（默认）选择仓库根 x64 下最新构建；Debug/Release 只使用指定配置 |
-| `-ClientExePath` | 显式指定自定义构建路径，优先于 Configuration；相对路径以当前工作目录解析 |
-| `-WinDeployQtPath` | 指定 `windeployqt.exe`。不传时自动查找 `D:\Qt`、`C:\Qt`、PATH 和 qmake 所在目录 |
-| `-PackageRoot` | 指定部署包输出目录，默认 `dist\DBCAD-fullstack-package` |
-| `-PrepareOnly` | 只同步部署包和写配置，不启动 Docker、FastAPI 或客户端 |
-| `-SkipClient` | 启动服务，不打开客户端 |
-| `-ClientCount` | 启动客户端实例数量，默认 `1`。传 `-ClientCount 2` 等价于使用 `start_dbcad_two_clients.cmd` |
-| `-SkipDependencySync` | 跳过 `uv sync`，适合依赖已经安装好的快速重启 |
-| `-KeepExistingServices` | 如果 8000/8100 已有健康服务，复用现有服务。默认要求先停止旧服务，避免误用旧版本 |
+| `-Neo4jUser` / `-Neo4jPassword` | Neo4j 认证信息，默认 `DBCAD_NEO4J_USER` 与统一 `DBCAD_PASSWORD` |
+| `-ApiPassword` | FastAPI 访问密码，默认统一 `DBCAD_PASSWORD`；空值会关闭鉴权 |
+| `-SkipBrowser` | 启动服务但不自动打开浏览器 |
+| `-KeepExistingServices` | 如果 8000 已有健康服务，复用现有服务 |
 
 ### 推荐流程
 
-1. 按依赖文档准备 SDK，运行 `scripts/build.ps1 -Configuration Release` 构建并暂存运行时。
+1. 按依赖文档准备 ACIS SDK，运行 `scripts/build.ps1 -Configuration Release`
+   构建 worker 并暂存运行时。
 2. 执行一次启动器，让它创建或迁移 `CAD_DB\deploy\dbcad.local.env`。
-3. 确认配置里只有一个 `DBCAD_PASSWORD`，不要再维护 `DBCAD_NEO4J_PASSWORD` 或 `DBCAD_API_PASSWORD`。
-4. 正常启动（无需重置）：
-
-```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd
-```
-
-5. 两台客户端打开同一个 FastAPI 项目，验证实时协作。
+3. 正常启动（无需重置）：`.\CAD_DB\deploy\start_dbcad_fullstack.cmd`
+4. 浏览器打开 `http://127.0.0.1:8000/web/`，两个标签页（不同 author）即可
+   验证实时协作。

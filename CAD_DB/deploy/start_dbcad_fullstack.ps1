@@ -7,67 +7,39 @@ param(
     [string]$Neo4jUser = "",
     [string]$Neo4jPassword = "",
     [string]$ApiPassword = "",
-    [string]$Author = "dbcad-exe",
-    [string]$ClientExePath = "",
-    [ValidateSet("Auto", "Debug", "Release")][string]$Configuration = "Auto",
-    [string]$PackageRoot = "",
+    [string]$Author = "dbcad-web",
     [string]$ConfigPath = "",
-    [string]$WinDeployQtPath = "",
     [int]$Neo4jHttpPort = 7474,
     [string]$Neo4jDockerName = "",
     [string]$Neo4jDockerImage = "",
     [string]$Neo4jDockerDataRoot = "",
-    [ValidateRange(0, 16)]
-    [int]$ClientCount = 1,
-    [switch]$SkipClient = $false,
-    [switch]$SkipPackageSync = $false,
-    [switch]$PrepareOnly = $false,
-    [switch]$SkipDependencySync = $false,
+    [switch]$SkipBrowser = $false,
+    [switch]$KeepExistingServices = $false,
     [switch]$SkipNeo4jPortCheck = $false,
     [switch]$SkipNeo4jDocker = $false,
     [switch]$ResetNeo4jDockerData = $false,
-    [switch]$SkipWinDeployQt = $false,
-    [switch]$KeepExistingServices = $false,
     [int]$RetryCount = 30,
     [int]$RetryDelaySeconds = 1
 )
 
+# v3 全栈启动（V3_PLAN P7：Qt 客户端退役，浏览器是唯一客户端）：
+# Neo4j（docker）+ FastAPI（/api/v1 + /web 静态托管）+ 打开浏览器。
 $ErrorActionPreference = "Stop"
 
-# Keep parameters and startup order stable; helpers have explicit owners.
 foreach ($helperName in @("filesystem", "config", "pe", "runtime", "docker", "processes", "package")) {
     . (Join-Path $PSScriptRoot "lib\$helperName.ps1")
 }
 
-$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$scriptRoot = Resolve-FullPath $scriptRoot
-$sourceProjectRoot = Resolve-FullPath (Join-Path $scriptRoot "..")
-$sourceBackendRoot = Join-Path $sourceProjectRoot "backend"
-$packageServerRoot = Join-Path $scriptRoot "server"
-
-if (Test-Path -LiteralPath (Join-Path $sourceBackendRoot "app\main.py")) {
-    $isSourceCheckout = $true
-    $deployRoot = $scriptRoot
-    $projectRoot = $sourceProjectRoot
-    $repoRoot = Resolve-FullPath (Join-Path $projectRoot "..")
-    $backendRoot = $sourceBackendRoot
-    if ([string]::IsNullOrWhiteSpace($PackageRoot)) {
-        $PackageRoot = Join-Path $repoRoot "dist\DBCAD-fullstack-package"
-    }
-} elseif (Test-Path -LiteralPath (Join-Path $packageServerRoot "app\main.py")) {
-    $isSourceCheckout = $false
-    $deployRoot = $scriptRoot
-    $PackageRoot = if ([string]::IsNullOrWhiteSpace($PackageRoot)) { $scriptRoot } else { $PackageRoot }
-    $repoRoot = Resolve-FullPath (Join-Path $scriptRoot "..\..")
-    $candidateProjectRoot = Join-Path $repoRoot "CAD_DB"
-    $projectRoot = if (Test-Path -LiteralPath $candidateProjectRoot) { Resolve-FullPath $candidateProjectRoot } else { $scriptRoot }
-    $backendRoot = $packageServerRoot
-} else {
-    throw "Cannot locate backend. Run this script from CAD_DB\deploy or DBCAD-fullstack-package."
+$scriptRoot = Resolve-FullPath (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$projectRoot = Resolve-FullPath (Join-Path $scriptRoot "..")
+$repoRoot = Resolve-FullPath (Join-Path $projectRoot "..")
+$backendRoot = Join-Path $projectRoot "backend"
+if (-not (Test-Path -LiteralPath (Join-Path $backendRoot "app\main.py"))) {
+    throw "Cannot locate backend at $backendRoot. Run this script from CAD_DB\deploy."
 }
 
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $ConfigPath = Join-Path $deployRoot "dbcad.local.env"
+    $ConfigPath = Join-Path $scriptRoot "dbcad.local.env"
 }
 $ConfigPath = Resolve-FullPath $ConfigPath
 $localConfig = Ensure-LocalConfig -ConfigFilePath $ConfigPath
@@ -98,33 +70,11 @@ if (-not $PSBoundParameters.ContainsKey("Neo4jPassword")) {
 if (-not $PSBoundParameters.ContainsKey("ApiPassword")) {
     $ApiPassword = $UnifiedPassword
 }
-if (-not $PSBoundParameters.ContainsKey("Author")) {
-    $Author = Get-ConfigValue -Config $localConfig -Name "DBCAD_AUTHOR" -DefaultValue $Author
-}
 if (-not $PSBoundParameters.ContainsKey("Neo4jDockerName")) {
     $Neo4jDockerName = Get-ConfigValue -Config $localConfig -Name "DBCAD_NEO4J_DOCKER_NAME" -DefaultValue "neo4j-apoc"
 }
 if (-not $PSBoundParameters.ContainsKey("Neo4jDockerImage")) {
     $Neo4jDockerImage = Get-ConfigValue -Config $localConfig -Name "DBCAD_NEO4J_DOCKER_IMAGE" -DefaultValue "neo4j:5.15"
-}
-
-$PackageRoot = Ensure-Directory $PackageRoot
-$pidFileBeforeSync = Join-Path $PackageRoot "run\pids.json"
-$stopScriptBeforeSync = Join-Path $deployRoot "stop_dbcad_fullstack.ps1"
-if ((-not $KeepExistingServices) -and (Test-Path -LiteralPath $stopScriptBeforeSync) -and (Test-Path -LiteralPath $pidFileBeforeSync)) {
-    Write-Host "[INFO] Stopping services from previous launcher run..."
-    & $stopScriptBeforeSync -PackageRoot $PackageRoot -Quiet
-}
-
-$latestExe = Resolve-LatestCadDbExe -ProjectRoot $projectRoot -RepoRoot $repoRoot -PackageRoot $PackageRoot -ExplicitPath $ClientExePath -Configuration $Configuration -SourceCheckout:$isSourceCheckout
-if ([string]::IsNullOrWhiteSpace($WinDeployQtPath)) {
-    $WinDeployQtPath = Get-BuildWinDeployQtPath -Exe $latestExe -RepoRoot $repoRoot
-}
-$newestSource = if ($isSourceCheckout) { Get-ChildItem -LiteralPath $projectRoot -Recurse -File |
-    Where-Object { $_.Extension -in @('.cpp', '.h', '.hxx', '.vcxproj') -and $_.FullName -notmatch '\\.venv\\|\\x64\\|\\_deps\\' } |
-    Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
-if ($newestSource -and $latestExe.LastWriteTime -lt $newestSource.LastWriteTime) {
-    throw "Selected executable $($latestExe.FullName) is older than $($newestSource.Name). Rebuild this configuration with scripts/build.ps1 before launching."
 }
 if ([string]::IsNullOrWhiteSpace($Neo4jUri)) {
     $Neo4jUri = "bolt://$Neo4jHost`:$Neo4jPort"
@@ -141,62 +91,18 @@ if ([string]::IsNullOrWhiteSpace($Neo4jDockerName)) { $Neo4jDockerName = "neo4j-
 if ([string]::IsNullOrWhiteSpace($Neo4jDockerImage)) { $Neo4jDockerImage = "neo4j:5.15" }
 if ([string]::IsNullOrWhiteSpace($Neo4jDockerDataRoot)) { $Neo4jDockerDataRoot = Join-Path $repoRoot "neo4j-runtime" }
 
+$runDir = Ensure-Directory (Join-Path $projectRoot "deploy\run")
+$logDir = Ensure-Directory (Join-Path $runDir "logs")
+$pidFile = Join-Path $runDir "pids.json"
+$stopScript = Join-Path $scriptRoot "stop_dbcad_fullstack.ps1"
+if ((-not $KeepExistingServices) -and (Test-Path -LiteralPath $stopScript) -and (Test-Path -LiteralPath $pidFile)) {
+    Write-Host "[INFO] Stopping services from previous launcher run..."
+    & $stopScript -Quiet -ErrorAction SilentlyContinue
+}
+
 $fastApiProbeHost = ConvertTo-LocalHealthHost $FastApiHost
 $fastApiUrl = "http://$fastApiProbeHost`:$FastApiPort"
 $fastApiListenUrl = "http://$FastApiHost`:$FastApiPort"
-
-# Stop any running CAD_DB.exe in the package directories before syncing
-if (-not $SkipPackageSync) {
-    Stop-PackageProcesses -PackageRoot $PackageRoot
-}
-
-if (-not $SkipPackageSync) {
-    Write-Host "[INFO] Syncing fullstack package: $PackageRoot"
-Write-Host "[INFO] Latest CAD_DB.exe: $($latestExe.FullName) ($($latestExe.LastWriteTime))"
-if ($newestSource) { Write-Host "[INFO] Latest source: $($newestSource.FullName) ($($newestSource.LastWriteTime))" }
-    $paths = Sync-FullstackPackage `
-        -ProjectRoot $projectRoot `
-        -RepoRoot $repoRoot `
-        -DeployRoot $deployRoot `
-        -ConfigPath $ConfigPath `
-        -BackendRoot $backendRoot `
-        -PackageRoot $PackageRoot `
-        -LatestExe $latestExe `
-        -FastApiUrl $fastApiUrl `
-        -Author $Author `
-        -ApiPassword $ApiPassword `
-        -Neo4jHost $Neo4jHost `
-        -Neo4jPort $Neo4jPort `
-        -Neo4jUser $Neo4jUser `
-        -Neo4jPassword $Neo4jPassword `
-        -Neo4jUri $Neo4jUri
-} else {
-    $paths = @{
-        ClientDir = Ensure-Directory (Join-Path $PackageRoot "client")
-        ServerDir = Ensure-Directory (Join-Path $PackageRoot "server")
-    }
-}
-
-$runDir = Ensure-Directory (Join-Path $PackageRoot "run")
-$logDir = Ensure-Directory (Join-Path $runDir "logs")
-$pidFile = Join-Path $runDir "pids.json"
-$clientExe = Join-Path $paths.ClientDir "CAD_DB.exe"
-if (!(Test-Path -LiteralPath $clientExe)) {
-    throw "Client executable not found in package: $clientExe"
-}
-
-Assert-ClientRuntime -ExePath $clientExe
-
-if ($PrepareOnly) {
-    Write-Host "[OK] DBCAD fullstack package is prepared."
-    Write-Host "[INFO] Package: $PackageRoot"
-    Write-Host "[INFO] Source executable: $($latestExe.FullName)"
-    Write-Host "[INFO] Client executable: $clientExe"
-    return
-}
-
-$backendProcess = $null
-$clientProcesses = @()
 
 if (-not $SkipNeo4jDocker) {
     Ensure-Neo4jDocker `
@@ -211,47 +117,35 @@ if (-not $SkipNeo4jDocker) {
         -DataRoot $Neo4jDockerDataRoot `
         -ResetData ([bool]$ResetNeo4jDockerData)
 }
-
 if (-not $SkipNeo4jPortCheck) {
     Write-Host "[INFO] Checking Neo4j bolt port: $Neo4jHost`:$Neo4jPort"
     if (-not (Wait-TcpPort -HostName $Neo4jHost -Port $Neo4jPort -Attempts $RetryCount -DelaySeconds $RetryDelaySeconds)) {
-        throw "Neo4j is not reachable at $Neo4jHost`:$Neo4jPort. Start Neo4j first, pass the correct -Neo4jHost/-Neo4jPort, or use -SkipNeo4jPortCheck for remote/proxied deployments."
+        throw "Neo4j is not reachable at $Neo4jHost`:$Neo4jPort. Start Neo4j first, pass the correct -Neo4jHost/-Neo4jPort, or use -SkipNeo4jPortCheck."
     }
 }
-
 if (-not $SkipNeo4jDocker) {
     Write-Host "[INFO] Checking Neo4j APOC plugin..."
-    Wait-Neo4jApoc `
-        -ContainerName $Neo4jDockerName `
-        -User $Neo4jUser `
-        -Password $Neo4jPassword `
-        -Attempts $RetryCount `
-        -DelaySeconds $RetryDelaySeconds
+    Wait-Neo4jApoc -ContainerName $Neo4jDockerName -User $Neo4jUser -Password $Neo4jPassword -Attempts $RetryCount -DelaySeconds $RetryDelaySeconds
 }
 
+$backendProcess = $null
 if (Test-ServiceHealth "$fastApiUrl/health") {
     if ($KeepExistingServices) {
-        $existingHealth = Invoke-RestMethod -Uri "$fastApiUrl/health" -TimeoutSec 5
-        if ($existingHealth.collaboration_mode -ne "hybrid_json") {
-            throw "Existing FastAPI uses an obsolete collaboration protocol. Restart it without -KeepExistingServices."
-        }
         Write-Warning "FastAPI is already healthy at $fastApiUrl/health. Reusing it because -KeepExistingServices was set."
     } else {
         Write-Host "[INFO] FastAPI is already running at $fastApiUrl/health. Stopping old process to restart..."
         Stop-ProcessByPort -Port $FastApiPort
     }
 }
-
 if (-not (Test-ServiceHealth "$fastApiUrl/health")) {
     Write-Host "[INFO] Starting FastAPI: $fastApiListenUrl"
     $backendProcess = Start-FastApi `
-        -ServerDir $paths.ServerDir `
+        -ServerDir $backendRoot `
         -HostAddress $FastApiHost `
         -Port $FastApiPort `
         -ApiPassword $ApiPassword `
-        -SkipDependencySync ([bool]$SkipDependencySync) `
+        -SkipDependencySync $false `
         -LogDir $logDir
-
     if (-not (Wait-ServiceHealth -Url "$fastApiUrl/health" -Process $backendProcess -ServiceName "FastAPI" -Attempts $RetryCount -DelaySeconds $RetryDelaySeconds)) {
         $exitInfo = if ($backendProcess.HasExited) { " ExitCode=$($backendProcess.ExitCode)." } else { "" }
         Stop-StartedProcess -Process $backendProcess -Name "FastAPI"
@@ -259,51 +153,21 @@ if (-not (Test-ServiceHealth "$fastApiUrl/health")) {
     }
 }
 
-if ((-not $SkipClient) -and $ClientCount -gt 0) {
-    Write-Host "[INFO] Starting $ClientCount client instance(s): $clientExe"
-    # 调试期：让每个客户端按 PID 把 stdout/stderr 重定向到独立文件，
-    # 避免两个 CAD_DB.exe 互相覆盖同一个 log/log_*.txt。
-    # 关闭方法：把 $env:DBCAD_REDIRECT_LOG 设为 "0" 再启动，或把这段包到 if ($false) 里。
-    $env:DBCAD_REDIRECT_LOG = "1"
-    Ensure-Directory (Join-Path $paths.ClientDir 'log') | Out-Null
-    for ($i = 1; $i -le $ClientCount; $i++) {
-        # CAD_DB is an interactive desktop app; its windows must be visible.
-        $clientProcesses += Start-Process -FilePath $clientExe -WorkingDirectory $paths.ClientDir -WindowStyle Normal -PassThru
-    }
-    Start-Sleep -Seconds 2
-    foreach ($process in $clientProcesses) {
-        $process.Refresh()
-        if ($process.HasExited) {
-            foreach ($startedClient in $clientProcesses) { Stop-StartedProcess -Process $startedClient -Name 'client' }
-            Stop-StartedProcess -Process $backendProcess -Name 'FastAPI'
-            throw "Client PID $($process.Id) exited during startup (exit $($process.ExitCode)). See client/log and verify runtime dependencies."
-        }
-    }
-    Write-Host "[INFO] Per-PID client logs: <client-dir>\log\CAD_DB_<pid>.log"
+$webUrl = "$fastApiUrl/web/"
+if (-not $SkipBrowser) {
+    Write-Host "[INFO] Opening browser: $webUrl"
+    Start-Process $webUrl
 }
 
-$pidData = [ordered]@{
-    package_root = $PackageRoot
-    generated_exe = $latestExe.FullName
-    client_exe = $clientExe
+Write-PidFile -Path $pidFile -Data ([ordered]@{
     backend_pid = if ($null -ne $backendProcess) { $backendProcess.Id } else { $null }
-    client_pid = if ($clientProcesses.Count -gt 0) { $clientProcesses[0].Id } else { $null }
-    client_pids = @($clientProcesses | ForEach-Object { $_.Id })
-    client_count = $clientProcesses.Count
-    collaboration_mode = "hybrid_json"
+    collaboration_mode = "v3_server_authoritative"
     fastapi_url = $fastApiUrl
     started_at = (Get-Date).ToString("o")
-}
-Write-PidFile -Path $pidFile -Data $pidData
+})
 
-Write-Host "[OK] DBCAD fullstack is ready."
-Write-Host "[INFO] Package: $PackageRoot"
-Write-Host "[INFO] Source executable: $($latestExe.FullName)"
-Write-Host "[INFO] Collaboration mode: hybrid_json (single version chain)"
+Write-Host "[OK] DBCAD v3 fullstack is ready."
+Write-Host "[INFO] Web client: $webUrl"
 Write-Host "[INFO] FastAPI health: $fastApiUrl/health"
-Write-Host "[INFO] FastAPI docs: $fastApiUrl/docs"
-Write-Host "[INFO] Neo4j history WebUI: $fastApiUrl/webui"
-if (-not $SkipClient) {
-    Write-Host "[INFO] Client instances: $($clientProcesses.Count)"
-}
+Write-Host "[INFO] Neo4j console: $fastApiUrl/webui"
 Write-Host "[INFO] PID file: $pidFile"

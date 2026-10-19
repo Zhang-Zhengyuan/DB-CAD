@@ -38,8 +38,8 @@ _deps/
 
 建议维护者发布一个校验过的内部依赖包，并保留版本、来源、授权范围、平台、哈希与安装步骤。ACIS 版本以 `_deps/acis/include` 内官方 `packageid`（2026.1.0.1，buildID 3343121）与 `SPAAcisDs.dll` 文件版本（6.428.0.26083）为准。接收包后先运行 `scripts/check-environment.ps1`。
 
-Qt 固定以 6.8.3 MSVC2022 x64 验证（本机 6.9.0 亦可构建），C++ 使用 v143 与 C++23。Qt 路径可配置；运行时由对应 kit 的 `windeployqt` 收集。给其他机器分发使用 Release，并安装 Microsoft Visual C++ 2015–2022 x64 Redistributable。
+C++ 使用 v143 与 C++23（v3 起 Qt-free，P7 已移除 Qt 依赖）。给其他机器分发 worker 使用 Release，并安装 Microsoft Visual C++ 2015–2022 x64 Redistributable。
 
 Python 使用 `CAD_DB/backend/pyproject.toml` 与 `uv.lock`。`requirements.txt` 仅保留直接依赖兼容入口，不承诺传递依赖版本一致；可复现环境统一使用 `uv sync --frozen`。
 
-本机迁移配置、启动入口及实际测试限制见 [本机环境说明](LOCAL_SETUP.md)。Debug 与 Release 都使用 /MD Qt 运行时，Debug 仍保留完整符号及禁用优化。
+本机迁移配置、启动入口及实际测试限制见 [本机环境说明](LOCAL_SETUP.md)。Debug 与 Release 都使用 /MD 运行时（ACIS 官方要求），Debug 仍保留完整符号及禁用优化。

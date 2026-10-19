@@ -5,8 +5,6 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CAD_DB", "CAD_DB\CAD_DB.vcxproj", "{5E33354C-9FD6-4B95-B5CF-924478F548C6}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DbcadAcis", "CAD_DB\DbcadAcis.vcxproj", "{EBBE07A9-F1B3-479B-AC5F-9E9A6832CC46}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -17,10 +15,6 @@ Global
 		{5E33354C-9FD6-4B95-B5CF-924478F548C6}.Debug|x64.Build.0 = Debug|x64
 		{5E33354C-9FD6-4B95-B5CF-924478F548C6}.Release|x64.ActiveCfg = Release|x64
 		{5E33354C-9FD6-4B95-B5CF-924478F548C6}.Release|x64.Build.0 = Release|x64
-		{EBBE07A9-F1B3-479B-AC5F-9E9A6832CC46}.Debug|x64.ActiveCfg = Debug|x64
-		{EBBE07A9-F1B3-479B-AC5F-9E9A6832CC46}.Debug|x64.Build.0 = Debug|x64
-		{EBBE07A9-F1B3-479B-AC5F-9E9A6832CC46}.Release|x64.ActiveCfg = Release|x64
-		{EBBE07A9-F1B3-479B-AC5F-9E9A6832CC46}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

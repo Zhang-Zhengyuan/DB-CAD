@@ -11,7 +11,7 @@
 .\scripts\start-test.ps1 -Configuration Debug
 ```
 
-启动器使用本机 `build.local.props` 指定的 Qt kit 打包，复用已运行服务，不清空数据库。Docker Desktop 必须运行。默认协作为 JSON Mode1，客户端需打开项目后测试 Push/Pull。
+（历史记录，v2 时代；P7 起 Qt 客户端退役，浏览器为唯一客户端。）启动器复用已运行服务，不清空数据库。Docker Desktop 必须运行。
 
 服务地址：<http://127.0.0.1:8000/health>、<http://127.0.0.1:8000/docs>、<http://127.0.0.1:8000/webui>。管理密码沿用被忽略的 `CAD_DB/deploy/dbcad.local.env`，不要上传该文件。
 

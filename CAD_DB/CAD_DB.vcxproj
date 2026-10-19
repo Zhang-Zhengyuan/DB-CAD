@@ -1,10 +1,8 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<!--
-***************************************************************************************************
- Copyright (C) 2023 The Qt Company Ltd.
- SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
-***************************************************************************************************
--->
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v3 worker 工程（V3_PLAN P7：Qt 客户端退役后 Qt-free 化）。
+     默认目标 dbcad_worker（几何 worker，服务端权威架构的服务端几何引擎）；
+     条件目标：/p:DBCADMeshTests=true → mesh_tests.exe（面片引擎回归门禁）
+               /p:DBCADMeshBench=true → mesh_bench.exe（离散化基准）。 -->
 <Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -18,10 +16,6 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{5E33354C-9FD6-4B95-B5CF-924478F548C6}</ProjectGuid>
-    <Keyword>QtVS_v304</Keyword>
-    <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">10.0.22621.0</WindowsTargetPlatformVersion>
-    <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">10.0.22621.0</WindowsTargetPlatformVersion>
-    <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -34,220 +28,100 @@
     <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <ImportGroup Condition="Exists('$(QtMsBuild)\qt_defaults.props')">
-    <Import Project="$(QtMsBuild)\qt_defaults.props" />
-  </ImportGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
-    <QtInstall>6.8.3_msvc2022_64</QtInstall>
-    <QtModules>core;gui;widgets;opengl;openglwidgets;network;websockets</QtModules>
-    <!-- ACIS requires /MD in both configurations. Use Qt's /MD release
-         binaries too; Qt debug DLLs use /MDd and corrupt cross-CRT allocations.
-         Client code retains /Od and full debug symbols below. -->
-    <QtBuildConfig>release</QtBuildConfig>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
-    <QtInstall>6.8.3_msvc2022_64</QtInstall>
-    <QtModules>core;gui;widgets;opengl;openglwidgets;network;websockets</QtModules>
-    <QtBuildConfig>release</QtBuildConfig>
-  </PropertyGroup>
   <Import Project="$(MSBuildProjectDirectory)\..\build.local.props" Condition="Exists('$(MSBuildProjectDirectory)\..\build.local.props')" />
   <PropertyGroup>
     <DBCADDepsRoot Condition="'$(DBCADDepsRoot)' == ''">$(MSBuildProjectDirectory)\..\_deps</DBCADDepsRoot>
+    <!-- 默认目标 = worker；测试目标显式传入时切换源文件集。 -->
+    <DBCADWorker Condition="'$(DBCADMeshTests)' != 'true' And '$(DBCADMeshBench)' != 'true'">true</DBCADWorker>
   </PropertyGroup>
-  <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
-    <Error Text="Qt VS Tools not found. Install the extension or pass /p:QtMsBuild=the-directory-containing-qt.targets." />
-  </Target>
   <ImportGroup Label="ExtensionSettings" />
   <ImportGroup Label="Shared" />
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(QtMsBuild)\Qt.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(QtMsBuild)\Qt.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
-  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(DBCADDepsRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(DBCADDepsRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <!-- ACIS 官方要求：调用方必须用 /MD（即使 Debug 构建）。SPAAcisDsd.dll 自身链接
-           Release 动态 CRT，若调用方使用 /MDd，跨边界传递 FILE*/内存会在运行时崩溃
-           （已实证：ftelli64 触发 0xC0000409）。见 docs/ACIS_2026_MIGRATION.md。 -->
+      <!-- ACIS 官方要求：调用方必须用 /MD（即使 Debug 构建）；SPAAcisDsd.dll 自身
+           链接 Release 动态 CRT，/MDd 跨边界传递 FILE*/内存会运行时崩溃。
+           见 docs/ACIS_2026_MIGRATION.md。 -->
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <!-- ACIS 官方要求：链接 ACIS 的代码必须用 /EHa（异步异常），官方 scm/sample 工程均为 Async。 -->
+      <!-- ACIS 官方要求：链接 ACIS 的代码必须用 /EHa（异步异常）。 -->
       <ExceptionHandling>Async</ExceptionHandling>
+      <TreatWChar_tAsBuiltInType>true</TreatWChar_tAsBuiltInType>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <Optimization>Disabled</Optimization>
+      <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <!-- ACIS 官方要求：栈保留 4MB（深度递归的几何算法），对应链接器 /STACK:4194304。 -->
+      <AdditionalDependencies>legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- ACIS 官方要求：栈保留 4MB（深度递归的几何算法）。 -->
       <StackReserveSize>4194304</StackReserveSize>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\ui;$(DBCADDepsRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(DBCADDepsRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <SDLCheck>false</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ExceptionHandling>Async</ExceptionHandling>
-      <AdditionalOptions>/utf-8</AdditionalOptions>
-    </ClCompile>
-    <Link>
-      <AdditionalDependencies>opengl32.lib;glfw\lib\glfw3_64.lib;legacy_stdio_definitions.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
-      <StackReserveSize>4194304</StackReserveSize>
-    </Link>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
-    <ClCompile>
-      <TreatWChar_tAsBuiltInType>true</TreatWChar_tAsBuiltInType>
-      <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <Optimization>Disabled</Optimization>
-    </ClCompile>
-    <Link>
-      <SubSystem>Console</SubSystem>
-      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
-    </Link>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="Configuration">
-    <ClCompile>
       <TreatWChar_tAsBuiltInType>true</TreatWChar_tAsBuiltInType>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <DebugInformationFormat>None</DebugInformationFormat>
       <Optimization>MaxSpeed</Optimization>
+      <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
+      <AdditionalDependencies>legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
+      <StackReserveSize>4194304</StackReserveSize>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>false</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="kernel\acis_link.props" />
   <ItemGroup>
-    <ClCompile Include="core\collab_backend.cpp" />
-    <ClCompile Include="core\collab_controller.cpp" />
-    <ClCompile Include="core\collab_state.cpp" />
-    <ClCompile Include="core\command_bus.cpp" />
-    <ClCompile Include="core\document_session.cpp" />
-    <ClCompile Include="core\http_transport.cpp" />
-    <ClCompile Include="core\sat_file_backend.cpp" />
-    <ClCompile Include="glwidget.cpp" />
-    <ClCompile Include="window.cpp" />
-    <QtRcc Include="mainwindow.qrc" />
-    <QtMoc Include="mainwindow.h" />
-    <ClCompile Include="mainwindow.cpp" />
-    <ClCompile Include="ui\mainwindow_connections.cpp" />
-    <ClCompile Include="ui\mainwindow_collab_actions.cpp" />
-    <ClCompile Include="ui\mainwindow_presence.cpp" />
-
-    <ClCompile Include="ui\mainwindow_documents.cpp" />
-    <ClCompile Include="ui\mainwindow_actions.cpp" />
-    <ClCompile Include="ui\mainwindow_editing.cpp" />
-    <ClCompile Include="ui\mainwindow_load.cpp" />
-    <ClCompile Include="ui\mainwindow_save.cpp" />
-    <ClCompile Include="ui\mainwindow_config.cpp" />
-    <ClCompile Include="ui\mainwindow_menus.cpp" />
-
-    <ClCompile Include="main.cpp" Condition="'$(DBCADRegression)' != 'true' And '$(DBCADCoreTests)' != 'true' And '$(DBCADMeshBench)' != 'true' And '$(DBCADMeshTests)' != 'true' And '$(DBCADWorker)' != 'true'" />
-    <ClCompile Include="..\scripts\tests\client_regression.cpp" Condition="'$(DBCADRegression)' == 'true'" />
-    <ClCompile Include="..\scripts\tests\core_unit_tests.cpp" Condition="'$(DBCADCoreTests)' == 'true'" />
-    <ClCompile Include="..\scripts\tests\mesh_bench.cpp" Condition="'$(DBCADMeshBench)' == 'true'" />
-    <ClCompile Include="..\scripts\tests\mesh_tests.cpp" Condition="'$(DBCADMeshTests)' == 'true'" />
+    <ClCompile Include="acis.cpp" />
+    <ClCompile Include="common.cpp" />
+    <ClCompile Include="kernel\mesh_extractor.cpp" />
+    <ClCompile Include="kernel\glb_writer.cpp" />
     <ClCompile Include="worker\main.cpp" Condition="'$(DBCADWorker)' == 'true'" />
     <ClCompile Include="worker\session.cpp" Condition="'$(DBCADWorker)' == 'true'" />
     <ClCompile Include="worker\entity_graph_codec.cpp" Condition="'$(DBCADWorker)' == 'true'" />
-    <ClCompile Include="kernel\mesh_extractor.cpp" />
-    <ClCompile Include="kernel\glb_writer.cpp" />
+    <ClCompile Include="..\scripts\tests\mesh_tests.cpp" Condition="'$(DBCADMeshTests)' == 'true'" />
+    <ClCompile Include="..\scripts\tests\mesh_bench.cpp" Condition="'$(DBCADMeshBench)' == 'true'" />
   </ItemGroup>
   <ItemGroup>
-    <QtMoc Include="core\collab_backend.h" />
-    <QtMoc Include="core\collab_controller.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <QtMoc Include="window.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <QtMoc Include="glwidget.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="kernel\geometry_kernel.h" />
+    <ClInclude Include="acis.hxx" />
+    <ClInclude Include="common.hxx" />
+    <ClInclude Include="spatial_license.h" />
     <ClInclude Include="kernel\mesh_extractor.h" />
     <ClInclude Include="kernel\glb_writer.h" />
     <ClInclude Include="kernel\model_types.h" />
-    <ClInclude Include="kernel\document_model.h" />
     <ClInclude Include="worker\session.h" />
     <ClInclude Include="worker\entity_graph_codec.h" />
-    <ClInclude Include="acis.hxx" />
-    <ClInclude Include="common.hxx" />
-    <ClInclude Include="access.hxx" />
-    <ClInclude Include="ui\mainwindow_internal.h" />
-
-    <ClInclude Include="gme_dump_object.hxx" />
-    <ClInclude Include="gme_mesh.hxx" />
-    <ClInclude Include="entity_graph_serializer.h" />
-    <ClInclude Include="core\collab_state.h" />
-    <ClInclude Include="core\command_bus.h" />
-    <ClInclude Include="core\document_session.h" />
-    <ClInclude Include="core\entity_change.h" />
-    <ClInclude Include="core\http_transport.h" />
-    <ClInclude Include="core\log.h" />
-    <ClInclude Include="core\sat_file_backend.h" />
-    <ClInclude Include="core\storage_backend.h" />
   </ItemGroup>
-  <ItemGroup>
-    <ResourceCompile Include="images\DBCAD.rc" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="backend\.env.example" />
-    <None Include="backend\app\config.py" />
-    <None Include="backend\app\crud.py" />
-    <None Include="backend\app\main.py" />
-    <None Include="backend\app\neo4j_store.py" />
-    <None Include="backend\app\schemas.py" />
-    <None Include="backend\app\sync.py" />
-    <None Include="backend\app\__init__.py" />
-    <None Include="backend\pyproject.toml" />
-    <None Include="backend\README.md" />
-    <None Include="backend\tests\test_api.py" />
-    <None Include="backend\tests\test_integration_client_perspective_live.py" />
-    <None Include="DEPLOYMENT.md" />
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="backend\requirements.txt" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="DbcadAcis.vcxproj">
-      <Project>{EBBE07A9-F1B3-479B-AC5F-9E9A6832CC46}</Project>
-    </ProjectReference>
-  </ItemGroup>
-  <!-- Use the same output for solution builds and direct project builds. -->
   <PropertyGroup>
     <OutDir>$(MSBuildProjectDirectory)\..\x64\$(Configuration)\</OutDir>
-    <IntDir>$(MSBuildProjectDirectory)\..\x64\obj\CAD_DB\$(Configuration)\</IntDir>
-    <IntDir Condition="'$(DBCADRegression)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\ClientRegression\$(Configuration)\</IntDir>
-    <IntDir Condition="'$(DBCADCoreTests)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\CoreUnitTests\$(Configuration)\</IntDir>
-    <IntDir Condition="'$(DBCADMeshBench)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\MeshBench\$(Configuration)\</IntDir>
     <IntDir Condition="'$(DBCADMeshTests)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\MeshTests\$(Configuration)\</IntDir>
-    <IntDir Condition="'$(DBCADWorker)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\Worker\$(Configuration)\</IntDir>
-    <TargetName Condition="'$(DBCADRegression)' == 'true'">client_regression</TargetName>
-    <TargetName Condition="'$(DBCADCoreTests)' == 'true'">core_unit_tests</TargetName>
-    <TargetName Condition="'$(DBCADMeshBench)' == 'true'">mesh_bench</TargetName>
     <TargetName Condition="'$(DBCADMeshTests)' == 'true'">mesh_tests</TargetName>
-    <TargetName Condition="'$(DBCADWorker)' == 'true'">dbcad_worker</TargetName>
+    <IntDir Condition="'$(DBCADMeshBench)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\MeshBench\$(Configuration)\</IntDir>
+    <TargetName Condition="'$(DBCADMeshBench)' == 'true'">mesh_bench</TargetName>
+    <IntDir Condition="'$(DBCADWorker)' == 'true' And '$(DBCADMeshTests)' != 'true' And '$(DBCADMeshBench)' != 'true'">$(MSBuildProjectDirectory)\..\x64\obj\Worker\$(Configuration)\</IntDir>
+    <TargetName Condition="'$(DBCADWorker)' == 'true' And '$(DBCADMeshTests)' != 'true' And '$(DBCADMeshBench)' != 'true'">dbcad_worker</TargetName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
-    <Import Project="$(QtMsBuild)\qt.targets" />
-  </ImportGroup>
-  <ImportGroup Label="ExtensionTargets">
-  </ImportGroup>
+  <ImportGroup Label="ExtensionTargets" />
 </Project>
