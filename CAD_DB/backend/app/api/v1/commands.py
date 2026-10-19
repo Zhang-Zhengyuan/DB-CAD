@@ -268,15 +268,24 @@ async def execute_command(project_id: str, payload: dict = Body(...)) -> dict:
         components=manifest,
         base_version=head_number,
     )
-    # 实体级投影（P6/ADR-3）：变更组件入库后写 Neo4j/内存投影（幂等，
-    # 未变更组件零写入）；投影失败不阻断版本（派生数据可重建）。
-    projections = write_projections(
-        store,
-        [
-            (entry.get("sat_bytes"), entry.get("graph_json"))
-            for entry in (*result.get("modified", []), *result.get("added", []))
-        ],
-    )
+    # 实体级投影（P6/ADR-3 + P8/Phase D）：变更组件入库后写投影（幂等，
+    # 未变更组件零写入）；modified 组件带命令前哈希作 generation 父
+    # （worker 会话内组件 sid 即其 SAT 哈希），实体内容寻址共享 +
+    # DERIVED_FROM 链；added 组件无父。
+    previous_by_sid = {c.hash_sat: c.hash_sat for c in head_components}
+    projection_pairs = [
+        (
+            entry.get("sat_bytes"),
+            entry.get("graph_json"),
+            previous_by_sid.get(str(entry.get("sid", ""))),
+        )
+        for entry in result.get("modified", [])
+    ]
+    projection_pairs += [
+        (entry.get("sat_bytes"), entry.get("graph_json"), None)
+        for entry in result.get("added", [])
+    ]
+    projections = write_projections(store, projection_pairs)
     hub.publish(
         project_id,
         "version.committed",

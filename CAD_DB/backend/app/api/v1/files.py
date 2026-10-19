@@ -22,11 +22,12 @@ from .versions import _version_or_404
 router = APIRouter(dependencies=[Depends(verify_api_password)])
 
 
-def _store_components(components) -> tuple[list[SceneComponent], list[tuple[str, dict | None]]]:
-    """入库 SAT/GLB/graph 三资产；返回 (场景组件, (hash, graph) 投影对)。"""
+def _store_components(components) -> tuple[list[SceneComponent], list[tuple[str, dict | None, None]]]:
+    """入库 SAT/GLB/graph 三资产；返回 (场景组件, (hash, graph, parent) 投影三元组)。
+    导入组件无 generation 父（parent=None）。"""
     store = get_component_store()
     scene: list[SceneComponent] = []
-    projection_pairs: list[tuple[str, dict | None]] = []
+    projection_pairs: list[tuple[str, dict | None, None]] = []
     for index, part in enumerate(components):
         hash_sat = store.put("sat", part.sat)
         graph_hash = ""
@@ -50,7 +51,7 @@ def _store_components(components) -> tuple[list[SceneComponent], list[tuple[str,
                 graph=graph_hash,
             )
         )
-        projection_pairs.append((hash_sat, part.graph))
+        projection_pairs.append((hash_sat, part.graph, None))
     return scene, projection_pairs
 
 

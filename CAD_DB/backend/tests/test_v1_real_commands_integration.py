@@ -118,6 +118,52 @@ def test_face_and_edge_primitives_are_components(client):
     assert arc_glb.status_code == 200 and arc_glb.content[:4] == b"glTF"
 
 
+def test_entity_incremental_on_real_kernel(client):
+    """P8/Phase D 验收（真 ACIS）：translate bake 一词——实体内容寻址下
+    新增实体节点数 ≈ 内容变化实体数（几何实体：vertex/edge/face 坐标类），
+    拓扑骨架（body/lump/shell/loop/coedge 参数域）跨版本共享；变更实体挂
+    DERIVED_FROM。论文第 5 章验收口径的真栈实证。"""
+    project = client.post("/api/v1/projects", json={"name": "p8-incremental"}).json()
+    project_id = project["id"]
+
+    cube = _command(client, project_id, {
+        "action": "component.create",
+        "params": {"kind": "cube", "width": 10, "height": 10, "depth": 10},
+    })
+    first = cube["entity_projection"]
+    total_nodes = cube["components"][0].get("graph_nodes") or first["entities"]
+    # 首次入库：实体节点按内容去重（等边 cube 的 6 loop/多 coedge 载荷相同
+    # → 共享节点），entity_added = 去重后的内容数 ≤ 实体数——内容寻址的
+    # 存储收益，组件级查询视图仍完整（HAS_ENTITY 边按局部 id 区分）。
+    assert 0 < first["entity_added"] <= first["entities"]
+
+    moved = _command(client, project_id, {
+        "action": "component.translate",
+        "params": {"component": cube["components"][0]["sat"], "offset": [25, 0, 0]},
+    })
+    stats = moved["entity_projection"]
+    # 新增 ≈ 内容变化实体（vertex/edge/face 坐标烘焙变化），拓扑骨架
+    #（loop/shell/coedge 参数域，平移不变）跨版本共享
+    assert stats["entity_added"] > 0, "平移至少改变几何实体"
+    assert stats["entity_added"] < total_nodes * 0.6, (
+        f"新增 {stats['entity_added']} 应远小于组件总实体 {total_nodes}（拓扑骨架应共享）"
+    )
+    assert stats["entity_shared"] > 0
+    # 内容变化的实体挂 generation 链（节点级计数 ≥ 去重 key 级 added）
+    assert stats["derived"] >= stats["entity_added"] > 0
+
+    # 回放等价（L3 口径）：head 版本的实体视图数 == 组件投影实体数之和
+    entities = client.get(f"/api/v1/projects/{project_id}/entities").json()
+    assert entities["count"] == stats["entities"]
+
+    # 另一组件完全不受影响：球体与立方体无内容共享（几何不同）
+    sphere = _command(client, project_id, {
+        "action": "component.create",
+        "params": {"kind": "sphere", "radius": 3, "position": [50, 0, 0]},
+    })
+    assert 0 < sphere["entity_projection"]["entity_added"] <= sphere["entity_projection"]["entities"]
+
+
 def test_entity_projection_on_real_kernel(client):
     """P6/ADR-3 验收：真 ACIS 拓扑入投影、label 原生可查、幂等零写入、
     graph 资产可拉取、root 重编为组件哈希。"""

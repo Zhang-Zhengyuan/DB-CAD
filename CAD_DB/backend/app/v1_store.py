@@ -24,7 +24,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
-from .entity_projection import normalize_entity_projection, projection_stats
+from .entity_projection import entity_key, match_entities, normalize_entity_projection, projection_stats
 from .neo4j_store import ProjectRecord
 
 
@@ -94,16 +94,55 @@ class MemoryV1Store:
         # 实体级投影（P6/ADR-3）：hash_sat → 规范化投影 {nodes, rels,
         # serializer_build}。组件不可变 ⇒ 投影幂等，已存在即零写入。
         self.entity_projections: dict[str, dict[str, Any]] = {}
+        # 实体级增量（P8/Phase D）：内容寻址实体节点池与 generation 链——
+        # 同内容实体跨组件/跨版本共享（D 栈不可变实体语义）。
+        self.entity_nodes: dict[str, dict[str, Any]] = {}  # entity_key → 节点
+        self.derived_from: dict[str, set[str]] = {}  # child_key → {parent_key}
 
-    # ---- 实体级投影（P6/ADR-3）-----------------------------------------
-    def write_entity_projection(self, component_hash: str, graph: dict[str, Any]) -> dict[str, Any]:
-        """写入组件实体投影；已存在则零写入。返回 {written, entities, rels}。"""
+    # ---- 实体级投影（P6/ADR-3 + P8/Phase D）---------------------------
+    def write_entity_projection(
+        self,
+        component_hash: str,
+        graph: dict[str, Any],
+        parent_hash: str | None = None,
+    ) -> dict[str, Any]:
+        """写入组件实体投影（幂等）；parent_hash 用于 generation 匹配。
+
+        返回 {written, entities, rels, entity_added, entity_shared, derived}：
+        entity_added = 内容寻址新增实体节点数（P8 验收口径——改一个 face
+        时 ≈ 内容变化实体数，而非整个组件）。
+        """
         if component_hash in self.entity_projections:
             stats = projection_stats(self.entity_projections[component_hash])
-            return {"written": False, **stats}
+            return {"written": False, **stats, "entity_added": 0, "entity_shared": stats["entities"], "derived": 0}
         projection = normalize_entity_projection(component_hash, graph)
+        parent = self.entity_projections.get(parent_hash) if parent_hash else None
+        ingest = self._ingest_entities(projection, parent)
         self.entity_projections[component_hash] = projection
-        return {"written": True, **projection_stats(projection)}
+        return {"written": True, **projection_stats(projection), **ingest}
+
+    def _ingest_entities(
+        self, projection: dict[str, Any], parent: dict[str, Any] | None
+    ) -> dict[str, int]:
+        matched = match_entities(parent, projection) if parent else {}
+        parent_key_by_id = (
+            {str(n["id"]): entity_key(n) for n in parent["nodes"]} if parent else {}
+        )
+        added = shared = derived = 0
+        for node in projection["nodes"]:
+            key = entity_key(node)
+            node["entity_key"] = key
+            if key in self.entity_nodes:
+                shared += 1
+            else:
+                self.entity_nodes[key] = {"labels": node.get("labels"), "props": node.get("props")}
+                added += 1
+            parent_id = matched.get(str(node["id"]))
+            parent_key = parent_key_by_id.get(parent_id) if parent_id else None
+            if parent_key and parent_key != key:
+                self.derived_from.setdefault(key, set()).add(parent_key)
+                derived += 1
+        return {"entity_added": added, "entity_shared": shared, "derived": derived}
 
     def get_entity_projection(self, component_hash: str) -> dict[str, Any] | None:
         return self.entity_projections.get(component_hash)
@@ -405,7 +444,10 @@ class Neo4jV1Store(MemoryV1Store):
         return version
 
     def write_entity_projection(  # type: ignore[override]
-        self, component_hash: str, graph: dict[str, Any]
+        self,
+        component_hash: str,
+        graph: dict[str, Any],
+        parent_hash: str | None = None,
     ) -> dict[str, Any]:
         from .json_graph_native import entity_write_projection, native_label_set_clauses
 
@@ -420,48 +462,114 @@ class Neo4jV1Store(MemoryV1Store):
                     "RETURN count(e) AS entities",
                     h=component_hash,
                 ).single()["entities"]
-                return {"written": False, "entities": int(count), "rels": -1}
+                return {"written": False, "entities": int(count), "rels": -1,
+                        "entity_added": 0, "entity_shared": int(count), "derived": 0}
             projection = normalize_entity_projection(component_hash, graph)
-            node_rows = [entity_write_projection(n) for n in projection["nodes"]]
-            rel_rows = [
-                {"type": str(r.get("type", "")), "start": str(r.get("start", "")), "end": str(r.get("end", ""))}
-                for r in projection["rels"]
-                if r.get("start") and r.get("end")
-            ]
+            parent = self._read_projection(session, parent_hash) if parent_hash else None
+            matched = match_entities(parent, projection) if parent else {}
+            parent_key_by_id = (
+                {str(n["id"]): entity_key(n) for n in parent["nodes"]} if parent else {}
+            )
+            node_rows = []
+            chains = []
+            for node in projection["nodes"]:
+                key = entity_key(node)
+                node["entity_key"] = key
+                row = entity_write_projection(node)
+                row["entity_key"] = key
+                node_rows.append(row)
+                parent_id = matched.get(str(node["id"]))
+                parent_key = parent_key_by_id.get(parent_id) if parent_id else None
+                if parent_key and parent_key != key:
+                    chains.append({"child": key, "parent": parent_key})
+            keys = [r["entity_key"] for r in node_rows]
+            existing_rows = session.run(
+                "MATCH (e:V1Entity) WHERE e.entity_key IN $keys RETURN e.entity_key AS k",
+                keys=keys,
+            ).data()
+            existing_keys = {r["k"] for r in existing_rows}
+            added = len(set(keys) - existing_keys)
+            shared = len(keys) - added
             session.execute_write(
                 lambda tx: tx.run(
                     """
                     UNWIND $nodes AS item
-                    MERGE (e:V1Entity {component_hash: $hash, entity_id: item.id})
+                    MERGE (e:V1Entity {entity_key: item.entity_key})
                     SET e.labels_json = item.labels_json, e.props_json = item.props_json,
                         e.raw_labels = item.raw_labels, e.native_skipped = item.native_skipped,
+                        e.entity_id = coalesce(e.entity_id, item.id),
                         e += item.native_fields
                     """
                     + native_label_set_clauses("item.native_labels")
                     + """
-                    WITH $hash AS h
-                    MATCH (c:V1Component {hash_sat: h})
-                    MATCH (e:V1Entity {component_hash: h})
-                    MERGE (c)-[:HAS_ENTITY]->(e)
+                    WITH item, e
+                    MATCH (c:V1Component {hash_sat: $hash})
+                    MERGE (c)-[:HAS_ENTITY {entity_id: item.id}]->(e)
                     """,
                     hash=component_hash,
                     nodes=node_rows,
                 ).consume()
             )
+            if chains:
+                session.execute_write(
+                    lambda tx: tx.run(
+                        """
+                        UNWIND $chains AS ch
+                        MATCH (a:V1Entity {entity_key: ch.child})
+                        MATCH (b:V1Entity {entity_key: ch.parent})
+                        MERGE (a)-[:DERIVED_FROM {via_component: $hash}]->(b)
+                        """,
+                        hash=component_hash,
+                        chains=chains,
+                    ).consume()
+                )
+            rel_rows = [
+                {"type": str(r.get("type", "")), "start": str(r.get("start", "")), "end": str(r.get("end", ""))}
+                for r in projection["rels"]
+                if r.get("start") and r.get("end")
+            ]
             if rel_rows:
                 session.execute_write(
                     lambda tx: tx.run(
                         """
                         UNWIND $rels AS rel
-                        MATCH (s:V1Entity {component_hash: $hash, entity_id: rel.start})
-                        MATCH (t:V1Entity {component_hash: $hash, entity_id: rel.end})
-                        MERGE (s)-[:TOPOLOGY {rel_type: rel.type}]->(t)
+                        MATCH (c:V1Component {hash_sat: $hash})
+                        MATCH (c)-[:HAS_ENTITY {entity_id: rel.start}]->(s)
+                        MATCH (c)-[:HAS_ENTITY {entity_id: rel.end}]->(t)
+                        MERGE (s)-[:TOPOLOGY {rel_type: rel.type, component: $hash}]->(t)
                         """,
                         hash=component_hash,
                         rels=rel_rows,
                     ).consume()
                 )
-            return {"written": True, **projection_stats(projection)}
+            return {
+                "written": True,
+                **projection_stats(projection),
+                "entity_added": added,
+                "entity_shared": shared,
+                "derived": len(chains),
+            }
+
+    @staticmethod
+    def _read_projection(session: Any, component_hash: str) -> dict[str, Any] | None:
+        import json as _json
+
+        rows = session.run(
+            "MATCH (:V1Component {hash_sat: $h})-[:HAS_ENTITY]->(e) "
+            "RETURN e.entity_id AS id, e.labels_json AS labels_json, e.props_json AS props_json",
+            h=component_hash,
+        ).data()
+        if not rows:
+            return None
+        nodes = []
+        for row in rows:
+            try:
+                labels = _json.loads(row.get("labels_json") or "[]")
+                props = _json.loads(row.get("props_json") or "{}")
+            except (TypeError, ValueError):
+                labels, props = [], {}
+            nodes.append({"id": row["id"], "labels": labels, "props": props})
+        return {"nodes": nodes, "rels": [], "serializer_build": ""}
 
     def has_entity_projection(  # type: ignore[override]
         self, component_hash: str
