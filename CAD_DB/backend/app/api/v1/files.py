@@ -92,6 +92,7 @@ async def import_sat(
         author=author,
         components=components,
     )
+    store.clear_redo(project_id)
     projections = write_projections(store, projection_pairs)
     hub.publish(
         project_id,
