@@ -108,6 +108,9 @@ class MemoryV1Store:
     def get_entity_projection(self, component_hash: str) -> dict[str, Any] | None:
         return self.entity_projections.get(component_hash)
 
+    def has_entity_projection(self, component_hash: str) -> bool:
+        return component_hash in self.entity_projections
+
     def query_entities(
         self,
         component_hashes: list[str],
@@ -459,6 +462,17 @@ class Neo4jV1Store(MemoryV1Store):
                     ).consume()
                 )
             return {"written": True, **projection_stats(projection)}
+
+    def has_entity_projection(  # type: ignore[override]
+        self, component_hash: str
+    ) -> bool:
+        with self._driver.session(database=self._database) as session:
+            hit = session.run(
+                "MATCH (c:V1Component {hash_sat: $h})-[:HAS_ENTITY]->()"
+                " RETURN 1 AS hit LIMIT 1",
+                h=component_hash,
+            ).single()
+            return hit is not None
 
     def query_entities(  # type: ignore[override]
         self,

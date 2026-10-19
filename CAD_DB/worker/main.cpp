@@ -127,18 +127,19 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
         return fail("SAT restore failed: " + satPath.string());
     if (entities.count() == 0) return fail("SAT contains no entities");
 
-    std::vector<BODY*> bodies;
+    // v3 组件三类：体/面/线同级（P6 重建存量投影依赖面/线组件可导入）。
+    std::vector<ENTITY*> roots;
     for (ENTITY* ent = entities.first(); ent; ent = entities.next())
-        if (is_BODY(ent)) bodies.push_back((BODY*)ent);
-    if (bodies.empty()) return fail("SAT contains no top-level BODY");
+        if (is_BODY(ent) || is_FACE(ent) || is_EDGE(ent)) roots.push_back(ent);
+    if (roots.empty()) return fail("SAT contains no top-level BODY/FACE/EDGE");
 
     ImportStats stats;
     std::string manifest = "{\"schema\":\"dbcad.worker.import/1\",\"components\":[";
-    for (size_t i = 0; i < bodies.size(); ++i) {
-        BODY* body = bodies[i];
+    for (size_t i = 0; i < roots.size(); ++i) {
+        ENTITY* entity = roots[i];
         const std::string stem = "comp-" + std::to_string(i);
 
-        dbcad::MeshResult mesh = dbcad::MeshExtractor::extract(*body, dbcad::MeshQuality::MediumFine);
+        dbcad::MeshResult mesh = dbcad::MeshExtractor::extractEntity(*entity, dbcad::MeshQuality::MediumFine);
         if (!mesh.ok) return fail(stem + ": mesh extraction failed: " + mesh.error);
         std::string glbError;
         const std::vector<unsigned char> glb = dbcad::GlbWriter::write(mesh.mesh, &glbError);
@@ -146,7 +147,7 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
 
         const fs::path satOut = outDir / (stem + ".sat");
         ENTITY_LIST single;
-        single.add(body);
+        single.add(entity);
         std::string why;
         if (!saveEntityList(satOut, single, why)) return fail(stem + ": SAT save failed: " + why);
 
@@ -156,7 +157,7 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
         int graphNodes = 0;
         const char* graphFallback = "fine_grained";
         try {
-            nlohmann::json graph = dbcad::worker::serializeEntityGraph(stem, *body);
+            nlohmann::json graph = dbcad::worker::serializeEntityGraph(stem, *entity);
             for (const auto& node : graph.value("nodes", nlohmann::json::array())) {
                 const nlohmann::json& props = node.value("props", nlohmann::json::object());
                 if (props.value("fallback", "") == "sat_asset") graphFallback = "sat_asset";
@@ -180,13 +181,13 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
         }
 
         SPAposition boxMin, boxMax;
-        if (!api_get_entity_box(body, boxMin, boxMax).ok())
+        if (!api_get_entity_box(entity, boxMin, boxMax).ok())
             return fail(stem + ": bounding box failed");
 
         double color[3] = {0.8, 0.8, 0.8};
         rgb_color native;
         logical found = FALSE;
-        if (api_rh_get_entity_rgb(body, native, TRUE, found).ok() && found == TRUE) {
+        if (api_rh_get_entity_rgb(entity, native, TRUE, found).ok() && found == TRUE) {
             color[0] = native.red();
             color[1] = native.green();
             color[2] = native.blue();
