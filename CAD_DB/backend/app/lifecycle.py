@@ -5,8 +5,7 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from fastapi import FastAPI
-from . import crud, neo4j_webui
-from .json_graph_store import shutdown_json_graph_store
+from . import neo4j_webui
 from .v1_store import initialize_v1_store, shutdown_v1_store
 
 logger = logging.getLogger(__name__)
@@ -39,12 +38,6 @@ def _setup_file_logging() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _setup_file_logging()
-    # v2 遗留端点（json-delta 族，P6 删除）：Neo4j 不可用时降级——对应端点
-    # 返回 503，v1（服务端权威）不受影响。
-    try:
-        crud.initialize_backend()
-    except Exception as exc:  # noqa: BLE001 - v2 is deprecated and optional
-        logger.warning("v2 legacy endpoints disabled (no storage): %s", exc)
     # v1 store：Neo4j 不可用时降级内存实现（本地/单测）；生产配 Neo4j 环境变量。
     try:
         initialize_v1_store()
@@ -55,7 +48,5 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        crud.shutdown_backend()
         shutdown_v1_store()
-        shutdown_json_graph_store()
         neo4j_webui._close_driver()

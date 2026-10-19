@@ -3,13 +3,12 @@
 import logging
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .lifecycle import LOG_FILE_PATH, lifespan
 from . import neo4j_webui
-from .api import projects, models, json_delta, websocket
 from .api import v1
 
 logger = logging.getLogger(__name__)
@@ -35,7 +34,11 @@ async def web_entry_no_cache(request: Request, call_next):
     return response
 app.include_router(neo4j_webui.router)
 app.add_route("/webui", neo4j_webui.serve_webui, ["GET"])
-app.add_route("/", neo4j_webui.serve_webui, ["GET"])
+# v3 起 / 直达 Web 客户端；旧管理页仍在 /webui（P7 后 V1 模型浏览）。
+if _WEB_DIST.exists():
+    app.add_route("/", lambda: RedirectResponse("/web/"), ["GET"])
+else:  # 无前端构建时保留管理页入口，避免裸 404。
+    app.add_route("/", neo4j_webui.serve_webui, ["GET"])
 
 
 @app.exception_handler(HTTPException)
@@ -72,20 +75,14 @@ async def request_logging_middleware(request: Request, call_next):
 
 @app.get("/health")
 def health() -> dict[str, str | bool]:
-    # Expose the selected collaboration path so the launcher and a human
-    # operator can verify that the packaged service is using the bridge-free
-    # JSON route. This is read-only diagnostic information.
     return {
         "status": "ok",
         "build": datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"),
         "log_file": str(LOG_FILE_PATH),
-        "collaboration_mode": "hybrid_json",
+        "collaboration_mode": "v3_server_authoritative",
         "bridge_required": False,
     }
 
 
-# Register literal routes before parameter routes (e.g. /versions before /{version}).
-for module in (projects, models, json_delta, websocket):
-    app.include_router(module.router)
-# v1（V3_PLAN.md §2）：全新服务端权威协议；json-delta 族端点 deprecated（P6 删除）。
+# v1（V3_PLAN.md §2）：服务端权威协议，唯一线协议（P7 起旧端点已物理删除）。
 app.include_router(v1.router)

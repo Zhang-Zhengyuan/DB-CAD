@@ -1,110 +1,43 @@
-// ============== Neo4j 当前图状态 ==============
+// ============== 组件实体级投影图（P6/ADR-3） ==============
 
-async function loadNeo4jState(projectId) {
-  const target = document.getElementById(`neo4j-state-${cssEscape(projectId)}`);
-  if (!target) return;
-  target.innerHTML = `<div class="neo4j-state-strip"><div class="neo4j-state-empty">加载 Neo4j 图状态…</div></div>`;
+async function openEntityGraph(hashSat, label) {
+  const short = String(hashSat || '').slice(0, 12);
+  const body = openModal(`实体投影 · ${short}…`);
+  body.innerHTML = '<div class="muted center" style="padding: 30px;">加载投影图…</div>';
   try {
-    const r = await adminFetch(`${API}/projects/${encodeURIComponent(ALL_PROJECTS.find(p => p.project_id === projectId)?.name || '')}/neo4j-state`);
-    if (!r.ok) throw new Error(await r.text());
-    const data = await r.json();
-    renderNeo4jStateStrip(target, data);
-  } catch (e) {
-    target.innerHTML = `<div class="neo4j-state-strip"><div class="neo4j-state-empty">Neo4j 当前图状态加载失败：${escapeHTML(e.message)}</div></div>`;
-  }
-}
-
-function renderNeo4jStateStrip(el, data) {
-  if (!data || !data.has_part) {
-    el.innerHTML = `
-      <div class="neo4j-state-strip">
-        <div class="neo4j-state-header">
-          <div class="neo4j-state-title"><span class="dot"></span> Neo4j 当前图状态</div>
-          <div class="neo4j-state-meta">该项目尚无可查询的实体图</div>
-        </div>
-      </div>
-    `;
-    return;
-  }
-  const buckets = data.buckets || [];
-  const max = buckets.reduce((m, b) => Math.max(m, b.count), 0) || 1;
-  el.innerHTML = `
-    <div class="neo4j-state-strip">
-      <div class="neo4j-state-header">
-        <div class="neo4j-state-title"><span class="dot"></span> Neo4j 当前图状态 <small class="muted" style="font-size: var(--fz-sm); font-weight: 400;">— ${escapeHTML(data.storage_label || '')}</small></div>
-        <div class="neo4j-state-meta">
-          part: <b>${escapeHTML(data.part_name)}</b>
-          · version: <b>${data.part_version}</b>
-          · 总节点 <b>${data.total_nodes}</b>
-        </div>
-      </div>
-      <div class="neo4j-state-grid">
-        ${buckets.map(b => `
-          <div class="neo4j-stat">
-            <div class="label">${escapeHTML(b.label_zh || b.label)}</div>
-            <div class="value">${b.count.toLocaleString()}</div>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-}
-
-async function openNeo4jStateModal(projectName, projectId) {
-  openModal(`Neo4j 当前图状态 · ${escapeHTML(projectName)}`);
-  const body = $('#modal-body');
-  body.innerHTML = '<div class="muted center" style="padding: 30px;">加载中…</div>';
-  try {
-    const r = await adminFetch(`${API}/projects/${encodeURIComponent(projectName)}/neo4j-state`);
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || '加载失败');
-    renderNeo4jStateModal(body, data, projectName);
+    const url = `${API}/components/${encodeURIComponent(hashSat)}/entity-graph?limit=300` +
+      (label ? `&label=${encodeURIComponent(label)}` : '');
+    const data = await getJSON(url);
+    renderEntityGraphModal(body, data);
   } catch (e) {
     body.innerHTML = `<div class="empty-state" style="color: var(--red);">失败：${escapeHTML(e.message)}</div>`;
   }
 }
 
-function renderNeo4jStateModal(body, data, projectName) {
-  if (!data.has_part) {
-    body.innerHTML = `
-      <div class="empty-state">该项目尚无可查询的实体图。</div>
-    `;
-    return;
-  }
-  const buckets = data.buckets || [];
-  const max = buckets.reduce((m, b) => Math.max(m, b.count), 0) || 1;
+function renderEntityGraphModal(body, data) {
+  const graph = {
+    nodes: (data.nodes || []).map(n => ({
+      id: n.id,
+      labels: n.labels && n.labels.length ? n.labels : ['entity'],
+      props: { entity_type: n.entity_type, geometry_type: n.geometry_type, top_level: n.top_level },
+    })),
+    rels: data.rels || [],
+  };
   body.innerHTML = `
     <table class="kv-table">
-      <tr><th>项目名</th><td>${escapeHTML(projectName)}</td></tr>
-      <tr><th>项目 ID</th><td>${escapeHTML(data.project_id)}</td></tr>
-      <tr><th>图标识</th><td>${escapeHTML(data.part_name)}</td></tr>
-      <tr><th>当前版本</th><td>${data.part_version}</td></tr>
-      <tr><th>实体节点数</th><td>${data.total_nodes}</td></tr>
-      <tr><th>存储模式</th><td>${escapeHTML(data.storage_label || '—')}</td></tr>
+      <tr><th>hash_sat</th><td class="mono">${escapeHTML(data.hash_sat || '')}</td></tr>
+      <tr><th>组件名</th><td>${escapeHTML(data.name || 'component')}</td></tr>
+      <tr><th>实体总数</th><td>${(data.total_entities || 0).toLocaleString()}（展示 ${data.returned || 0}${data.truncated ? '，已截断' : ''}）</td></tr>
+      <tr><th>拓扑关系</th><td>${(data.rels || []).length.toLocaleString()} 条 TOPOLOGY 边</td></tr>
     </table>
-    <h4 style="margin-top: 22px; color: var(--text-bright); font-size: var(--fz-md);">ACIS 拓扑节点分布</h4>
-    <div style="margin-top: 10px;">
-      ${buckets.map(b => `
-        <div class="bar-row">
-          <div class="bar-label">${escapeHTML(b.label_zh || b.label)}</div>
-          <div class="bar-track"><div class="bar-fill" style="width: ${(b.count / max * 100).toFixed(1)}%"></div></div>
-          <div class="bar-val">${b.count.toLocaleString()}</div>
-        </div>
-      `).join('')}
-    </div>
-    <h4 style="margin-top: 24px; color: var(--text-bright); font-size: var(--fz-md);">Body 列表（前 ${Math.min(data.bodies?.length || 0, 30)} 个，共 ${data.body_count}）</h4>
-    <div class="topo-strip">
-      ${(data.bodies || []).slice(0, 30).map(b => `
-        <div class="topo-pill" title="${escapeHTML(b.uuid)}">body <span class="count">${escapeHTML(b.uuid.slice(0, 8))}…</span></div>
-      `).join('') || '<div class="muted">无 body</div>'}
-    </div>
-    ${renderNeo4jGraph(data.graph)}
+    ${renderNeo4jGraph(graph)}
     <p class="muted mt-16" style="font-size: var(--fz-sm);">
-      【解读】图中 Body 是可理解的 CAD 实体根节点；Lump、Shell、Face、Loop、Coedge、Edge、Vertex 是 ACIS 几何拓扑的组成层级。点击节点可查看原始 Neo4j 属性。
+      【解读】投影挂在不可变组件之下（HAS_ENTITY）；Body→Lump→Shell→Face→Loop→Coedge/Edge→Vertex
+      为 ACIS 拓扑层级，边为库内实际保存的 TOPOLOGY 关系。点击节点查看属性与相邻关系。
     </p>
   `;
   const graphRoot = body.querySelector('[data-neo4j-graph]');
-  if (graphRoot) bindNeo4jGraph(graphRoot, data.graph);
+  if (graphRoot) bindNeo4jGraph(graphRoot, graph);
 }
 
 function renderNeo4jGraph(graph) {

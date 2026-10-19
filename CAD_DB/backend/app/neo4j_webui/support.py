@@ -1,23 +1,17 @@
 """
-DB-CAD Neo4j 管理 WebUI — 直接连接 Neo4j，提供项目/版本/图数据查询界面。
+DB-CAD Neo4j 管理 WebUI — 直接连接 Neo4j，提供项目/版本/投影浏览界面。
 
-访问地址: http://localhost:8000/  或 http://localhost:8000/webui
-（与 FastAPI 主服务同端口，无需额外启动）
+访问地址: http://localhost:8000/webui（与 FastAPI 主服务同端口）
 
-【数据模型】（统一命名，兼容旧 label）
-  BridgeProject / DBCADProject  — 项目根节点
-  BridgeVersion / DBCADVersion   — Mode0 全量版本（每次 Save 写一份完整 SAT）
-  JsonGraphVersion / JsonGraphEntity — 当前 Mode1 纯 JSON 快照与可查询实体
-  BridgeDeltaVersion / DBCADDelta — 历史 SAT 增量数据
-  BridgeEntityGraphVersion / entity_graph_version — Entity Graph 版本
-  part / DBCADPart                — ACIS N 叉拓扑树根
+【V1 数据模型】（v3 服务端权威，P7 起唯一写入模型）
+  V1Project                      — 项目
+  V1Version                      — 版本链节点（project_id 属性挂项目）
+    -[:CONTAINS {order}]-> V1Component（不可变，内容寻址 hash_sat）
+  V1Component -[:HAS_ENTITY]-> V1Entity（实体级投影，P6/ADR-3：
+    原生标签 Body/Face/.../Unknown + 一级扁平字段；权威载荷 labels_json/
+    props_json）  V1Entity -[:TOPOLOGY {rel_type}]-> V1Entity（组件内拓扑）
 
-【实际关系】（以 Neo4j 实测为准，本版按真实存在的字段与关系重写）
-  (BridgeProject)-[:HAS_VERSION]->(BridgeVersion)
-  (BridgeProject)-[:HAS_EG_VERSION]->(BridgeEntityGraphVersion)
-  JsonGraphVersion 通过 HAS_JSON_GRAPH_VERSION 关联项目
-  BridgeDeltaVersion 没有 BELONGS_TO 关系，仅通过 project_id 属性挂载
-  part 拓扑树是孤立节点，通过 BridgeVersion/BridgeEntityGraphVersion.part_name 引用
+  v2 历史 label（JsonGraph*/Bridge* 等）不再写入，存量数据只读保留。
 """
 
 import json
@@ -120,51 +114,6 @@ def _semantic_label(
             return _TOPOLOGY_LABEL_ZH[key]
     entity_type = str((props or {}).get("entity_type") or "").strip()
     return entity_type or (str(labels[0]) if labels else "实体节点")
-
-
-def _decode_changes(raw: Any) -> list[dict[str, str]]:
-    """Decode the compact per-version change manifest for WebUI display."""
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-    except (TypeError, ValueError):
-        return []
-    result: list[dict[str, str]] = []
-    for item in parsed.get("changes", []) if isinstance(parsed, dict) else []:
-        if not isinstance(item, dict):
-            continue
-        result.append(
-            {
-                "change_type": str(
-                    item.get("changeType") or item.get("change_type") or ""
-                ).upper(),
-                "uuid": str(item.get("uuid") or item.get("id") or ""),
-                "entity_type": str(
-                    item.get("entityType") or item.get("entity_type") or ""
-                ),
-                "name": str(item.get("name") or ""),
-            }
-        )
-    known_removed = {
-        item["uuid"]
-        for item in result
-        if item["change_type"] == "REMOVE" and item["uuid"]
-    }
-    for removed_id in parsed.get("removed_ids", []) if isinstance(parsed, dict) else []:
-        removed_uuid = str(removed_id)
-        if removed_uuid not in known_removed:
-            result.append(
-                {
-                    "change_type": "REMOVE",
-                    "uuid": removed_uuid,
-                    "entity_type": "",
-                    "name": "",
-                }
-            )
-    return [
-        item for item in result if item["uuid"] or item["entity_type"] or item["name"]
-    ]
 
 
 # ---------------------------------------------------------------------------

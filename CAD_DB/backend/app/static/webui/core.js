@@ -58,9 +58,9 @@ async function loadOverview() {
   try {
     const data = await getJSON(`${API}/overview`);
     $('#topbar-projects').textContent = data.total_projects.toLocaleString();
-    $('#topbar-mode0').textContent = data.total_mode0_versions.toLocaleString();
-    $('#topbar-mode1').textContent = data.total_mode1_json_versions.toLocaleString();
-    $('#topbar-eg').textContent = data.total_entity_graph_versions.toLocaleString();
+    $('#topbar-mode0').textContent = data.total_versions.toLocaleString();
+    $('#topbar-mode1').textContent = data.total_components.toLocaleString();
+    $('#topbar-eg').textContent = data.total_entities.toLocaleString();
 
     $('#overview-sub').textContent = `共 ${data.total_nodes.toLocaleString()} 节点 · ${data.total_relationships.toLocaleString()} 关系`;
 
@@ -69,22 +69,22 @@ async function loadOverview() {
       <div class="stat-card project">
         <div class="label">项目总数</div>
         <div class="value">${data.total_projects.toLocaleString()}</div>
-        <div class="sub">Project / BridgeProject / DBCADProject</div>
+        <div class="sub">V1Project</div>
       </div>
       <div class="stat-card mode0">
-        <div class="label">旧 Mode0 历史</div>
-        <div class="value">${data.total_mode0_versions.toLocaleString()}</div>
-        <div class="sub">BridgeVersion（完整 SAT）</div>
+        <div class="label">版本总数</div>
+        <div class="value">${data.total_versions.toLocaleString()}</div>
+        <div class="sub">V1Version（命令全序=版本链）</div>
       </div>
       <div class="stat-card mode1">
-        <div class="label">Mode1 JSON 版本</div>
-        <div class="value">${data.total_mode1_json_versions.toLocaleString()}</div>
-        <div class="sub">JsonGraphVersion（完整快照）</div>
+        <div class="label">不可变组件</div>
+        <div class="value">${data.total_components.toLocaleString()}</div>
+        <div class="sub">V1Component（内容寻址）</div>
       </div>
       <div class="stat-card eg">
-        <div class="label">Entity Graph 版本</div>
-        <div class="value">${data.total_entity_graph_versions.toLocaleString()}</div>
-        <div class="sub">BridgeEntityGraphVersion</div>
+        <div class="label">实体投影</div>
+        <div class="value">${data.total_entities.toLocaleString()}</div>
+        <div class="sub">V1Entity（细档：原生标签+扁平字段）</div>
       </div>
       <div class="stat-card accent">
         <div class="label">总节点</div>
