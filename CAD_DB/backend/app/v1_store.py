@@ -83,6 +83,8 @@ class V1Version:
     created_at: datetime
     base_version: int | None
     components: list[SceneComponent]
+    # undo/redo 恢复的历史状态；base_version 仍是追加版本链的直接父版本。
+    restored_from: int | None = None
 
 
 def _now() -> datetime:
@@ -95,9 +97,9 @@ class MemoryV1Store:
         self.versions: dict[str, list[V1Version]] = {}
         self.tags: dict[str, dict[str, int]] = {}
         self.branches: dict[str, dict[str, int]] = {}
-        # 撤销栈（进程内）：undo 压入被撤销清单，redo 弹出重放。
+        # 重做栈（进程内）：保存被撤销状态的版本号，以保留逻辑历史位置。
         # 不随 Neo4j 持久化——服务重启后 redo 清空是可接受语义。
-        self.redo_stacks: dict[str, list[list[SceneComponent]]] = {}
+        self.redo_stacks: dict[str, list[int]] = {}
         # 实体级投影（P6/ADR-3）：hash_sat → 规范化投影 {nodes, rels,
         # serializer_build}。组件不可变 ⇒ 投影幂等，已存在即零写入。
         self.entity_projections: dict[str, dict[str, Any]] = {}
@@ -218,14 +220,21 @@ class MemoryV1Store:
                     return results
         return results
 
-    def push_redo(self, project_id: str, components: list[SceneComponent]) -> None:
-        self.redo_stacks.setdefault(project_id, []).append(list(components))
+    def push_redo(self, project_id: str, version: int) -> None:
+        self.redo_stacks.setdefault(project_id, []).append(version)
 
-    def pop_redo(self, project_id: str) -> list[SceneComponent] | None:
+    def peek_redo(self, project_id: str) -> int | None:
+        stack = self.redo_stacks.get(project_id)
+        return stack[-1] if stack else None
+
+    def pop_redo(self, project_id: str) -> int | None:
         stack = self.redo_stacks.get(project_id)
         if not stack:
             return None
         return stack.pop()
+
+    def clear_redo(self, project_id: str) -> None:
+        self.redo_stacks.pop(project_id, None)
 
     # ---- 项目 ----------------------------------------------------------
     def create_project(self, name: str) -> ProjectRecord:
@@ -286,6 +295,7 @@ class MemoryV1Store:
         author: str,
         components: list[SceneComponent],
         base_version: int | None = None,
+        restored_from: int | None = None,
     ) -> V1Version:
         head = self.latest(project_id)
         head_number = head.number if head else None
@@ -302,6 +312,7 @@ class MemoryV1Store:
             created_at=_now(),
             base_version=head_number,
             components=components,
+            restored_from=restored_from,
         )
         self.versions[project_id].append(version)
         self.touch(project_id)
@@ -414,6 +425,7 @@ class Neo4jV1Store(MemoryV1Store):
                         created_at=datetime.fromisoformat(props["created_at"]),
                         base_version=props.get("base_version"),
                         components=components,
+                        restored_from=props.get("restored_from"),
                     )
                 )
             for rows in self.versions.values():
@@ -438,14 +450,18 @@ class Neo4jV1Store(MemoryV1Store):
         author: str,
         components: list[SceneComponent],
         base_version: int | None = None,
+        restored_from: int | None = None,
     ) -> V1Version:
-        version = super().commit_version(project_id, message, author, components, base_version)
+        version = super().commit_version(
+            project_id, message, author, components, base_version, restored_from
+        )
         with self._driver.session(database=self._database) as session:
             session.execute_write(
                 lambda tx: tx.run(
                     """
                     CREATE (v:V1Version {project_id:$pid, number:$n, message:$m,
-                                        author:$a, created_at:$ca, base_version:$bv})
+                                        author:$a, created_at:$ca, base_version:$bv,
+                                        restored_from:$rf})
                     WITH v
                     UNWIND range(0, size($comps) - 1) AS i
                     MERGE (c:V1Component {hash_sat: $comps[i].hash_sat})
@@ -463,6 +479,7 @@ class Neo4jV1Store(MemoryV1Store):
                     a=author,
                     ca=version.created_at.isoformat(),
                     bv=version.base_version,
+                    rf=version.restored_from,
                     comps=[
                         {
                             "hash_sat": c.hash_sat,

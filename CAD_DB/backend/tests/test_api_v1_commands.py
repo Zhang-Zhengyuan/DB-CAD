@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.component_store import ComponentStore, set_component_store
-from app.v1_store import initialize_v1_store, shutdown_v1_store
+from app.v1_store import get_v1_store, initialize_v1_store, shutdown_v1_store
 from app.worker_client import ImportResult, ImportedComponent, set_worker_gateway
 from app.worker_pool import WorkerError, set_worker_pool
 
@@ -231,6 +231,123 @@ def test_undo_at_root_rejected(client):
     project_id = _import_project(client, "undo-root")["project_id"]
     assert client.post(f"/api/v1/projects/{project_id}/undo").status_code == 409
     assert client.post(f"/api/v1/projects/{project_id}/redo").status_code == 409
+
+
+def test_consecutive_undo_redo_restores_each_snapshot(client):
+    client, _pool = client
+    project_id = _import_project(client, "undo-sequence")["project_id"]
+    snapshots = [client.get(f"/api/v1/projects/{project_id}/scene").json()["components"]]
+    for kind in ("sphere", "cone"):
+        created = _run(client, project_id, {
+            "action": "component.create", "params": {"kind": kind},
+        })
+        assert created.status_code == 200, created.text
+        snapshots.append(created.json()["components"])
+
+    for expected in (snapshots[1], snapshots[0]):
+        response = client.post(f"/api/v1/projects/{project_id}/undo")
+        assert response.status_code == 200, response.text
+        assert client.get(f"/api/v1/projects/{project_id}/scene").json()["components"] == expected
+    assert client.post(f"/api/v1/projects/{project_id}/undo").status_code == 409
+
+    for expected in (snapshots[1], snapshots[2]):
+        response = client.post(f"/api/v1/projects/{project_id}/redo")
+        assert response.status_code == 200, response.text
+        assert client.get(f"/api/v1/projects/{project_id}/scene").json()["components"] == expected
+    assert client.post(f"/api/v1/projects/{project_id}/redo").status_code == 409
+
+    versions = client.get(f"/api/v1/projects/{project_id}/versions").json()["versions"]
+    assert [v["version"] for v in versions] == list(range(1, 8))
+    assert [v["base_version"] for v in versions] == [None, 1, 2, 3, 4, 5, 6]
+    for number, expected in enumerate(snapshots, 1):
+        assert client.get(f"/api/v1/projects/{project_id}/scene?v={number}").json()["components"] == expected
+
+
+def test_undo_after_redo_continues_from_restored_state(client):
+    client, _pool = client
+    project_id = _import_project(client, "undo-after-redo")["project_id"]
+    root = client.get(f"/api/v1/projects/{project_id}/scene").json()["components"]
+    for kind in ("sphere", "cone"):
+        assert _run(client, project_id, {
+            "action": "component.create", "params": {"kind": kind},
+        }).status_code == 200
+    for action in ("undo", "undo", "redo", "undo"):
+        response = client.post(f"/api/v1/projects/{project_id}/{action}")
+        assert response.status_code == 200, response.text
+    assert client.get(f"/api/v1/projects/{project_id}/scene").json()["components"] == root
+
+
+@pytest.mark.parametrize("new_edit", ["command", "import"])
+def test_new_edit_after_undo_invalidates_redo(client, new_edit):
+    client, _pool = client
+    project_id = _import_project(client, f"undo-new-{new_edit}")["project_id"]
+    root = client.get(f"/api/v1/projects/{project_id}/scene").json()["components"]
+    assert _run(client, project_id, {
+        "action": "component.create", "params": {"kind": "sphere"},
+    }).status_code == 200
+    assert client.post(f"/api/v1/projects/{project_id}/undo").status_code == 200
+    if new_edit == "command":
+        edited = _run(client, project_id, {
+            "action": "component.create", "params": {"kind": "cone"},
+        })
+        assert edited.status_code == 200, edited.text
+    else:
+        edited = client.post(
+            "/api/v1/files/import",
+            files={"file": ("replacement.sat", b"replacement-sat", "application/octet-stream")},
+            data={"project_id": project_id},
+        )
+        assert edited.status_code == 201, edited.text
+    assert client.post(f"/api/v1/projects/{project_id}/redo").status_code == 409
+    assert client.post(f"/api/v1/projects/{project_id}/undo").status_code == 200
+    assert client.get(f"/api/v1/projects/{project_id}/scene").json()["components"] == root
+    assert client.post(f"/api/v1/projects/{project_id}/undo").status_code == 409
+
+
+@pytest.mark.parametrize("action", ["undo", "redo"])
+def test_failed_history_commit_preserves_redo_stack(client, monkeypatch, action):
+    client, _pool = client
+    project_id = _import_project(client, f"failed-{action}")["project_id"]
+    for kind in ("sphere", "cone"):
+        assert _run(client, project_id, {
+            "action": "component.create", "params": {"kind": kind},
+        }).status_code == 200
+    assert client.post(f"/api/v1/projects/{project_id}/undo").status_code == 200
+    store = get_v1_store()
+    head = store.latest(project_id)
+    pending = list(store.redo_stacks[project_id])
+
+    def fail_commit(*args, **kwargs):
+        raise RuntimeError("injected history commit failure")
+
+    monkeypatch.setattr(store, "commit_version", fail_commit)
+    with pytest.raises(RuntimeError, match="injected history commit failure"):
+        client.post(f"/api/v1/projects/{project_id}/{action}")
+    assert store.latest(project_id) is head
+    assert store.redo_stacks[project_id] == pending
+
+
+def test_failed_command_after_undo_keeps_redo(client):
+    client, pool = client
+    project_id = _import_project(client, "undo-failed-edit")["project_id"]
+    created = _run(client, project_id, {
+        "action": "component.create", "params": {"kind": "sphere"},
+    }).json()
+    assert client.post(f"/api/v1/projects/{project_id}/undo").status_code == 200
+    pool.fail_next = WorkerError("injected geometry failure")
+    assert _run(client, project_id, {
+        "action": "component.create", "params": {"kind": "cone"},
+    }).status_code == 502
+    assert client.post(f"/api/v1/projects/{project_id}/redo").status_code == 200
+    assert client.get(f"/api/v1/projects/{project_id}/scene").json()["components"] == created["components"]
+
+
+def test_empty_project_has_no_history_to_restore(client):
+    client, _pool = client
+    project_id = client.post("/api/v1/projects", json={"name": "empty-history"}).json()["id"]
+    for action in ("undo", "redo"):
+        assert client.post(f"/api/v1/projects/{project_id}/{action}").status_code == 409
+    assert client.get(f"/api/v1/projects/{project_id}/versions").json()["versions"] == []
 
 
 def test_dry_run_validates_and_reports_affects(client):

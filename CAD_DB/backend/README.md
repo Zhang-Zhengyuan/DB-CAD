@@ -11,6 +11,16 @@ uv run --frozen pytest -q -m 'not integration'
 
 无数据库测试使用内存适配器。integration 检查需要真实 Neo4j / worker；跳过集成测试不代表全栈验收。
 
+撤销/重做仍追加新版本，`base_version` 保持实际提交父链；版本内部的
+`restored_from` 记录恢复来源，连续撤销沿逻辑建模历史逐步回退。该字段随
+Neo4j 版本保存，旧版本缺失字段时按普通历史版本读取，无需迁移。重做栈仍
+仅在进程内保存，服务重启后清空；成功的新建模命令或导入会清除重做分支，
+失败操作保留重做机会。旧版已产生的撤销记录不会被追溯改写。
+
+撤销来源的数据库往返回归使用 `tests/test_v1_undo_neo4j.py`：必须显式配置
+`CAD_DB_UNDO_TEST_NEO4J_URI` 指向隔离测试库；需要认证时另设
+`CAD_DB_UNDO_TEST_NEO4J_PASSWORD`，未配置 URI 时跳过，不使用开发库。
+
 测试默认按"无 API 密码"运行：`tests/conftest.py` 会在加载任何 app 模块前把 `CAD_DB_API_PASSWORD` 置空（环境变量优先级高于 `.env`），避免本机 export 过密码或 `.env` 配了密码时全部请求误报 401。integration 测试对活体服务联调时，密码改用 `CAD_DB_INTEGRATION_API_PASSWORD` 传入。
 
 ## 独立启动

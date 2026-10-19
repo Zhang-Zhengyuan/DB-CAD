@@ -12,7 +12,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from ...dependencies import verify_api_password
 from ...entity_projection import write_projections
 from ...events_hub import hub
-from ...v1_store import SceneComponent, get_v1_store
+from ...v1_store import MemoryV1Store, SceneComponent, V1Version, get_v1_store
 from ...worker_client import WorkerError as _BatchWorkerError
 from ...worker_pool import WorkerError, get_worker_pool
 from .projects import _project_or_404
@@ -276,6 +276,7 @@ async def execute_command(project_id: str, payload: dict = Body(...)) -> dict:
         components=manifest,
         base_version=head_number,
     )
+    store.clear_redo(project_id)
     # 实体级投影（P6/ADR-3 + P8/Phase D）：变更组件入库后写投影（幂等，
     # 未变更组件零写入）；modified 组件带命令前哈希作 generation 父
     # （worker 会话内组件 sid 即其 SAT 哈希），实体内容寻址共享 +
@@ -319,15 +320,18 @@ async def execute_command(project_id: str, payload: dict = Body(...)) -> dict:
     }
 
 
-def _manifest_only_commit(project_id: str, message: str, author: str, components: list[SceneComponent]):
+def _manifest_only_commit(
+    project_id: str, message: str, author: str, target: V1Version
+):
     store = get_v1_store()
     head = store.latest(project_id)
     version = store.commit_version(
         project_id,
         message=message,
         author=author,
-        components=components,
+        components=target.components,
         base_version=head.number if head else None,
+        restored_from=target.number,
     )
     hub.publish(
         project_id,
@@ -337,19 +341,37 @@ def _manifest_only_commit(project_id: str, message: str, author: str, components
     return version
 
 
+def _history_state(store: MemoryV1Store, project_id: str, version: V1Version) -> V1Version:
+    """沿恢复来源定位逻辑状态，不把 undo/redo 追加记录当成建模步骤。"""
+    visited: set[int] = set()
+    while version.restored_from is not None:
+        if version.number in visited:
+            raise HTTPException(status.HTTP_409_CONFLICT, "invalid history restore chain")
+        visited.add(version.number)
+        source = store.get_version(project_id, version.restored_from)
+        if source is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "history restore version missing")
+        version = source
+    return version
+
+
 @router.post("/projects/{project_id}/undo")
 def undo(project_id: str, author: str = "undo") -> dict:
-    """树状撤销：提交父版本清单为新版本（几何不变，清单回退）。"""
+    """撤销一个逻辑建模步骤，并追加恢复版本，保持版本链不可变。"""
     _project_or_404(project_id)
     store = get_v1_store()
     head = store.latest(project_id)
-    if head is None or head.base_version is None:
+    if head is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "nothing to undo")
-    parent = store.get_version(project_id, head.base_version)
+    current = _history_state(store, project_id, head)
+    if current.base_version is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "nothing to undo")
+    parent = store.get_version(project_id, current.base_version)
     if parent is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "undo target version missing")
-    store.push_redo(project_id, head.components)
-    version = _manifest_only_commit(project_id, f"undo -> v{parent.number}", author, parent.components)
+    target = _history_state(store, project_id, parent)
+    version = _manifest_only_commit(project_id, f"undo -> v{target.number}", author, target)
+    store.push_redo(project_id, current.number)
     return {"project_id": project_id, "version": version.number, "undone": head.number}
 
 
@@ -357,9 +379,13 @@ def undo(project_id: str, author: str = "undo") -> dict:
 def redo(project_id: str, author: str = "redo") -> dict:
     _project_or_404(project_id)
     store = get_v1_store()
-    components = store.pop_redo(project_id)
-    if components is None:
+    source_version = store.peek_redo(project_id)
+    if source_version is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "nothing to redo")
-    version = _manifest_only_commit(project_id, "redo", author, components)
+    target = store.get_version(project_id, source_version)
+    if target is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "redo target version missing")
+    version = _manifest_only_commit(project_id, "redo", author, target)
+    store.pop_redo(project_id)
     return {"project_id": project_id, "version": version.number}
 
