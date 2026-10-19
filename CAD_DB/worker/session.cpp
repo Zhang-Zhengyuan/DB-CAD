@@ -305,6 +305,7 @@ std::string GeometrySession::emitComponent(ComponentRef& component, bool added,
     }();
     emit["triangles"] = mesh.mesh.triangleCount();
     emit["vertices"] = mesh.mesh.vertexCount();
+    emit["faces_skipped"] = mesh.facesSkipped;
     emit["bbox"] = {{"min", json::array({boxMin.x(), boxMin.y(), boxMin.z()})},
                     {"max", json::array({boxMax.x(), boxMax.y(), boxMax.z()})}};
     emit["color"] = json::array({color[0], color[1], color[2]});

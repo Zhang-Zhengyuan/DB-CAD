@@ -275,6 +275,7 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
                     ",\"graph_fallback\":\"" + graphFallback + "\"" +
                     ",\"triangles\":" + std::to_string(mesh.mesh.triangleCount()) +
                     ",\"vertices\":" + std::to_string(mesh.mesh.vertexCount()) +
+                    ",\"faces_skipped\":" + std::to_string(mesh.facesSkipped) +
                     (meshErrorJson.empty() ? "" : ",\"mesh_error\":\"" + meshErrorJson + "\"") +
                     ",\"bbox\":{\"min\":[" + quote(boxMin.x()) + "," + quote(boxMin.y()) + "," +
                     quote(boxMin.z()) + "],\"max\":[" + quote(boxMax.x()) + "," + quote(boxMax.y()) +

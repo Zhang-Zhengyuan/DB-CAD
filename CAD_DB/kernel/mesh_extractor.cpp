@@ -182,15 +182,34 @@ MeshResult MeshExtractor::extract(BODY& body, MeshQuality quality) {
 
     ENTITY_LIST faceList;
     api_get_faces(&body, faceList);
-    if (faceList.count() == 0)
-        return failure("body has no faces");
+
+    // 线框体（wire body，STEP 装配件常见）：无面但边是真实几何——走边折线
+    // 路径产出纯线网格（GLB LINES，与 arc/line 图元同契约），渲染完整。
+    if (faceList.count() == 0) {
+        ENTITY_LIST edgeList;
+        api_get_edges(&body, edgeList);
+        readEdges(edgeList, data, result.edgesSkipped);
+        if (data.edgePositions.empty())
+            return failure("body has neither faces nor edge polylines");
+        finalizeOrValidate(result);
+        return result;
+    }
 
     int faceNo = 0;
     for (ENTITY* ent = faceList.first(); ent; ent = faceList.next(), ++faceNo) {
         if (!is_FACE(ent))
             return failure("api_get_faces returned a non-FACE entity");
-        if (!readFacetedFace(*static_cast<FACE*>(ent), faceNo, data, result.error))
-            return failure(result.error);
+        // 单面无 facet 网格（abc 语料实测：极小/退化面）按边折线同语义跳过
+        // 并计数——不毁掉整 body 的网格；其余错误（缺法线/退化/索引越界）
+        // 仍为显式失败。
+        std::string faceError;
+        if (!readFacetedFace(*static_cast<FACE*>(ent), faceNo, data, faceError)) {
+            if (faceError.find("has no faceted mesh") != std::string::npos) {
+                ++result.facesSkipped;
+                continue;
+            }
+            return failure(faceError);
+        }
     }
 
     // 完整球/环等闭曲面体可能无边拓扑（api_get_edges 为空），轮廓线由着色
@@ -198,6 +217,10 @@ MeshResult MeshExtractor::extract(BODY& body, MeshQuality quality) {
     ENTITY_LIST edgeList;
     api_get_edges(&body, edgeList);
     readEdges(edgeList, data, result.edgesSkipped);
+
+    // 有面体但全部面被跳过且无边折线：网格确无内容，交由 worker 降级标记。
+    if (faceList.count() > 0 && data.positions.empty() && data.edgePositions.empty())
+        return failure("all faces skipped faceting and no edge polylines");
 
     finalizeOrValidate(result);
     return result;

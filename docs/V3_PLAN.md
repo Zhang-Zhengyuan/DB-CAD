@@ -168,7 +168,7 @@ FastAPI 网关（鉴权/限流/静态托管）
 | 项 | 内容 | 估时 |
 |---|---|---|
 | STEP 导入 | `_deps` 引入授权 Interop；worker 加 `step` 命令（STEP→BODY）；`/files/import` 接受 STEP（与 SAT 同管线：组件+投影+版本） | **已完成（2026-10-19）**：`_deps/interop`（SPAIInterop/SPAIAcis/SPAIopUtilities + 全量 DLL，PostBuild 暂存）；worker `loadModel` 按扩展名分派（SAT restore / STEP InterOp BRep+Assembly，SPAISystem 生命周期规范）；网关按上传名透传扩展名；实测官方 demo（CNC 车床装配，SolidWorks 2025 STEP AP214）→ 248 组件/48.8 万三角全链路；集成测试 test_v1_step_import_integration 绿 | 3-4 天 |
-| 大规模压测 | abc_cache 语料批量导入/查询/回放基准（万面模型 × N）：导入吞吐、投影写入放大、/entities 查询延迟、DERIVED_FROM 链深度；产出基准报告（docs/BENCHMARK_v3.md） | **已完成（2026-10-19）**：`scripts/benchmark_v3.py`；200 模型 **200/200 零失败**（1311 组件/66 万实体投影/内容去重率 60.5%/投影 67ms/模型）；首轮暴露 8 例"无面体/不可离散面致整模型失败"——修复为 mesh_error 降级（SAT/graph 照常，网关/前端跳过空 GLB），复测全过；v2 KNOWN-DIFF（pcurve 参数域）在 v3 无消费方，登记退场（FIDELITY_REFINEMENT_ROADMAP 头注）；报告 docs/BENCHMARK_v3.md | 2-3 天 |
+| 大规模压测 | abc_cache 语料批量导入/查询/回放基准（万面模型 × N）：导入吞吐、投影写入放大、/entities 查询延迟、DERIVED_FROM 链深度；产出基准报告（docs/BENCHMARK_v3.md） | **已完成（2026-10-19）**：`scripts/benchmark_v3.py`；200 模型 **200/200 零失败且 mesh_error=0**（1311 组件/66 万实体投影/内容去重率 60.5%/投影 67ms/模型）。两阶段缺陷修复：先降级止血（mesh_error 标记保几何真相），再按"能修则不降级"修根因——线框体走边折线路径产出纯线 GLB（渲染完整）、退化面跳过 + facesSkipped 如实计数（其余面正常）；v2 KNOWN-DIFF 登记 v3 退场；报告 docs/BENCHMARK_v3.md | 2-3 天 |
 | 收官 | 全量门禁 + tag `v3.1` | 后端 41 项、selftest、mesh_tests 175、web build、Playwright e2e 全绿；tag `v3.1` | 0.5 天 |
 
 ## 5. 风险与对策

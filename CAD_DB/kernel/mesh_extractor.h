@@ -58,6 +58,7 @@ struct MeshResult {
     bool ok = false;
     std::string error;                // !ok 时非空：面向 worker 的显式错误策略
     std::uint32_t edgesSkipped = 0;   // 无折线而被跳过的边（正常应为 0；非致命）
+    std::uint32_t facesSkipped = 0;   // facet 无网格而被跳过的面（极小/退化面；非致命，如实计数）
     MeshData mesh;
 };
 
