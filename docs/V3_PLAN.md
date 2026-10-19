@@ -113,9 +113,63 @@ FastAPI 网关（鉴权/限流/静态托管）
 | **P5 工业级收口** | 测量、剖切、导入导出（含 STEP：从全套授权包引入 Interop 到 `_deps`）、性能压测（abc_cache 万面模型 + demo_models：meshopt/LOD/懒加载）、Playwright e2e 门禁 | **大部分完成（2026-10-18）**：测量（点两点→raycast 距离标签）、剖切（X/Y/Z 轴+包围盒范围滑杆，材质 clippingPlanes）、导入 SAT（UI 上传）/导出 SAT·GLB·STL（worker ASCII STL 新增）、Playwright e2e 门禁（真浏览器+真后端+真 ACIS：渲染/属性/资产强缓存头/测量/schema 表单建模/版本切换/显示模式，5s 绿）；顺带修复两个真实缺陷：初始相机不对中（几何出视锥→CameraRig 首帧 iso 对中）、`.viewport>div` CSS 误伤工具栏（按钮拉成整列高吞掉画布点击→canvas-host 专属类）。**遗留**：STEP（Interop 引入 _deps+worker step 命令，授权已含待接）、大规模性能压测（abc_cache 语料） | 1 周 |
 | **P6 实体级图投影（ADR-3）** | `entity_graph_serializer` 去 Qt 化（QJson*→nlohmann，uvsafe-topology-v5-bounded codec 语义不动）搬入 worker，emit 管线产出 `{sid}.graph.json`；网关组件入库时写 Neo4j 实体投影（`(V1Component)-[:HAS_ENTITY]->实体节点`，"细"档物理表示复用 Phase B 字段映射与 `:Unknown` 兜底）；只读查询端点 `/entities`；既有 L1 往返 fixtures 复用为 codec 回归基准 | 改一个 face：未变更组件投影零写入、变更组件投影幂等重生成；`MATCH (f:Face) WHERE f.geometry_type='spline'` 原生可查；投影读回与 serializer 输出等价（L3 断言） | **已完成（2026-10-19）**：`worker/entity_graph_codec`（Qt-free 移植，几何载荷/区间/NURBS RLE/风险判定逐 case 保真；sat_fragment 内嵌裁剪为 fallback 标记 fine_grained/sat_asset——组件 SAT 已是独立内容寻址资产）；emit/import 两管线产出 graph.json（selftest 断言钉死 schema/root/拓扑计数）；组件库第三资产 kind=graph；v1_store 双实现投影接口（HAS_ENTITY + TOPOLOGY{rel_type} 统一边型 + 细档字段，幂等零写入）；commands/files commit 后写投影（root 临时 sid 重编为 SAT 哈希）；`/entities` 端点（label 大小写不敏感）；scene 组件带 graph 资产哈希。门禁全绿：后端 96 项（新增契约 7 + 真 ACIS 集成验收：cube 真拓扑 6 face/12 edge/8 vertex、label=face→plane+uv_range 细档、幂等不膨胀 + Neo4j L3 细档原生查询/Unknown 兜底/TOPOLOGY 边）；worker selftest、mesh_tests 175、Qt 客户端构建均绿。遗留：P6 前存量组件无投影（重导或重建脚本补齐，小任务） | 1-1.5 周 |
 | **P7 旧物拆除（原 P6，范围收缩）** | json-delta/旧 WS/旧 WebUI 端点与 `json_graph_store/json_collab/collaboration` 删除；Qt 客户端与 QtCore 依赖删除（core 换 nlohmann/std）；`entity_graph_deserializer` 随 v2 删（v3 组件恢复走 SAT restore），serializer 已于 P6 搬家保留；`neo4j_webui` 改造为 V1 模型+投影浏览（不随旧协议删除）；构建与部署脚本瘦身 | 构建无 Qt；仓库无旧协议代码；全部门禁绿；tag `v3` | **已完成（2026-10-19）**：后端删 json-delta 族/models/websocket/旧 projects 端点/sync/collaboration/json_collab/json_graph_store/crud/schemas/benchmarks/迁移脚本与 11 个 v2 测试；main 仅注册 /api/v1，`/health` 报 v3_server_authoritative，根路由直达 /web。C++ 删 Qt 客户端全套（core/ 18 + ui/ 11 + mainwindow/glwidget/window/main.cpp + images）与 v2 内核配件（deserializer/gme_mesh/gme_dump_object/access/acis_kernel/geometry_kernel/document_model/acis_sat_io）及 core_unit_tests/client_regression 等 v2 测试；vcxproj 重写 Qt-free（默认目标=dbcad_worker，DbcadAcis 工程合并，glfw/opengl/ws2_32 链接依赖去除），构建脚本/deploy 全栈脚本去 Qt（浏览器为唯一客户端，`-SkipBrowser` 可关）。webui 重写为 V1 模型（overview/projects/versions + `/components/{hash}/entity-graph` 投影图浏览，复用 SVG 渲染器；v2 历史 label 只读归档），存量组件投影全量补齐（13 组件 10 重建/3 幂等跳过）。门禁全绿：无 Qt 参数构建 worker selftest + mesh_tests 175、后端 34 项、Playwright e2e 真栈 5.6s、四个部署脚本语法解析通过 | 1-1.5 周 |
-| **P8 实体级增量（Phase D，论文第 5 章完整恢复）** | 组件内实体级 diff（内容寻址只写新实体节点）；generation 式版本回放（移植 D 栈 `generation_new_ptr/old_ptr` 不可变引用语义）；压实（后台合并连续微版本，控节点/边膨胀）；edit_intent 软锁与 409 几何冲突判定细化到实体级；为语义 diff（M4.5）与 AI 场景摘要供数据基础 | 改一个 face 半径的二次提交，新增实体节点数 ≈ 变更实体数；版本回放与全量图等价（L3 断言） | 2-3 周 |
+| **P8 实体级增量（Phase D，论文第 5 章完整恢复）** | 组件内实体级 diff（内容寻址只写新实体节点）；generation 式版本回放（移植 D 栈 `generation_new_ptr/old_ptr` 不可变引用语义）；压实（后台合并连续微版本，控节点/边膨胀）；edit_intent 软锁与 409 几何冲突判定细化到实体级；为语义 diff（M4.5）与 AI 场景摘要供数据基础 | 改一个 face 半径的二次提交，新增实体节点数 ≈ 变更实体数；版本回放与全量图等价（L3 断言） | 执行设计已展开（§4.1），子里程碑 P8.1–P8.6 约 2 周 |
 
-**P0–P5 已于 2026-10-18 完成；剩余 P6–P8 约 4.5–6 周。**实体级投影（P6）先于拆除（P7）是有意排序：serializer 搬家先行，P7 拆除范围随之收缩（见变更记录 2026-10-19）。P4 验收后旧客户端已事实退役，P7 物理清除。
+**P0–P7 已于 2026-10-19 完成（tag `v3`）；剩余 P8 约 2 周 + P9 收尾约 1 周。**
+
+### 4.1 P8 执行设计（2026-10-19 展开至可执行；Phase D 设计参照 STORAGE_CONSOLIDATION_PLAN §4）
+
+**目标回顾**：现在"改一个 face"产生新组件并全量重写其投影（60 节点级）；P8 后库内新增实体节点数 ≈ 真实变更实体数，且跨版本"同一实体"可追踪（generation 链）——D 栈 `generation_new_ptr/old_ptr` 不可变引用语义在 v3 存储模型上的移植。
+
+**A. 稳定实体身份（三层方案，成本递增、准确度互补）**
+
+1. **指针稳定性（零成本，主力）**：ACIS 变更实体时 backup 机制"copy 旧记录、改原记录"——**原实体指针跨命令不变**。变换类命令（translate/rotate/scale）后 worker 会话内的实体指针本身就是身份。worker 在命令前对受影响组件采集实体闭包（指针→graph node id 映射），命令后同指针即同实体。
+2. **Bulletin 映射（重构类命令）**：布尔/求交/去重会销毁与再造实体。ACIS 公告系统为每个 create/change/delete 记录 old/new 实体指针对（参考文献 04_公告系统）；worker 在 exec 前后采集 `surviving = old_ptr(∈命令前闭包) → new_ptr` 映射，换算成 graph node id 的 `prev_id` 链。
+3. **结构指纹匹配（兜底，跨会话）**：会话重建（版本切换后/服务重启）无历史可用时，对父/子组件两幅投影做结构匹配：`指纹 = f(label, 几何参数哈希, 拓扑度)`，贪心最大匹配；匹配不上即新实体。此层允许漏配（退化为全量节点，不损正确性）。
+
+**B. 数据模型变更（Neo4j，向后兼容）**
+
+- `V1Entity` 升级为**内容寻址**：`entity_key = sha256(规范化节点 JSON)`（labels+props，剥离 id/prev_id），MERGE 键从 `(component_hash, entity_id)` 改为 `entity_key`——同内容实体跨组件/跨版本共享同一节点（D 栈"不可变实体节点+内容寻址共享"原语）。
+- generation 链：`(e_new)-[:DERIVED_FROM {via_version}]->(e_old)`；`(V1Component)-[:HAS_ENTITY]->(V1Entity)` 保留（组件全量投影视图，P6 语义不变）。
+- 删除语义：不删节点（不可变），实体消亡 = 不再出现在新组件投影清单中；版本 v 的活实体集 = v 组件清单的投影并集（回放天然成立）。
+
+**C. 写入路径（网关侧，幂等）**
+
+`write_entity_projection` 升级：对每个 graph 节点算 `entity_key` → MERGE 复用或新增（新增才计数）；对带 `prev_id` 的节点连 `DERIVED_FROM`。组件已有投影的零写入判定改为"组件清单全部 entity_key 已存在且边完整"。验收计数口径 = 本命令新增 V1Entity 节点数。
+
+**D. edit_intent / 409 实体级**
+
+- WS edit_intent payload 增加可选 `entity_id`；前端从 /entities 或投影图取 id，徽标细化到"✏alice 正在编辑 face#n3"。
+- 409 判定升级：命令提交时经 dry-run 语义计算影响实体集合（`affected_entity_keys`），与 `(base, head]` 区间各版本新增实体沿 DERIVED_FROM 回溯的源头集合求交——非空即同实体并发，409 响应带 `conflicting_entities`。
+
+**E. 语义 diff 端点（M4.5 第一步）**
+
+`GET /api/v1/projects/{id}/diff?from=v&to=v2`：对两版本组件清单求交/差，输出实体级 `added/removed/derived` 分组（沿 DERIVED_FROM 链聚合），供前端叠加高亮与论文实验。只读端点，不改存储。
+
+**F. 压实（compaction）**
+
+连续微版本（同 author、短窗口、无标签/分支引用）由后台任务合并：沿 DERIVED_FROM 链取传递闭包短路中间节点（`e1→e2→e3` 压成 `e1→e3`），中间实体节点在无版本引用后由 Neo4j 定期清理（DetachDelete 孤立节点）。幂等、可重跑、保留标签版本不压。
+
+**子里程碑（每步门禁绿才进下一步）**
+
+| 子项 | 内容 | 验收 | 估时 |
+|---|---|---|---|
+| P8.1 | worker：命令前后闭包采集 + bulletin 映射 + graph 节点带 `prev_id`；结构指纹匹配器（网关 Python 侧） | selftest：translate 后同组件 prev_id 链全联通；布尔后 surviving 实体链非空 | 3-4 天 |
+| P8.2 | Neo4j：entity_key 内容寻址 MERGE + DERIVED_FROM 写入 + Memory 版同语义 | 契约测试：重复写幂等；共享实体节点数正确 | 2-3 天 |
+| P8.3 | **L3 验收断言**：真 ACIS 改一个 face（变换/布尔两场景），新增 V1Entity 数 ≈ 变更实体数（差 ≤ 结构性必要重写数）；回放与全量投影并集等价 | 集成测试钉死（论文实验口径） | 2 天 |
+| P8.4 | edit_intent entity_id + 409 conflicting_entities + `/diff` 端点 | 契约 + e2e（冲突横幅显示实体） | 2-3 天 |
+| P8.5 | 压实任务 + webui generation 链浏览 | 压实幂等；节点数单调不增 | 2 天 |
+| P8.6 | 全量门禁 + 文档（ARCHITECTURE §4 更新为增量模型）+ commit | 全绿 + 变更记录 | 0.5 天 |
+
+**风险**：bulletin 采集影响 worker 性能（对粗命令可忽略，采集本身 O(实体数)）；结构指纹匹配的误配（漏配安全、误配需 L3 等价断言拦截）；压实误删（仅清孤立节点 + 标签版本不压）。
+
+### 4.2 P9 收尾（P5 遗留清零，"彻底完美"清单）
+
+| 项 | 内容 | 估时 |
+|---|---|---|
+| STEP 导入 | `_deps` 引入授权 Interop；worker 加 `step` 命令（STEP→BODY）；`/files/import` 接受 STEP（与 SAT 同管线：组件+投影+版本） | 3-4 天 |
+| 大规模压测 | abc_cache 语料批量导入/查询/回放基准（万面模型 × N）：导入吞吐、投影写入放大、/entities 查询延迟、DERIVED_FROM 链深度；产出基准报告（docs/BENCHMARK_v3.md） | 2-3 天 |
+| 收官 | 全量门禁 + tag `v3.1` | 0.5 天 |
 
 ## 5. 风险与对策
 
@@ -146,3 +200,4 @@ FastAPI 网关（鉴权/限流/静态托管）
 - 2026-10-19 计划调整（ADR-3，实体级图存储保留）：**实体级图存储以投影层形态保留并提级**——新增 P6 实体级图投影（serializer 去 Qt 化搬入 worker，网关写 Neo4j `HAS_ENTITY` 投影，复用 Phase B"细"档物理表示）；原 P6 拆除顺延为 **P7** 且范围收缩（serializer 先搬家不删、deserializer 随 v2 删、`neo4j_webui` 改造为 V1 浏览）；新增 **P8** 实体级增量（接管 REFACTOR_PLAN M5 / Phase D，论文第 5 章完整恢复）。动因：实体级结构化存储是论文核心贡献（STORAGE_CONSOLIDATION_PLAN §2/§3"细"档目标）与协同细粒度（实体级 edit_intent/冲突判定/语义 diff）的数据基础，v3 组件级模型下应以投影形态延续而非丢弃。
 - 2026-10-19 P6 完成：Qt-free codec（`worker/entity_graph_codec`，uvsafe-topology-v5-bounded 逐 case 保真，sat_fragment 内嵌裁剪为 fallback 标记）；emit/import 管线 graph.json；组件库 graph 资产 kind；v1_store Memory/Neo4j 投影双实现（细档复用 json_graph_native，`HAS_ENTITY`+`TOPOLOGY{rel_type}`，幂等零写入，root 重编为组件哈希）；commands/files 触发投影写入；`GET /projects/{id}/entities`；scene 带 graph 哈希。门禁：后端 96 项全绿（含真 ACIS 集成验收与 Neo4j L3 细档查询）、worker selftest、mesh_tests 175、Qt 构建。经验证：ATTRIB 链在 ACIS 实体上是常态（v2 probe 基线同为 sat_fragment），fallback=sat_asset 是保真判定而非异常。
 - 2026-10-19 P7 完成（tag `v3`）：后端 v2 协议物理删除（json-delta 族/sync/collaboration/json_graph_store 族 + 11 个 v2 测试，`/health`=v3_server_authoritative，根路由直达 /web）；Qt 客户端与 QtCore 依赖物理删除（core/ui/mainwindow/glidget 等 + v2 内核配件，vcxproj Qt-free 化，默认目标=worker，DbcadAcis 合并、glfw 依赖去除）；neo4j_webui 改造为 V1 模型 + 实体投影浏览；部署链路去 Qt（fullstack=Neo4j+FastAPI+浏览器，two_clients 删除）；存量组件投影全量补齐。无 Qt 构建全绿（selftest + mesh_tests 175）、后端 34 项、Playwright e2e 真栈绿。遗留仅 P5 旧项：STEP 导入（Interop 已授权未接 _deps）与 abc_cache 大规模压测。
+- 2026-10-19 P8 执行设计展开（§4.1）：三层稳定实体身份（指针稳定性为主力——ACIS backup 机制下原实体指针跨命令不变；bulletin 映射覆盖布尔重构；结构指纹匹配兜底跨会话）；V1Entity 升级内容寻址（entity_key=规范化节点哈希，同内容跨组件/版本共享）+ DERIVED_FROM generation 链；子里程碑 P8.1–P8.6 约 2 周；另立 P9 收尾（§4.2：STEP 导入 + abc_cache 压测，"彻底完美"清单）。同日开工 P8.1。
