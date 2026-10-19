@@ -90,6 +90,8 @@ class GraphFakePool:
                 "vertices": 8,
             }
             return {"added": [entry], "modified": [], "removed": []}
+        if action == "component.delete":
+            return {"added": [], "modified": [], "removed": [command["params"]["component"]]}
         if action in ("component.translate", "component.rotate", "component.scale"):
             target = command["params"]["component"]
             match = next(c for c in components if c.hash_sat == target)
@@ -276,6 +278,83 @@ def test_identical_components_share_all_entities(client):
     # 两个组件的 /entities 视图各自完整
     total = client.get(f"/api/v1/projects/{project_id}/entities").json()
     assert total["count"] == 6  # 2 组件 × 3 实体（视图级不折叠）
+
+
+def test_diff_endpoint_reports_entity_level_changes(client):
+    """P8/Phase D：/diff 端点——组件与实体内容两级对比 + generation 链数。"""
+    client, _pool = client
+    project_id = client.post("/api/v1/projects", json={"name": "p8-diff"}).json()["id"]
+    created = _create(client, project_id, kind="cube")
+    target = created["components"][0]["sat"]
+    moved = client.post(
+        f"/api/v1/projects/{project_id}/commands",
+        json={"action": "component.translate", "params": {"component": target, "offset": [1, 0, 0]}},
+    ).json()
+
+    diff = client.get(
+        f"/api/v1/projects/{project_id}/diff", params={"from_v": 1, "to_v": 2}
+    ).json()
+    # 组件不可变：修改 = 新 hash 替换旧 hash（集合语义 added+removed）
+    assert diff["components"]["shared"] == 0
+    assert diff["components"]["added"] == [moved["components"][0]["sat"]]
+    assert diff["components"]["removed"] == [target]
+    assert diff["entities"]["added"] == moved["entity_projection"]["entity_added"]
+    assert diff["entities"]["removed"] >= 1  # 旧 face 内容退出 head 视图
+    assert diff["entities"]["shared"] >= 1  # 拓扑骨架共享
+    assert diff["derived_chains"] == moved["entity_projection"]["derived"]
+
+    missing = client.get(
+        f"/api/v1/projects/{project_id}/diff", params={"from_v": 1, "to_v": 99}
+    )
+    assert missing.status_code == 404
+
+
+def test_compact_removes_orphan_entities(client):
+    """P8.5 压实：版本淘汰旧组件后，其独有内容实体成孤魂，compact 清理且幂等。"""
+    client, _pool = client
+    project_id = client.post("/api/v1/projects", json={"name": "p8-compact"}).json()["id"]
+    created = _create(client, project_id, kind="cube")
+    target = created["components"][0]["sat"]
+    client.post(
+        f"/api/v1/projects/{project_id}/commands",
+        json={"action": "component.translate", "params": {"component": target, "offset": [1, 0, 0]}},
+    )
+    store = get_v1_store()
+    before = len(store.entity_nodes)
+
+    # 模拟版本淘汰：清掉对旧组件投影的引用（Memory 语义下即从清单移除投影）
+    store.entity_projections.pop(target)
+    removed = client.post("/api/v1/admin/compact-entities").json()["removed_entities"]
+    assert removed >= 1  # 旧 face 内容（唯一被旧组件引用）被清理
+    assert len(store.entity_nodes) == before - removed
+    # 幂等
+    again = client.post("/api/v1/admin/compact-entities").json()["removed_entities"]
+    assert again == 0
+
+
+def test_conflict_409_reports_conflicting_entities(client):
+    """P8/Phase D：stale_base_version 冲突响应带实体级 conflicting_entities。"""
+    client, _pool = client
+    project_id = client.post("/api/v1/projects", json={"name": "p8-409"}).json()["id"]
+    created = _create(client, project_id, kind="cube")
+    target = created["components"][0]["sat"]
+    # 他方删除该组件（head 前移），本地再以旧 base 提交 → 409
+    client.post(
+        f"/api/v1/projects/{project_id}/commands",
+        json={"action": "component.delete", "params": {"component": target}},
+    )
+    conflict = client.post(
+        f"/api/v1/projects/{project_id}/commands",
+        json={
+            "action": "component.translate",
+            "params": {"component": target, "offset": [1, 0, 0]},
+            "base_version": 1,
+        },
+    )
+    assert conflict.status_code == 409
+    detail = conflict.json()["detail"]
+    assert detail["conflicting_components"] == [target]
+    assert len(detail["conflicting_entities"]) == 3  # 组件投影的实体键
 
 
 class LegacyPoolNoGraph:

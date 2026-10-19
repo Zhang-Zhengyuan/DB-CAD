@@ -98,6 +98,8 @@ def test_contract_paths_are_frozen():
         "/api/v1/files/import",
         "/api/v1/schema/commands",
         "/api/v1/projects/{project_id}/entities",  # P6/ADR-3 实体级投影查询
+        "/api/v1/projects/{project_id}/diff",  # P8/Phase D 实体级版本对比
+        "/api/v1/admin/compact-entities",  # P8.5 压实（孤立实体清理）
     }
     missing = expected - paths
     assert not missing, f"v1 contract paths missing from OpenAPI: {missing}"

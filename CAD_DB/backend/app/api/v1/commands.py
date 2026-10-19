@@ -192,12 +192,20 @@ async def execute_command(project_id: str, payload: dict = Body(...)) -> dict:
         base_set = {c.hash_sat for c in base_row.components}
         gone = referenced & (base_set - head_set)  # base 时存在、head 已变更/删除
         if gone:
+            # P8/Phase D：冲突细化到实体级——列出被冲突组件在 head 投影中的
+            # 实体键（截断），前端可显示"alice 改了这些 face"。
+            conflicting_entities = [
+                e["entity_key"]
+                for e in store.query_entities(sorted(gone), label=None, limit=20)
+                if e.get("entity_key")
+            ]
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 {
                     "reason": "stale_base_version",
                     "current_head": head_number,
                     "conflicting_components": sorted(gone),
+                    "conflicting_entities": conflicting_entities,
                 },
             )
         rebased = True  # 引用未被变更：自动前移到 head 执行

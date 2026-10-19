@@ -52,6 +52,8 @@ async def events(websocket: WebSocket) -> None:
                 kind = message.get("type")
                 if kind == "edit_intent":
                     for project_id in project_ids:
+                        # P8/Phase D：component 必填，entity_id 可选——软锁粒度
+                        # 细化到"谁在编辑哪个 face"（实体 id 来自 /entities 或投影图）。
                         intents = hub.set_intent(project_id, user, message.get("component"))
                         hub.publish(
                             project_id,
@@ -59,6 +61,7 @@ async def events(websocket: WebSocket) -> None:
                             {
                                 "user": user,
                                 "component": message.get("component"),
+                                "entity_id": message.get("entity_id"),
                                 "intents": intents,
                             },
                         )

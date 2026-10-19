@@ -150,6 +150,36 @@ class MemoryV1Store:
     def has_entity_projection(self, component_hash: str) -> bool:
         return component_hash in self.entity_projections
 
+    def count_derived_chains(self, component_hashes: list[str]) -> int:
+        """指定组件清单内触达的 DERIVED_FROM 链数（diff 报表用；父可在清单外
+        ——generation 语义就是新内容链向旧内容）。"""
+        keys = {
+            node.get("entity_key")
+            for h in component_hashes
+            if (proj := self.entity_projections.get(h))
+            for node in proj["nodes"]
+        }
+        return sum(1 for child in self.derived_from if child in keys)
+
+    def compact_orphan_entities(self) -> int:
+        """压实（P8.5）：清理不再被任何组件投影引用的实体节点与链。
+        组件不可变但版本链会淘汰引用——被淘汰内容的实体成为孤立节点。
+        幂等，可定期重跑。返回清理的实体节点数。"""
+        referenced = {
+            node.get("entity_key")
+            for proj in self.entity_projections.values()
+            for node in proj["nodes"]
+        }
+        orphans = [k for k in self.entity_nodes if k not in referenced]
+        for key in orphans:
+            self.entity_nodes.pop(key, None)
+        self.derived_from = {
+            child: parents
+            for child, parents in self.derived_from.items()
+            if child in referenced
+        }
+        return len(orphans)
+
     def query_entities(
         self,
         component_hashes: list[str],
@@ -172,6 +202,7 @@ class MemoryV1Store:
                     {
                         "component": component_hash,
                         "id": str(node.get("id", "")),
+                        "entity_key": str(node.get("entity_key", "")),
                         "labels": labels,
                         "props": node.get("props", {}),
                     }
@@ -582,6 +613,27 @@ class Neo4jV1Store(MemoryV1Store):
             ).single()
             return hit is not None
 
+    def count_derived_chains(  # type: ignore[override]
+        self, component_hashes: list[str]
+    ) -> int:
+        with self._driver.session(database=self._database) as session:
+            row = session.run(
+                "MATCH (a:V1Entity)-[d:DERIVED_FROM]->(b:V1Entity) "
+                "WHERE d.via_component IN $hashes RETURN count(d) AS n",
+                hashes=list(component_hashes),
+            ).single()
+            return int(row["n"]) if row else 0
+
+    def compact_orphan_entities(  # type: ignore[override]
+        self,
+    ) -> int:
+        with self._driver.session(database=self._database) as session:
+            row = session.run(
+                "MATCH (e:V1Entity) WHERE NOT EXISTS { MATCH ()-[:HAS_ENTITY]->(e) } "
+                "DETACH DELETE e RETURN count(e) AS n"
+            ).single()
+            return int(row["n"]) if row else 0
+
     def query_entities(  # type: ignore[override]
         self,
         component_hashes: list[str],
@@ -593,7 +645,9 @@ class Neo4jV1Store(MemoryV1Store):
         clause = "MATCH (c:V1Component)-[:HAS_ENTITY]->(e:V1Entity) WHERE c.hash_sat IN $hashes"
         if label:
             clause += " AND $needle IN [l IN labels(e) | toUpper(l)]"
-        clause += " RETURN c.hash_sat AS component, e.entity_id AS id, e.labels_json AS labels_json, e.props_json AS props_json ORDER BY component, id LIMIT $limit"
+        clause += (" RETURN c.hash_sat AS component, e.entity_id AS id, e.entity_key AS entity_key,"
+                   " e.labels_json AS labels_json, e.props_json AS props_json"
+                   " ORDER BY component, id LIMIT $limit")
         with self._driver.session(database=self._database) as session:
             rows = session.run(
                 clause,
@@ -609,7 +663,13 @@ class Neo4jV1Store(MemoryV1Store):
             except (TypeError, ValueError):
                 labels, props = [], {}
             results.append(
-                {"component": row["component"], "id": row["id"], "labels": labels, "props": props}
+                {
+                    "component": row["component"],
+                    "id": row["id"],
+                    "entity_key": str(row.get("entity_key", "")),
+                    "labels": labels,
+                    "props": props,
+                }
             )
         return results
 
