@@ -205,6 +205,12 @@ void delEntityList(ENTITY_LIST& list) {
     for (ENTITY* ent = list.first(); ent; ent = list.next()) delEntity(ent);
 }
 
+// P8.1：命令前对受影响组件采集闭包（指针→旧投影 node id）。
+void collectPrevClosures(const std::vector<ComponentRef*>& refs,
+                         std::unordered_map<const void*, std::string>& out) {
+    for (const ComponentRef* ref : refs) collectTopologyClosure(*ref->entity, ref->sid, out);
+}
+
 }  // namespace
 
 GeometrySession::GeometrySession(std::string spoolDir) : spoolDir_(std::move(spoolDir)) {}
@@ -234,7 +240,8 @@ std::string GeometrySession::open(const std::vector<std::pair<std::string, std::
     return "";
 }
 
-std::string GeometrySession::emitComponent(ComponentRef& component, bool added) {
+std::string GeometrySession::emitComponent(ComponentRef& component, bool added,
+                                           const std::unordered_map<const void*, std::string>* prevIds) {
     const fs::path satPath = fs::path(spoolDir_) / (component.sid + ".sat");
     ENTITY_LIST single;
     single.add(component.entity);
@@ -266,12 +273,17 @@ std::string GeometrySession::emitComponent(ComponentRef& component, bool added) 
     (void)added;
     // 实体图投影（P6/ADR-3）：codec 移植自 v2 serializer，SAT 资产由上面的
     // saveEntityList 独立承载，graph.json 只含结构 + fallback 覆盖标记。
+    // prevIds（P8.1）：命令前闭包，ACIS backup 语义下变更实体的原指针
+    // 跨命令不变，同指针即同实体 → props.prev_id generation 链。
     json graph;
     try {
-        graph = serializeEntityGraph(component.sid, *component.entity);
+        graph = serializeEntityGraph(component.sid, *component.entity, prevIds);
     } catch (const std::exception& error) {
         throw CommandError(std::string("graph emit failed for ") + component.sid + ": " + error.what());
     }
+    int identityChains = 0;
+    for (const auto& node : graph.value("nodes", json::array()))
+        if (node.value("props", json::object()).contains("prev_id")) identityChains++;
     {
         std::ofstream stream(fs::path(spoolDir_) / (component.sid + ".graph.json"), std::ios::binary);
         const std::string text = graph.dump();
@@ -285,6 +297,7 @@ std::string GeometrySession::emitComponent(ComponentRef& component, bool added) 
     emit["glb"] = component.sid + ".glb";
     emit["graph"] = component.sid + ".graph.json";
     emit["graph_nodes"] = graph.value("nodes", json::array()).size();
+    emit["identity_chains"] = identityChains;
     emit["graph_fallback"] = [&] {
         for (const auto& node : graph.value("nodes", json::array()))
             if (node.value("props", json::object()).value("fallback", "") == "sat_asset") return "sat_asset";
@@ -339,6 +352,8 @@ std::string GeometrySession::exec(const std::string& commandJson) {
     if (action == "component.translate" || action == "component.rotate" || action == "component.scale") {
         ComponentRef* component = find(params.value("component", ""));
         if (!component) throw CommandError("unknown component sid");
+        std::unordered_map<const void*, std::string> closure;
+        collectPrevClosures({component}, closure);
         SPAtransf transform;
         if (action == "component.translate") {
             const SPAposition offset = vec3(params.at("offset"), "offset");
@@ -353,7 +368,7 @@ std::string GeometrySession::exec(const std::string& commandJson) {
             transform = scale_transf(factor);
         }
         bakeTransform(component->entity, transform);
-        result["modified"].push_back(json::parse(emitComponent(*component, false)));
+        result["modified"].push_back(json::parse(emitComponent(*component, false, &closure)));
         return result.dump();
     }
 
@@ -376,6 +391,8 @@ std::string GeometrySession::exec(const std::string& commandJson) {
             throw CommandError("boolean needs two distinct components");
         ComponentRef* target = find(params.at("targets")[0].get<std::string>());
         if (!target) throw CommandError("unknown target component sid");
+        std::unordered_map<const void*, std::string> closure;
+        collectPrevClosures({target, tool}, closure);
         ENTITY_LIST temporary;
         BODY* output = nullptr;
         BOOL_TYPE operation = action == "boolean.unite" ? UNION
@@ -400,7 +417,7 @@ std::string GeometrySession::exec(const std::string& commandJson) {
             if (components_[(size_t)i].sid == toolSid)
                 components_.erase(components_.begin() + i);
         result["removed"].push_back(toolSid);
-        result["modified"].push_back(json::parse(emitComponent(*find(survivorSid), false)));
+        result["modified"].push_back(json::parse(emitComponent(*find(survivorSid), false, &closure)));
         return result.dump();
     }
 
@@ -418,6 +435,8 @@ std::string GeometrySession::exec(const std::string& commandJson) {
             bodies.push_back(toBody(component->entity, temporary));
         }
         std::vector<bool> removed(bodies.size(), false);
+        std::unordered_map<const void*, std::string> closure;
+        collectPrevClosures(refs, closure);
         for (size_t i = 0; i < bodies.size(); ++i) {
             for (size_t j = 0; j < bodies.size(); ++j) {
                 if (i == j || removed[i] || removed[j]) continue;
@@ -435,7 +454,7 @@ std::string GeometrySession::exec(const std::string& commandJson) {
             if (removed[i]) {
                 result["removed"].push_back(refs[i]->sid);
             } else {
-                result["modified"].push_back(json::parse(emitComponent(*refs[i], false)));
+                result["modified"].push_back(json::parse(emitComponent(*refs[i], false, &closure)));
             }
         }
         delEntityList(temporary);

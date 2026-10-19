@@ -11,6 +11,7 @@
 // 新建组件 sid 由会话分配（n0, n1…），网关以发射的新 SAT 哈希为准重编。
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -55,7 +56,10 @@ private:
     int nextNewSid_ = 0;
 
     ComponentRef* find(const std::string& sid);
-    std::string emitComponent(ComponentRef& component, bool added);
+    // prevIds：命令前组件闭包（P8/Phase D 稳定身份），emit 的 graph 节点
+    // 携带 prev_id generation 链；空指针 = 新组件无前驱。
+    std::string emitComponent(ComponentRef& component, bool added,
+                              const std::unordered_map<const void*, std::string>* prevIds = nullptr);
 };
 
 }  // namespace dbcad::worker

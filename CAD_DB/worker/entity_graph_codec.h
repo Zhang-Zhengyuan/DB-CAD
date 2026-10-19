@@ -12,6 +12,7 @@
 //     消费方诚实判定细粒度覆盖率。
 //   - root 节点 id/uuid = 组件 sid（v2 为客户端 ETI uuid 记账表）。
 #include <string>
+#include <unordered_map>
 
 #include "vendor/nlohmann/json.hpp"
 
@@ -24,6 +25,21 @@ namespace dbcad::worker {
 //    "nodes":[{"id","labels","props"}...],"rels":[{"type","start","end"}...]}
 // root props 额外携带 top_level/uuid/fallback/topology_node_count/
 // topology_rel_count。失败抛 std::runtime_error（错误显式，不静默兜底）。
-nlohmann::json serializeEntityGraph(const std::string& componentSid, ENTITY& root);
+//
+// prevIds（P8/Phase D 稳定实体身份）：命令前组件闭包的
+// 实体指针 → 该实体在命令前投影中的 node id。序列化时同指针同类型
+// 的节点携带 props.prev_id（generation 链，供网关连 DERIVED_FROM）。
+nlohmann::json serializeEntityGraph(
+    const std::string& componentSid,
+    ENTITY& root,
+    const std::unordered_map<const void*, std::string>* prevIds = nullptr);
+
+// 拓扑闭包采集（P8.1）：BFS 枚举 root 可达的全部拓扑实体，
+// 输出 指针 → node id（genNodeId 语义，与 serializeEntityGraph 一致）。
+// 命令前采集、命令后随新投影比对，即得跨命令实体身份。
+// 注意：children 枚举与 serializeEntityGraph 主 BFS 保持同步
+// （selftest 断言 closure 数 == graph 节点数 守门）。
+void collectTopologyClosure(ENTITY& root, const std::string& componentSid,
+                            std::unordered_map<const void*, std::string>& out);
 
 }  // namespace dbcad::worker

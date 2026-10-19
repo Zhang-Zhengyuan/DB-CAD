@@ -31,6 +31,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <queue>
 #include <stack>
 #include <stdexcept>
@@ -38,11 +39,12 @@
 #include <unordered_set>
 #include <vector>
 
-#ifdef DBCAD_GRAPH_TRACE
-#define GRAPH_TRACE(...) std::fprintf(stderr, "[graph] " __VA_ARGS__)
-#else
-#define GRAPH_TRACE(...) ((void)0)
-#endif
+// 调试开关：设 DBCAD_GRAPH_TRACE=1 时输出投影/身份诊断到 stderr。
+#define GRAPH_TRACE(...)                                    \
+    do {                                                    \
+        if (std::getenv("DBCAD_GRAPH_TRACE"))               \
+            std::fprintf(stderr, "[graph] " __VA_ARGS__);   \
+    } while (0)
 
 namespace dbcad::worker {
 namespace {
@@ -448,7 +450,8 @@ bool nodeRisky(const IntNode& n, ENTITY* en) {
 
 }  // namespace
 
-json serializeEntityGraph(const std::string& componentSid, ENTITY& rootEntity) {
+json serializeEntityGraph(const std::string& componentSid, ENTITY& rootEntity,
+                          const std::unordered_map<const void*, std::string>* prevIds) {
     using namespace codec;
 
     json nodesJson = json::array();
@@ -870,6 +873,15 @@ json serializeEntityGraph(const std::string& componentSid, ENTITY& rootEntity) {
         default:
             continue;
         }
+
+        // P8/Phase D 稳定身份：同指针同类型 ⇒ 命令前的同一实体，携带
+        // prev_id（generation 链；root 的 sid 在 modified 语义下不变，
+        // prev==自身时跳过）。default 分支已 continue，back() 必为本轮 push。
+        if (prevIds) {
+            auto pit = prevIds->find(ePtr);
+            if (pit != prevIds->end() && pit->second != ptrToId[ePtr])
+                orderedNodes.back().second.props["prev_id"] = pit->second;
+        }
     }
 
     // 第二遍：构建关系（DFS，同 v2）。
@@ -1090,6 +1102,20 @@ json serializeEntityGraph(const std::string& componentSid, ENTITY& rootEntity) {
         }
     }
 
+    // P8.1 诊断汇总（DBCAD_GRAPH_TRACE=1）：同会话内指针派生 id 跨命令稳定
+    //（ACIS backup 语义：变更实体保留原指针），prev==cur 属预期常态；
+    // prev_id 显式链仅在跨会话/跨组件（指针全换）时出现。
+    if (prevIds) {
+        int matched = 0, chained = 0;
+        for (const auto& pr : orderedNodes)
+            if (prevIds->count(pr.first)) {
+                matched++;
+                if (pr.second.props.contains("prev_id")) chained++;
+            }
+        GRAPH_TRACE("identity: nodes=%zu matched_prev=%d explicit_chains=%d\n",
+                    orderedNodes.size(), matched, chained);
+    }
+
     const size_t rootNodeCount = orderedNodes.size();
     const size_t rootRelCount = relsJson.size();
 
@@ -1113,6 +1139,108 @@ json serializeEntityGraph(const std::string& componentSid, ENTITY& rootEntity) {
     GRAPH_TRACE("serializeEntityGraph: sid=%s nodes=%zu rels=%zu fallback=%s\n", componentSid.c_str(),
                 rootNodeCount, rootRelCount, risky ? "sat_asset" : "fine_grained");
     return root;
+}
+
+void collectTopologyClosure(ENTITY& rootEntity, const std::string& componentSid,
+                            std::unordered_map<const void*, std::string>& out) {
+    // children 枚举必须与 serializeEntityGraph 主 BFS 保持一致
+    //（selftest 断言 closure 数 == graph 节点数 守门）。
+    std::queue<ENTITY*> queue;
+    std::unordered_set<const void*> visited;
+    queue.push(&rootEntity);
+    visited.insert(&rootEntity);
+    out[static_cast<const void*>(&rootEntity)] = componentSid;
+    auto enqueueChild = [&](ENTITY* child) {
+        if (child && visited.insert(child).second) {
+            out[static_cast<const void*>(child)] = genNodeId(child, child->identity(1));
+            queue.push(child);
+        }
+    };
+    while (!queue.empty()) {
+        ENTITY* e = queue.front();
+        queue.pop();
+        if (!e) continue;
+        switch (e->identity(1)) {
+        case BODY_ID: {
+            BODY* body = (BODY*)e;
+            enqueueChild((ENTITY*)body->lump());
+            enqueueChild((ENTITY*)body->wire());
+            enqueueChild((ENTITY*)body->transform());
+            break;
+        }
+        case LUMP_ID: {
+            LUMP* lump = (LUMP*)e;
+            enqueueChild((ENTITY*)lump->shell());
+            enqueueChild((ENTITY*)lump->next());
+            enqueueChild((ENTITY*)lump->body());
+            break;
+        }
+        case SHELL_ID: {
+            SHELL* shell = (SHELL*)e;
+            enqueueChild((ENTITY*)shell->next());
+            enqueueChild((ENTITY*)shell->face());
+            enqueueChild((ENTITY*)shell->wire());
+            enqueueChild((ENTITY*)shell->lump());
+            enqueueChild((ENTITY*)shell->subshell());
+            break;
+        }
+        case SUBSHELL_ID: {
+            SUBSHELL* ss = (SUBSHELL*)e;
+            enqueueChild((ENTITY*)ss->parent());
+            enqueueChild((ENTITY*)ss->sibling());
+            enqueueChild((ENTITY*)ss->child());
+            enqueueChild((ENTITY*)ss->face());
+            enqueueChild((ENTITY*)ss->wire());
+            break;
+        }
+        case WIRE_ID: {
+            WIRE* wire = (WIRE*)e;
+            enqueueChild((ENTITY*)wire->next());
+            enqueueChild((ENTITY*)wire->coedge());
+            enqueueChild((ENTITY*)wire->subshell());
+            enqueueChild((ENTITY*)wire->owner());
+            break;
+        }
+        case FACE_ID: {
+            FACE* face = (FACE*)e;
+            enqueueChild((ENTITY*)face->next());
+            enqueueChild((ENTITY*)face->loop());
+            enqueueChild((ENTITY*)face->shell());
+            break;
+        }
+        case LOOP_ID: {
+            LOOP* loop = (LOOP*)e;
+            enqueueChild((ENTITY*)loop->next());
+            enqueueChild((ENTITY*)loop->start());
+            enqueueChild((ENTITY*)loop->face());
+            break;
+        }
+        case COEDGE_ID: {
+            COEDGE* co = (COEDGE*)e;
+            enqueueChild((ENTITY*)co->next());
+            enqueueChild((ENTITY*)co->previous());
+            enqueueChild((ENTITY*)co->partner());
+            enqueueChild((ENTITY*)co->edge());
+            enqueueChild((ENTITY*)co->owner());
+            break;
+        }
+        case EDGE_ID: {
+            EDGE* edge = (EDGE*)e;
+            enqueueChild((ENTITY*)edge->start());
+            enqueueChild((ENTITY*)edge->end());
+            enqueueChild((ENTITY*)edge->coedge());
+            break;
+        }
+        case VERTEX_ID: {
+            VERTEX* vtx = (VERTEX*)e;
+            enqueueChild((ENTITY*)vtx->edge());
+            break;
+        }
+        case TRANSFORM_ID:
+        default:
+            break;
+        }
+    }
 }
 
 }  // namespace dbcad::worker
