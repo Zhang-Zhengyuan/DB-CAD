@@ -1,30 +1,32 @@
 # 项目上下文与按需导航
 
-核对日期：2026-10-18。本文是定位索引，实际源码、锁文件、构建文件与当前 CI 是事实来源；历史设计稿描述的目标不等于已实现。模块路径或命令变化时同 PR 更新本索引。
+核对日期：2026-10-19（v3.2）。本文是定位索引，实际源码、锁文件、构建文件与当前 CI 是事实来源；历史设计稿描述的目标不等于已实现。模块路径或命令变化时同 PR 更新本索引。
 
-## 运行链路
+## 运行链路（v3 服务端权威）
 
-`Qt UI → GeometryKernel/文档状态 → 组件 JSON + SAT → FastAPI → Neo4j JsonGraphVersion`。
-HTTP 负责写入/Pull；WS 通知远端版本与在线成员。后端存储 SAT 片段但不解释几何，不需要 ACIS。每个组件按 UUID 恢复，重建失败不能提交半成品给 UI。
+`浏览器（React + three.js 薄客户端）→ FastAPI 网关 → ACIS worker（C++，每项目一进程，命令串行队列即版本链，ADR-2）`。
 
-客户端有 `CAD_DB.vcxproj` 和 `DbcadAcis.vcxproj` 两个目标。当前为编译时 ACIS 适配，尚无第二几何内核、运行时插件和完整无 SDK 客户端构建。Window 仍协调编辑与历史。
+几何真相 = SAT 资产（内容寻址，sha256）；GLB 网格与实体图投影是派生索引（ADR-3）。后端不解释几何，ACIS 只存在于 worker 进程。浏览器只消费 JSON + GLB，撤销/重做/布尔等命令全部回传服务端执行。Qt 客户端已移除（tag `v3` 前的架构见 `docs/history/`）。
 
 ## 从需求到源码
 
 | 需求 | 先定位 | 再读 / 验证 |
 |---|---|---|
-| 菜单、文档、编辑、保存/Pull | `CAD_DB/ui/`、`window.cpp`、`mainwindow.h` | `docs/ARCHITECTURE.md`、`docs/KERNEL_ISOLATION.md`；客户端回归 |
-| 网络、会话、冲突 | `backend_api_client.*`、`collab_session.*`、`ui/mainwindow_json.cpp` | `docs/HYBRID_COLLABORATION.md`；前后端同步验证 |
-| 几何接口、生命周期、渲染 | `kernel/geometry_kernel.h`、`model_types.h`、`document_model.h`、`acis_kernel.cpp`、`glwidget.cpp` | `docs/KERNEL_ISOLATION.md`、`docs/ACIS_2026_MIGRATION.md` |
-| 组件 JSON/SAT 编解码 | `entity_graph_serializer.cpp`、`entity_graph_deserializer.cpp`、`storage/` | `docs/HYBRID_COLLABORATION.md`、`docs/ENTITY_STORAGE_TEST_PLAN.md`；往返和失败恢复 |
-| HTTP/WS 协议 | `backend/app/api/`、`schemas.py`、`json_collab.py`、`collaboration/` | `CAD_DB/backend/README.md`、`backend/tests/test_json*` |
-| Neo4j 版本与组件复用 | `backend/app/json_graph_store.py`、`neo4j_store.py` | 组件闭包/冲突/真实数据库集成检查 |
-| WebUI | `backend/app/neo4j_webui/`、`static/webui/` | `backend/tests/test_webui_audit.py`；鉴权与页面人工验证 |
-| 本机环境、构建依赖 | `scripts/check-environment.ps1`、`build.ps1`、`Directory.Build.props` | `docs/GETTING_STARTED.md`、`DEPENDENCIES.md`、`LOCAL_SETUP.md` |
-| 部署和打包 | `CAD_DB/deploy/`、`deploy/lib/` | `CAD_DB/DEPLOYMENT.md`、`scripts/tests/test-deploy-*.ps1` |
-| 旧库兼容 / PostgreSQL 实验 | `storage/`、`neo4j.cpp`、`pg_*`、`ui/mainwindow_postgres.cpp` | `docs/ARCHITECTURE.md`、`CAD_DB/deploy/README.md`；先核实真实入口 |
+| 前端渲染、视图、组件树 | `web/src/Viewer.tsx`、`App.tsx`、`store.ts`、`api.ts` | `web/package.json`；`node scripts/showcase.cjs` 真浏览器截图 |
+| HTTP API（项目/版本/命令/资产/实体） | `CAD_DB/backend/app/api/v1/` | `backend/tests/test_api_v1_*.py` |
+| 几何命令执行（ACIS worker） | `CAD_DB/worker/main.cpp`、`session.cpp` | `docs/ARCHITECTURE.md`；`tests/test_v1_real_commands_integration.py` |
+| STEP/SAT 导入、导出 | `worker/main.cpp`（loadModel 分发）、`backend/app/worker_client.py` | `tests/test_v1_step_import_integration.py` |
+| 网格提取与 GLB | `CAD_DB/kernel/mesh_extractor.cpp`、`glb_writer.cpp` | `docs/P0_MESH_BENCH.md`；`web/scripts/validate-assets.mjs` |
+| 实体图序列化（细档） | `CAD_DB/worker/entity_graph_codec.cpp` | `docs/ARCHITECTURE.md` ADR-3；`tests/test_v1_projection_neo4j.py` |
+| 版本链/组件/实体存储 | `backend/app/v1_store.py`、`entity_projection.py`、`component_store.py` | `tests/test_api_v1_entities.py`（/diff、409 冲突、压实） |
+| 细档 Neo4j 物理表示 | `backend/app/json_graph_native.py` | `docs/history/STORAGE_CONSOLIDATION_PLAN.md`（出处） |
+| 事件推送/在场感知 | `backend/app/events_hub.py`、`api/v1/events.py` | `docs/ARCHITECTURE.md` §协同 |
+| Neo4j 管理 WebUI | `backend/app/neo4j_webui/`、`static/webui/` | 鉴权与页面人工验证 |
+| 压测与基准 | `backend/scripts/benchmark_v3.py` | `docs/BENCHMARK_v3.md`（ABC 200 样本） |
+| 本机环境、构建依赖 | `scripts/check-environment.ps1`、`build.ps1`、`Directory.Build.props` | `docs/GETTING_STARTED.md`、`DEPENDENCIES.md` |
+| 部署和打包 | `CAD_DB/deploy/`、`deploy/lib/` | `CAD_DB/DEPLOYMENT.md`、`scripts/tests/`（PR 策略检查） |
 
-表内省略 `CAD_DB/` 的客户端路径均相对此目录；backend 路径相对 `CAD_DB/`。不确定文件名先限定目录用 `rg --files` 查找。
+表内 backend 路径相对 `CAD_DB/`。不确定文件名先限定目录用 `rg --files` 查找。
 
 ## 不要默认读取的内容
 

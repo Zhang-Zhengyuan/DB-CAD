@@ -8,11 +8,17 @@
 generation 链（改一个 face → 仅新 face 入库并指向父版本 face）。
 """
 
+import secrets
+
 import pytest
 
 from app.config import settings
 
 pytestmark = pytest.mark.integration
+
+# entity_key 全局内容寻址：裸 body 等平凡实体的键与库中任何真实模型同键。
+# 夹具实体带随机盐，added/shared 断言才不依赖数据库的当前内容。
+_SALT = secrets.token_hex(8)
 
 
 def _store_or_skip():
@@ -46,6 +52,7 @@ def _graph() -> dict:
                     "top_level": True,
                     "uuid": "temp-root",
                     "fallback": "fine_grained",
+                    "probe_salt": _SALT,
                 },
             },
             {
@@ -55,6 +62,7 @@ def _graph() -> dict:
                     "entity_type": "face",
                     "sense": 1,
                     "geometry": {"type": "plane", "normal": [0.0, 0.0, 1.0]},
+                    "probe_salt": _SALT,
                 },
             },
             {
@@ -64,12 +72,13 @@ def _graph() -> dict:
                     "entity_type": "face",
                     "sense": 0,
                     "geometry": {"type": "sphere", "radius": 4.0},
+                    "probe_salt": _SALT,
                 },
             },
             {
                 "id": "n3",
                 "labels": ["weird_type"],
-                "props": {"entity_type": "weird_type", "payload": {"deep": [1, 2]}},
+                "props": {"entity_type": "weird_type", "payload": {"deep": [1, 2]}, "probe_salt": _SALT},
             },
         ],
         "rels": [
@@ -89,6 +98,7 @@ def _modified_graph() -> dict:
                 "entity_type": "face",
                 "sense": 1,
                 "geometry": {"type": "cone", "sine_angle": 0.5},
+                "probe_salt": _SALT,
             }
     return graph
 

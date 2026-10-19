@@ -1,5 +1,7 @@
 # 内核隔离与替换指南
 
+> 2026-10-19 头注（v3.2）：隔离边界已从"DbcadAcis 静态库"升级为 **worker 进程隔离**——ACIS 只存在于 `dbcad_worker.exe`（许可初始化 `CAD_DB/acis.cpp`，命令执行 `worker/`，网格 `kernel/`），网关与浏览器不接触内核类型。本文主体为 v2 时期（2026-10-17，基线 `ad93c4c`）的设计与 issue #4 验收记录，保留其设计取舍与迁移论证；文中 Qt/DbcadAcis/access.cpp 等结构按 `docs/history/` 同期背景理解。接入第二内核时读本文论证 + 当前 v3 边界。
+
 > 2026-10-18 头注：`access.cpp` 现仅保留 SAT 文件存取；`storage/`、`neo4j.cpp/hxx`、`kernel/legacy_storage.h` 已在架构 v2 清理中删除（tag：`legacy/pre-architecture-v2`），下表相关行按此理解。
 
 本文解释当前实现，供维护、评审和后续内核适配使用。核对日期：2026-10-17；代码基线：`fix/acis-kernel-isolation` / `ad93c4c`，另含同日评审修复（依赖自供给、回归脚本 PS 5.1 兼容、mesh 追踪默认静默）。后续代码变更应同步更新本文。
@@ -21,7 +23,7 @@
 
 核对隔离本身时用 `git diff 402136c..ad93c4c`；核对协作收敛与隔离的整体变化时用 `git diff 2f2c6f6..ad93c4c`。不要用外层旧副本代表本分支。
 
-[设计方案](KERNEL_ISOLATION_DESIGN_20261016.md)、[首次实现记录](KERNEL_ISOLATION_IMPLEMENTATION_20261016.md)和[后续修复记录](KERNEL_ISOLATION_FIX_20261016.md)保留阶段背景；本文描述当前边界与未完成项。
+[设计方案](history/KERNEL_ISOLATION_DESIGN_20261016.md)、[首次实现记录](history/KERNEL_ISOLATION_IMPLEMENTATION_20261016.md)和[后续修复记录](history/KERNEL_ISOLATION_FIX_20261016.md)保留阶段背景；本文描述当前边界与未完成项。
 
 ## 2. 依赖方向与文件职责
 
@@ -92,7 +94,7 @@ Push 只编码变更的顶级组件，encodeGraph 在适配器内部生成当前
 
 风险识别覆盖未知几何、属性链、部分过程曲面和缺失必要曲线载荷等。当前并未对每次成功的 JSON 重建全面验证几何等价，因此“携带 SAT”不等于任意静默失真都会自动被识别。保真声明应限于已有测试证据；后续应增加细粒度可信范围、合法性检查和适用的几何/属性校验。
 
-远端几何作为导入对象替换旧构造配方；目前不传输完整参数化编辑历史，也不支持同一 Body 不同面的自动无冲突合并。详见 [统一协作链路](HYBRID_COLLABORATION.md)。
+远端几何作为导入对象替换旧构造配方；目前不传输完整参数化编辑历史，也不支持同一 Body 不同面的自动无冲突合并。详见 [统一协作链路](history/HYBRID_COLLABORATION.md)。
 
 ## 6. 允许保留的 ACIS 专用模块与数据兼容
 
@@ -156,6 +158,6 @@ Qt 类型是当前接口的依赖，接口不是无 Qt 的通用 SDK。现有最
 .\scripts\tests\run-client-regression.ps1 -Configuration Debug
 ```
 
-脚本会构建并短暂显示测试窗口、启动本机临时测试服务，日志输出至 artifacts。后端与几何专项验证范围见 [修复记录](KERNEL_ISOLATION_FIX_20261016.md) 和 [统一协作链路说明](HYBRID_COLLABORATION.md)。
+脚本会构建并短暂显示测试窗口、启动本机临时测试服务，日志输出至 artifacts。后端与几何专项验证范围见 [修复记录](history/KERNEL_ISOLATION_FIX_20261016.md) 和 [统一协作链路说明](history/HYBRID_COLLABORATION.md)。
 
 建议分阶段补齐：先确认本文与 issue 的范围，建立业务依赖门禁及无 SDK 测试目标；再明确失败/单位/能力契约并映射语义测试；随后完成第二适配器最小闭环和旧数据兼容方案；最后补真实数据库与双客户端回归。性能优化依据包大小、快照内存及数据库增长实测推进。

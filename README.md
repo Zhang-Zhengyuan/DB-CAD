@@ -1,12 +1,12 @@
 # DBCAD — 多人协作 CAD 数据库系统
 
-Qt/C++ CAD 桌面客户端，使用 ACIS 几何内核、FastAPI 服务与 Neo4j 存储。支持几何建模、版本化存取与多人协作。
+服务端权威（server-authoritative）的多人协作 CAD：几何计算在服务端 C++ ACIS worker 执行，FastAPI 网关管理命令队列与版本链，Neo4j 存储 SAT/GLB 资产与实体级图投影，浏览器（React + three.js）是唯一客户端。参照 Onshape 的架构分层，文件被数据库替代。
 
 ## 新成员上手
 
 使用 coding agent 前先读 [AGENTS.md](AGENTS.md)；团队按 [Issue → 分支 → 验证 → PR → 人工审核](docs/ai/WORKFLOW.md) 协作。项目按需导航见 [AI 项目地图](docs/ai/PROJECT_CONTEXT.md)。
 
-完整步骤见 [复现与部署指南](docs/GETTING_STARTED.md)。客户端需要授权 ACIS SDK 与配套依赖；源码不包含 SDK。依赖布局见 [依赖说明](docs/DEPENDENCIES.md)；SDK 已迁移到官方 ACIS 2026.1.0.1（纯公有 API，无定制头文件），编译契约与行为差异见 [ACIS 2026 迁移指南](docs/ACIS_2026_MIGRATION.md)。
+完整步骤见 [复现与部署指南](docs/GETTING_STARTED.md)。worker 构建需要授权 ACIS SDK 与配套依赖；源码不包含 SDK。依赖布局见 [依赖说明](docs/DEPENDENCIES.md)；SDK 已迁移到官方 ACIS 2026.1.0.1（纯公有 API，无定制头文件），编译契约与行为差异见 [ACIS 2026 迁移指南](docs/ACIS_2026_MIGRATION.md)。
 
 准备依赖和本机配置后，在仓库根目录执行：
 
@@ -24,59 +24,49 @@ uv sync --frozen --extra dev
 uv run --frozen pytest -q -m 'not integration'
 ```
 
-## 功能与模式
+## 功能与模式（v3，2026-10-19 定稿）
 
-- ACIS 几何创建、曲线/曲面、布尔运算、渲染、文件存取与撤销/重做。
-- 唯一协作链路 Mode1：JSON 组件携带 SAT 备份，HTTP Push/Pull、保存和历史版本共用 Neo4j 版本链。
-- 支持的组件优先 JSON 重建，失败按 UUID 使用 SAT；已知有损组件直接走 SAT。
-- WebSocket 只提供版本通知、在线成员和重连；Mode0 与 C++ Bridge 已移除。
-- base_version 冲突检查、稳定 UUID、增量拓扑组件合并和本地未提交修改保护。
-- Neo4j 管理 WebUI，包含项目、版本、图及按需查看原始提交。
-- 存取模式只有两个：SAT 本地文件与 FastAPI 云端协作。客户端 Bolt 直连 Neo4j 栈与 PostgreSQL 实验已在架构 v2 清理中移除（tag：`legacy/pre-architecture-v2`）。
-- **架构 v2（2026-10-18）**：协作编排下沉为无 UI 核心库 `CAD_DB/core/`（DocumentSession/CollabState/CollabController/CollabBackend/StorageBackend/CommandBus，仅 QtCore），Qt 只剩壳；全部网络异步（无嵌套事件循环）；服务端库内表示升级为原生标签 + 扁平字段（协议/客户端零改动）；协同工作流新增自动拉取、在场感知（edit_intent）、定版标签。详见 [架构定稿](docs/ARCHITECTURE.md) 与 [重构计划](docs/REFACTOR_PLAN.md)。核心库单测 `core_unit_tests`（116 项）与既有回归见 [验证记录](docs/REFACTOR_VALIDATION.md)。
-- **下一阶段（规划中）**：**v3 总计划**——旧 API 全部废弃，换全新服务端权威 API（命令在服务侧执行，参照 Onshape 架构）+ 工业级 Web 客户端（three.js/R3F），最终移除 Qt 依赖。计划见 [V3_PLAN.md](docs/V3_PLAN.md)（过程稿：[UI 重构计划](docs/UI_REFACTOR_PLAN.md)，已并入）。
+- **服务端权威命令**：建模（曲线/曲面/布尔/抽壳/变换）、撤销/重做全部在 ACIS worker 执行，浏览器只提交命令与消费网格（ADR-2：每项目一 worker 进程，命令串行队列即版本链）。
+- **版本链与协作**：commit 带 base_version 乐观锁（过期 409 并返回实体级冲突清单）；组件不可变、按 `hash_sat` 全局去重；WebSocket 推送版本事件与在场感知（edit_intent）。
+- **三级存储（ADR-3）**：SAT 资产 = 几何真相（内容寻址，还原字节级无损）；GLB = 渲染网格；实体图投影 = 可查询细档索引——原生标签 + 扁平字段，`DERIVED_FROM` 血缘链、`/entities` 与 `/diff` 实体级查询，内容寻址实体跨组件去重（ABC 压测实测 60.5%）。
+- **导入导出**：SAT 与 STEP（Spatial InterOp）导入，SAT/GLB/STL 导出；STEP 装配体按组件树拆分入库。
+- **渲染全覆盖**：可视化网格 + 边折线；无面体输出纯线框 GLB，退化面计入 `faces_skipped` 诚实上报（ABC 200/200 零失败；CNC 车床装配 248 组件 / 48.8 万三角形实测流畅渲染）。
+- Neo4j 管理 WebUI（项目/版本/图/原始提交审计）。
+- Qt 桌面客户端、C++ Bridge、客户端 Bolt 直连与 PostgreSQL 实验均已移除（历史见 `docs/history/` 与 tag `legacy/pre-architecture-v2`）。
 
 ## 几何内核隔离
 
-业务/UI 通过 `GeometryKernel` 调用建模、变换、网格与存取能力，文档使用稳定 UUID 和会话 `ShapeHandle`；ACIS 原生对象、SDK 调用、许可初始化、混合 JSON/SAT 编解码集中在独立的 `DbcadAcis` 静态库。显示层仅消费坐标、索引、颜色和包围盒。
+ACIS 只存在于 worker 进程：许可初始化与 SDK 调用集中在 `CAD_DB/acis.cpp` 与 `worker/`、`kernel/` 的适配实现；`kernel/model_types.h` 定义中立值类型，`glb_writer`/`mesh_extractor` 输出与内核无关的网格资产。网关与浏览器不接触任何内核类型。
 
-当前采用编译时适配：接入其他内核需要实现接口、替换工厂与构建依赖，并处理已有 ACIS 数据的兼容读取。尚未接入第二内核，不承诺直接无损读取 SAT，也没有运行时插件加载。
-
-实现路径、对象所有权、撤销与协作流程、允许保留的专用模块，以及 [issue #4](https://github.com/Zhang-Zhengyuan/DB-CAD/issues/4) 的逐项验收状态，见 [内核隔离与替换指南](docs/KERNEL_ISOLATION.md)。当前已完成主要调用隔离；自动依赖防护、无 SDK 业务测试构建和第二内核原型仍待完成。
+当前为编译时适配：接入其他内核需要实现 worker 命令层与网格提取，并处理已有 SAT 数据的兼容读取。尚未接入第二内核，不承诺无损读取 SAT，也没有运行时插件加载。设计取舍见 [内核隔离与替换指南](docs/KERNEL_ISOLATION.md)。
 
 ## 目录
 
 ```text
-CAD_DB.sln                唯一 Visual Studio 解决方案
+CAD_DB.sln                唯一 Visual Studio 解决方案（默认目标 dbcad_worker）
 CAD_DB/
-  CAD_DB.vcxproj          客户端业务/UI 构建目标
-  DbcadAcis.vcxproj       ACIS 适配器与专用存储兼容静态库
-  kernel/                中立接口、值类型、文档记录与 ACIS 适配实现
-  mainwindow.cpp         窗口初始化；其他实现位于 ui/
-  ui/                    连接、协作、消息、文档、编辑
-  access.cpp             SAT 文件存取（本地持久化与交换格式）
+  acis.cpp/common.cpp     ACIS 许可初始化与错误处理
+  worker/                 ACIS worker：命令执行、会话、实体图序列化
+  kernel/                 网格提取、GLB 写入、中立类型
   backend/app/
-    api/                 HTTP/WS 入口
-    collaboration/       通知协议与版本摘要
-    neo4j_webui/          管理 API
-    static/webui/         HTML/CSS/JS
-  backend/tests/         回归与集成检查
-  deploy/lib/            配置、Docker、进程、打包
-scripts/                 环境检查与便携构建
-docs/                   上手、依赖、架构、验证记录
+    api/v1/               HTTP/WS 入口（项目/版本/命令/资产/实体/事件）
+    v1_store.py           版本链 + 实体投影存储（Memory/Neo4j 双实现）
+    neo4j_webui/          管理 API；static/webui/ 管理台前端
+  backend/tests/          回归与集成检查（API 契约 / 真内核 / STEP / Neo4j 投影）
+  backend/scripts/        abc 压测、投影重建工具
+  deploy/                 一键启停、Docker、打包
+web/                      React + three.js 客户端（Vite）
+scripts/                  环境检查与便携构建
+docs/                     架构、计划、基准、上手指南；docs/history/ 为 v2 归档
 ```
 
 ## 启停
 
 ```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -PrepareOnly
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -SkipClient
-.\CAD_DB\deploy\start_dbcad_two_clients.cmd
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd
 .\CAD_DB\deploy\stop_dbcad_fullstack.cmd
 ```
 
-服务默认提供 `/health`、`/docs`、`/webui`，端口 8000。参数和密码管理见 [部署说明](CAD_DB/DEPLOYMENT.md)。重置会删除数据，正常启动无需重置。
+启动链路：Neo4j 容器 → FastAPI → 浏览器 `http://127.0.0.1:8000/web/`。worker 由 FastAPI 按需拉起，无需手工启动。服务默认提供 `/health`、`/docs`、`/web`、`/webui`，端口 8000；参数与密码管理见 [部署说明](CAD_DB/DEPLOYMENT.md)。
 
-[架构](docs/ARCHITECTURE.md) · [贡献说明](CONTRIBUTING.md) · [后端说明](CAD_DB/backend/README.md) · [验证记录](docs/REFACTOR_VALIDATION.md)
-
-本轮设计与测试入口见 [统一协作链路说明](docs/HYBRID_COLLABORATION.md)。
+[架构](docs/ARCHITECTURE.md) · [v3 计划](docs/V3_PLAN.md) · [压测基准](docs/BENCHMARK_v3.md) · [贡献说明](CONTRIBUTING.md) · [后端说明](CAD_DB/backend/README.md)

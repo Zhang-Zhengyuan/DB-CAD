@@ -85,15 +85,15 @@ flowchart LR
 
 验证：客户端 Debug 编译通过（`x64/Debug/CAD_DB.exe`）；后端 `pytest -m 'not integration'` 43 项全绿。
 
-## 6. 重建路线（2026-10-18 全部主里程碑完成）
+## 6. 重建路线（v3 全部里程碑完成，2026-10-19 定稿）
 
-> 执行计划、任务分解与各里程碑验收标准见 [REFACTOR_PLAN.md](REFACTOR_PLAN.md)。
+> v2 执行计划与验收记录已归档至 [history/](history/README.md)；v3 计划与各阶段验收见 [V3_PLAN.md](V3_PLAN.md)。
 
 1. **上层重建（M1/M2 已完成）**：协作编排已下沉 `CAD_DB/core/`（DocumentSession/CollabState/CollabController/CollabBackend/StorageBackend/CommandBus，仅 QtCore）；MainWindow/Qt 只剩壳；全部网络异步（无嵌套事件循环）。
 2. **存储物理表示升级（M3/Phase B 已完成）**：原生标签 + 扁平字段 + 幂等迁移 + L3 结构断言；协议与客户端零改动。
 3. **协同工作流（M4.1–4.3 已完成）**：自动拉取、在场感知（edit_intent 软锁提示）、定版标签；分支 DAG（M4.4）与语义 diff（M4.5）为后续路线图。
 4. **AI native（M6 第一步已具备）**：CommandBus 提供名→schema→执行器的程序化命令入口（AI 与 UI 平级调用同一注册表）；审批流为后续工作。
 5. **实体级增量（M5/Phase D）**：已提级进 v3——P6 全量投影 + P8 实体级增量（见下条第 6 点与 V3_PLAN.md），设计参照 STORAGE_CONSOLIDATION_PLAN。
-6. **v3（P0–P7 已完成，tag `v3`；剩余 P8）**：新 API v1 + 服务端权威命令执行 + 工业级 Web 客户端 + **P6 实体级图投影（ADR-3）+ P7 旧物拆除（json-delta 族/旧 WS/旧 WebUI 端点与 Qt 客户端物理删除，构建无 Qt，浏览器为唯一客户端，`neo4j_webui` 改造为 V1 模型+投影浏览）**；剩余 **P8 实体级增量（Phase D，接管 M5）**。M4.4 分支并入 v3 P2（协议预留）/P5（合并 UI），M6 AI 入口随服务端 CommandBus 自然落地。见 [V3_PLAN.md](V3_PLAN.md)。
+6. **v3（P0–P9 全部完成；tag `v3` / `v3.1` / `v3.2`）**：新 API v1 + 服务端权威命令执行 + 工业级 Web 客户端 + **P6 实体级图投影（ADR-3）+ P7 旧物拆除（json-delta 族/旧 WS/旧 WebUI 端点与 Qt 客户端物理删除，构建无 Qt，浏览器为唯一客户端，`neo4j_webui` 改造为 V1 模型+投影浏览）+ P8 实体级增量（内容寻址实体、DERIVED_FROM 血缘、/diff、409 实体冲突、压实）+ P9 STEP 导入与 abc 200 样本压测（零失败）**。v3.1 修复渲染根因（线框体纯线 GLB、退化面跳过计数）；v3.2 定稿清理（v2 文档归档 `docs/history/`、死代码清除、文档与实现全面对齐）。M4.4 分支并入 v3 P2（协议预留）/P5（合并 UI），M6 AI 入口随服务端命令 schema 落地（GET /api/v1/schema/commands）。见 [V3_PLAN.md](V3_PLAN.md)。
 
 执行细节（命令记账、撤销栈、防回环、断线重连等）都属于上层内部实现，设计层面不在此展开。

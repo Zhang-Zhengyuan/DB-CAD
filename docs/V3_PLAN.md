@@ -1,6 +1,6 @@
 # DB-CAD v3 总计划：全新 API + 工业级 Web 客户端
 
-> 拟定：2026-10-18。取代 [UI_REFACTOR_PLAN.md](UI_REFACTOR_PLAN.md)（该计划升级为本计划）。
+> 拟定：2026-10-18。取代 [UI_REFACTOR_PLAN.md](history/UI_REFACTOR_PLAN.md)（该计划升级为本计划）。
 > 一句话定位：**本项目的差异化不在 UI，而在自研的图数据库存储 + 版本管理 + 协同编辑（FastAPI 后端）**。v3 把这套核心价值用一套全新、完整、高性能的 API 暴露出来，上面跑一个工业级的 Web 客户端；旧 API 全部废弃，Qt 客户端先冻结后删除。
 
 ## 0. 三条原则（定下来不再讨论）
@@ -203,3 +203,5 @@ FastAPI 网关（鉴权/限流/静态托管）
 - 2026-10-19 P8 执行设计展开（§4.1）：三层稳定实体身份（指针稳定性为主力——ACIS backup 机制下原实体指针跨命令不变；bulletin 映射覆盖布尔重构；结构指纹匹配兜底跨会话）；V1Entity 升级内容寻址（entity_key=规范化节点哈希，同内容跨组件/版本共享）+ DERIVED_FROM generation 链；子里程碑 P8.1–P8.6 约 2 周；另立 P9 收尾（§4.2：STEP 导入 + abc_cache 压测，"彻底完美"清单）。同日开工 P8.1。
 - 2026-10-19 P8 完成（commits 265f8d2/f2cac9e/+本提交）：P8.1 worker 闭包采集 + prev_id 链（实证：同会话 translate 后 58 实体 prev==cur，指针 id 即稳定身份；bake 移除 TRANSFORM 实体）；P8.2/P8.3 entity_key 内容寻址 + DERIVED_FROM 双实现（发现并接纳组件内去重特性）；P8.4 /diff 端点 + 409 conflicting_entities + edit_intent entity_id；P8.5 compact 压实端点。全量门禁：后端 40 项、selftest、mesh_tests 175、Playwright e2e。链短路留后续。剩余 P9（STEP/压测）。
 - 2026-10-19 P9 完成（tag `v3.1`）：STEP 导入全链路（InterOp 入 `_deps/interop`，worker `loadModel` 扩展名分派，官方 demo 248 组件实测，集成测试绿）；abc 200 模型压测 200/200 零失败（66 万实体投影、内容去重 60.5%、投影 67ms/模型，报告 docs/BENCHMARK_v3.md）；修复压测暴露的 mesh 硬失败（降级 mesh_error：无面体/不可离散面只缺 GLB 不丢几何真相与投影，8 例实测验证）；v2 KNOWN-DIFF 登记 v3 退场。**P0–P9 全部完成。**
+- 2026-10-19 渲染根因修复（tag `v3.1` 后追加）：按"能修则不降级"原则替换降级方案——无面体走边折线路径产出纯线 GLB（LINES 图元，前端可渲染）；退化面 `facesSkipped` 计数跳过、其余面正常出网格；MeshResult 增加 facesSkipped/edgesSkipped 诚实计数。8/8 压测失败模型修复后 mesh_error=0。
+- 2026-10-19 定稿评估 + v3.2 发布：全链路实测验证——CNC 车床 STEP 装配（248 组件/48.8 万三角/20,850 实体投影）前端完整渲染，G15 抽壳体导出→重导入 entity_key 集合 12/12 相等（几何拓扑等价证明）。定稿清理：删除死代码 `neo4j_store.py`（ProjectRecord 内联 v1_store）、调试脚本与产物；v2 历史文档 10 篇归档 `docs/history/`（含索引与去向说明）并修正全部交叉引用；README/GETTING_STARTED/backend README/PROJECT_CONTEXT 全面对齐 v3 现实（协议表、目录树、启停命令、验收步骤）；L3 投影测试夹具加盐（实体键全局内容寻址，平凡实体须防与真实数据同键）。**tag `v3.2`——v3 架构定稿发布。**

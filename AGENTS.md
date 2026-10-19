@@ -22,10 +22,10 @@
 
 ## 已确认的架构边界
 
-- Windows Qt/C++ 客户端 + ACIS 2026.1.0.1 + Python 3.11+ FastAPI + Neo4j；构建入口 `CAD_DB.sln`，后端入口 `app.main:app`。
-- UI/业务通过 `GeometryKernel`、`ShapeHandle` 和中立值类型访问几何；ACIS 原生对象、许可、SDK 调用及混合编码留在 `DbcadAcis` 边界内。不要把原生指针泄漏到 UI/协议。
-- 唯一协作写入链路是 JSON + SAT 组件版本链，经 HTTP `json-delta` 提交/Pull；WebSocket 只传通知和在线状态。不要重新引入已移除的 Mode0、Bridge 或 WS 模型写入。
-- 稳定 UUID、`base_version` 冲突检查、组件恢复失败不推进本地版本、本地未提交修改保护是关键契约。旧 Neo4j 历史和 PostgreSQL 实验入口仍有用途，不因“看起来旧”直接删除。
+- 服务端权威（v3）：C++ ACIS worker（`CAD_DB.sln` 默认目标 `dbcad_worker.exe`）+ Python 3.11+ FastAPI 网关（`app.main:app`）+ Neo4j + 内容寻址资产库；浏览器（React + three.js，`web/`）是唯一客户端。
+- ACIS 只存在于 worker 进程：许可初始化与 SDK 调用集中在 `CAD_DB/acis.cpp`、`worker/`、`kernel/`；网关与协议层不接触原生类型，不要把内核头文件引入 Python 侧或前端。
+- 几何真相 = SAT 资产（内容寻址 sha256，`hash_sat` 全局去重）；GLB 网格与实体图投影是派生索引（ADR-3）。不要重新引入"纯图复原几何"路径或 v2 json-delta 协议；WebSocket 只传版本事件与在场状态（edit_intent）。
+- `base_version` 乐观锁（409 + 实体级冲突清单）、组件不可变、实体 `entity_key` 内容寻址与 `DERIVED_FROM` 血缘是关键契约。Qt 客户端、C++ Bridge、PostgreSQL 实验入口均已物理删除，不要以"恢复"名义重新引入（历史见 `docs/history/`）。
 
 ## 实现与质量
 

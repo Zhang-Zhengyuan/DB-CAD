@@ -1,6 +1,6 @@
 """Phase B（存储物理表示 v2）：JsonGraphEntity 的原生标签 + 一级扁平字段。
 
-设计（STORAGE_CONSOLIDATION_PLAN §3"细"档 + REFACTOR_PLAN M3）：
+设计（history/STORAGE_CONSOLIDATION_PLAN §3"细"档 + history/REFACTOR_PLAN M3，v2 归档）：
 - 原生标签：codec 语义标签 → Neo4j 标签（Body/Face/…），标签集合封闭、
   经 FOREACH 静态子句写入，不依赖 apoc；无法识别的标签落 ``:Unknown``
   并保留原始标签值（绝不静默丢弃）。

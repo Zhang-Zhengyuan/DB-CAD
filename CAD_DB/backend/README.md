@@ -1,6 +1,6 @@
 # DBCAD FastAPI 服务
 
-公共入口保持 `uvicorn app.main:app`。协作统一使用 JSON + SAT 组件版本链。管理界面在 `/` 或 `/webui`；文档在 `/docs`。
+公共入口 `uvicorn app.main:app`。v3 服务端权威网关：接收浏览器命令，转发 ACIS worker 执行，管理版本链与资产。Web 客户端在 `/web`，管理界面在 `/` 或 `/webui`，接口文档在 `/docs`。
 
 ## 开发测试
 
@@ -9,7 +9,7 @@ uv sync --frozen --extra dev
 uv run --frozen pytest -q -m 'not integration'
 ```
 
-无数据库测试使用内存适配器。integration 检查需要真实服务；跳过集成测试不代表全栈验收。
+无数据库测试使用内存适配器。integration 检查需要真实 Neo4j / worker；跳过集成测试不代表全栈验收。
 
 测试默认按"无 API 密码"运行：`tests/conftest.py` 会在加载任何 app 模块前把 `CAD_DB_API_PASSWORD` 置空（环境变量优先级高于 `.env`），避免本机 export 过密码或 `.env` 配了密码时全部请求误报 401。integration 测试对活体服务联调时，密码改用 `CAD_DB_INTEGRATION_API_PASSWORD` 传入。
 
@@ -22,21 +22,21 @@ uv sync --frozen
 uv run --frozen uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-服务直接连接 Neo4j，不需要服务器 ACIS 或 C++ Bridge。全栈部署使用 `CAD_DB/deploy/start_dbcad_fullstack.cmd`。
+worker（`x64/<Configuration>/dbcad_worker.exe`）由 FastAPI 的 GeometryPool 按项目自动拉起，一个项目一个进程；路径由环境变量配置。全栈部署使用 `CAD_DB/deploy/start_dbcad_fullstack.cmd`。
 
-## 协议
+## 协议（/api/v1）
 
 | 路径 | 功能 |
 |---|---|
-| POST /projects | 创建项目 |
-| GET /projects/{id}、/projects/by-name/{name} | 项目查询 |
-| GET /projects/{id}/models/latest、/models/{version}、/models/versions | 同一 JSON 版本链的只读查询 |
-| POST/GET /projects/{id}/json-delta | 唯一写入入口 / 增量 Pull |
-| WS /ws/projects/{id} | 版本通知和在线成员；stream=mode1 |
+| GET/POST /projects、GET /projects/{id} | 项目查询与创建 |
+| GET/POST /projects/{id}/versions、GET /versions/{version} | 版本提交（base_version 乐观锁）与历史；另有 /scene 场景快照、/branches 分支 |
+| POST /projects/{id}/commands | 几何命令（worker 执行并产出版本）；/commands/dry-run 预演、/undo /redo、GET /schema/commands |
+| POST /projects/{id}/files/import | SAT/STEP 导入（组件树拆分入库）；GET /files/export 导出 SAT/GLB/STL |
+| GET /projects/{id}/entities、/diff | 实体级细档查询、两版本实体差异；POST /admin/compact-entities 压实 |
+| GET /assets/{hash}.sat/.glb | 内容寻址资产（不可变强缓存） |
+| WS /api/v1/events | 版本通知与在场感知（edit_intent） |
 | /api/neo4j/* | 管理 API |
 
-HTTP 鉴权头为 `X-API-Password`，WS 使用 password 查询参数。模式、事件字段和 base_version 是协议约定。部署默认生成非空密码；独立开发的旧空密码行为保留，管理界面要求设置密码。
+HTTP 鉴权头为 `X-API-Password`，WS 使用 password 查询参数。部署默认生成非空密码；独立开发的空密码行为保留，管理界面要求设置密码。模式、事件字段和 base_version 是协议约定。
 
-装配位于 app/main.py；模块边界见 [架构说明](../../docs/ARCHITECTURE.md)。静态资源随 app/ 打包，不依赖源码工作目录。
-
-Mode0、`POST /models`、旧实体版本写入和 WS 模型提交已删除；旧模式的数据库记录仅在管理审计中保留。迁移与验收见 [说明](../../docs/HYBRID_COLLABORATION.md)。
+装配位于 app/main.py；模块边界见 [架构说明](../../docs/ARCHITECTURE.md)。静态资源随 app/ 打包，不依赖源码工作目录。v2 的 json-delta/WS 模型提交协议已随 Qt 客户端移除，历史见 [docs/history/](../../docs/history/README.md)。

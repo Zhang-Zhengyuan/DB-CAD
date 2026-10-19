@@ -25,7 +25,14 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 
 from .entity_projection import entity_key, match_entities, normalize_entity_projection, projection_stats
-from .neo4j_store import ProjectRecord
+
+
+@dataclass
+class ProjectRecord:
+    id: str
+    name: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class VersionConflict(HTTPException):
