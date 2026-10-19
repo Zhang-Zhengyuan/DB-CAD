@@ -1,6 +1,15 @@
 # 100% 储存保真：里程碑与细化路线图
 
 > 分支 `storage/entity-unit-tests`。
+> **v3 处置（2026-10-19，P9）**：本文 KNOWN-DIFF 登记（pcurve exppc 参数域
+> 控制点 1 参数单位级偏差 ×3 文件）属 **v2 往返器**（serializer→deserializer）
+> 的已知问题。v3（P7 起）反序列化器随 Qt 客户端退役，几何恢复统一走 SAT
+> 资产（ACIS 权威格式，零偏差）；投影（entity_graph_codec）为单向派生，
+> 不承担重建职责——**登记在 v3 语境退场（无消费方）**，往返验收由
+> SAT 覆盖度（fallback 标记）+ L3 投影等价断言取代。abc 200 模型压测
+> （docs/BENCHMARK_v3.md）零存储错误。压测另暴露并修复：STEP 产物中
+> 无面体/不可离散面曾致整模型导入失败——现降级为 mesh_error 标记
+> （SAT/graph 照常），见 worker main.cpp importDirectory。
 > 策略（既定）：**能细粒度就细粒度，实在不行回退到粗粒度，以 100% 一致为目标；
 > 达成后把粗粒度部分逐步细粒度化，触发集单调收缩，每步都有测试守门。**
 

@@ -38,10 +38,13 @@ def _store_components(components) -> tuple[list[SceneComponent], list[tuple[str,
             graph_hash = store.put(
                 "graph", json.dumps(normalized, ensure_ascii=False).encode("utf-8")
             )
+        # P9：mesh_error 降级组件 glb 为空字节——不落空资产，hash_glb 留空
+        # （前端跳过渲染，SAT/graph 照常）。
+        glb_hash = store.put("glb", part.glb) if part.glb else ""
         scene.append(
             SceneComponent(
                 hash_sat=hash_sat,
-                hash_glb=store.put("glb", part.glb),
+                hash_glb=glb_hash,
                 name=f"component-{index}",
                 color=part.color,
                 bbox_min=part.bbox_min,
@@ -78,7 +81,7 @@ async def import_sat(
         project_id = store.create_project(project_name).id  # type: ignore[arg-type]
 
     try:
-        imported = get_worker_gateway().import_sat(payload)
+        imported = get_worker_gateway().import_sat(payload, file.filename or "upload.sat")
     except WorkerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"geometry worker failed: {exc}") from exc
 

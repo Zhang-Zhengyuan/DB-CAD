@@ -57,10 +57,14 @@ class SubprocessWorkerGateway:
             detail = completed.stderr.decode("utf-8", "replace").strip()[-500:]
             raise WorkerError(f"worker failed ({completed.returncode}): {detail}")
 
-    def import_sat(self, sat_bytes: bytes) -> ImportResult:
+    def import_sat(self, sat_bytes: bytes, filename: str = "upload.sat") -> ImportResult:
+        """导入 SAT/STEP/STP：worker 按扩展名分派（STEP 走 InterOp，P9）。"""
+        suffix = Path(filename).suffix.lower()
+        if suffix not in (".sat", ".step", ".stp"):
+            suffix = ".sat"
         with tempfile.TemporaryDirectory(prefix="dbcad_worker_") as tmp:
             tmp_dir = Path(tmp)
-            source = tmp_dir / "input.sat"
+            source = tmp_dir / f"input{suffix}"
             source.write_bytes(sat_bytes)
             out_dir = tmp_dir / "components"
             self._run("import", "--sat", str(source), "--outdir", str(out_dir))
@@ -80,8 +84,11 @@ class SubprocessWorkerGateway:
         components: list[ImportedComponent] = []
         for entry in manifest.get("components", []):
             sat_path = out_dir / entry.get("sat", "")
-            glb_path = out_dir / entry.get("glb", "")
-            if not sat_path.exists() or not glb_path.exists():
+            glb_name = entry.get("glb", "")
+            # P9：无面体/不可离散面降级——glb 为空串（mesh_error 标记），
+            # SAT/graph 照常；GLB 字节留空由消费方按需处理。
+            glb_path = out_dir / glb_name if glb_name else None
+            if not sat_path.exists() or (glb_path is not None and not glb_path.exists()):
                 raise WorkerError(f"worker component files missing: {entry}")
             graph_payload: dict | None = None
             graph_path = out_dir / entry.get("graph", "")
@@ -94,7 +101,7 @@ class SubprocessWorkerGateway:
             components.append(
                 ImportedComponent(
                     sat=sat_path.read_bytes(),
-                    glb=glb_path.read_bytes(),
+                    glb=glb_path.read_bytes() if glb_path is not None else b"",
                     graph=graph_payload,
                     bbox_min=[float(v) for v in bbox.get("min", [0.0, 0.0, 0.0])],
                     bbox_max=[float(v) for v in bbox.get("max", [0.0, 0.0, 0.0])],

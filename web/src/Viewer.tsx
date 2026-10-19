@@ -16,6 +16,8 @@ import { useViewer } from "./store";
 const componentGroups = new Map<string, THREE.Object3D>();
 
 function ComponentModel({ component }: { component: SceneComponent }) {
+  // P9：无面体/不可离散组件降级为无 GLB（mesh_error）——只入树不渲染。
+  if (!component.glb) return null;
   const url = api.assetUrl(component.glb, "glb");
   const gltf = useLoader(GLTFLoader, url);
   const isSelected = useViewer((s) => s.selected.includes(component.component_id));

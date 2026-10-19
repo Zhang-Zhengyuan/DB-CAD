@@ -167,9 +167,9 @@ FastAPI 网关（鉴权/限流/静态托管）
 
 | 项 | 内容 | 估时 |
 |---|---|---|
-| STEP 导入 | `_deps` 引入授权 Interop；worker 加 `step` 命令（STEP→BODY）；`/files/import` 接受 STEP（与 SAT 同管线：组件+投影+版本） | 3-4 天 |
-| 大规模压测 | abc_cache 语料批量导入/查询/回放基准（万面模型 × N）：导入吞吐、投影写入放大、/entities 查询延迟、DERIVED_FROM 链深度；产出基准报告（docs/BENCHMARK_v3.md） | 2-3 天 |
-| 收官 | 全量门禁 + tag `v3.1` | 0.5 天 |
+| STEP 导入 | `_deps` 引入授权 Interop；worker 加 `step` 命令（STEP→BODY）；`/files/import` 接受 STEP（与 SAT 同管线：组件+投影+版本） | **已完成（2026-10-19）**：`_deps/interop`（SPAIInterop/SPAIAcis/SPAIopUtilities + 全量 DLL，PostBuild 暂存）；worker `loadModel` 按扩展名分派（SAT restore / STEP InterOp BRep+Assembly，SPAISystem 生命周期规范）；网关按上传名透传扩展名；实测官方 demo（CNC 车床装配，SolidWorks 2025 STEP AP214）→ 248 组件/48.8 万三角全链路；集成测试 test_v1_step_import_integration 绿 | 3-4 天 |
+| 大规模压测 | abc_cache 语料批量导入/查询/回放基准（万面模型 × N）：导入吞吐、投影写入放大、/entities 查询延迟、DERIVED_FROM 链深度；产出基准报告（docs/BENCHMARK_v3.md） | **已完成（2026-10-19）**：`scripts/benchmark_v3.py`；200 模型 **200/200 零失败**（1311 组件/66 万实体投影/内容去重率 60.5%/投影 67ms/模型）；首轮暴露 8 例"无面体/不可离散面致整模型失败"——修复为 mesh_error 降级（SAT/graph 照常，网关/前端跳过空 GLB），复测全过；v2 KNOWN-DIFF（pcurve 参数域）在 v3 无消费方，登记退场（FIDELITY_REFINEMENT_ROADMAP 头注）；报告 docs/BENCHMARK_v3.md | 2-3 天 |
+| 收官 | 全量门禁 + tag `v3.1` | 后端 41 项、selftest、mesh_tests 175、web build、Playwright e2e 全绿；tag `v3.1` | 0.5 天 |
 
 ## 5. 风险与对策
 
@@ -202,3 +202,4 @@ FastAPI 网关（鉴权/限流/静态托管）
 - 2026-10-19 P7 完成（tag `v3`）：后端 v2 协议物理删除（json-delta 族/sync/collaboration/json_graph_store 族 + 11 个 v2 测试，`/health`=v3_server_authoritative，根路由直达 /web）；Qt 客户端与 QtCore 依赖物理删除（core/ui/mainwindow/glidget 等 + v2 内核配件，vcxproj Qt-free 化，默认目标=worker，DbcadAcis 合并、glfw 依赖去除）；neo4j_webui 改造为 V1 模型 + 实体投影浏览；部署链路去 Qt（fullstack=Neo4j+FastAPI+浏览器，two_clients 删除）；存量组件投影全量补齐。无 Qt 构建全绿（selftest + mesh_tests 175）、后端 34 项、Playwright e2e 真栈绿。遗留仅 P5 旧项：STEP 导入（Interop 已授权未接 _deps）与 abc_cache 大规模压测。
 - 2026-10-19 P8 执行设计展开（§4.1）：三层稳定实体身份（指针稳定性为主力——ACIS backup 机制下原实体指针跨命令不变；bulletin 映射覆盖布尔重构；结构指纹匹配兜底跨会话）；V1Entity 升级内容寻址（entity_key=规范化节点哈希，同内容跨组件/版本共享）+ DERIVED_FROM generation 链；子里程碑 P8.1–P8.6 约 2 周；另立 P9 收尾（§4.2：STEP 导入 + abc_cache 压测，"彻底完美"清单）。同日开工 P8.1。
 - 2026-10-19 P8 完成（commits 265f8d2/f2cac9e/+本提交）：P8.1 worker 闭包采集 + prev_id 链（实证：同会话 translate 后 58 实体 prev==cur，指针 id 即稳定身份；bake 移除 TRANSFORM 实体）；P8.2/P8.3 entity_key 内容寻址 + DERIVED_FROM 双实现（发现并接纳组件内去重特性）；P8.4 /diff 端点 + 409 conflicting_entities + edit_intent entity_id；P8.5 compact 压实端点。全量门禁：后端 40 项、selftest、mesh_tests 175、Playwright e2e。链短路留后续。剩余 P9（STEP/压测）。
+- 2026-10-19 P9 完成（tag `v3.1`）：STEP 导入全链路（InterOp 入 `_deps/interop`，worker `loadModel` 扩展名分派，官方 demo 248 组件实测，集成测试绿）；abc 200 模型压测 200/200 零失败（66 万实体投影、内容去重 60.5%、投影 67ms/模型，报告 docs/BENCHMARK_v3.md）；修复压测暴露的 mesh 硬失败（降级 mesh_error：无面体/不可离散面只缺 GLB 不丢几何真相与投影，8 例实测验证）；v2 KNOWN-DIFF 登记 v3 退场。**P0–P9 全部完成。**

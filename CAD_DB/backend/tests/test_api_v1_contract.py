@@ -25,7 +25,7 @@ class FakeWorker:
     def __init__(self) -> None:
         self.import_calls: list[bytes] = []
 
-    def import_sat(self, sat_bytes: bytes) -> ImportResult:
+    def import_sat(self, sat_bytes: bytes, filename: str = "upload.sat") -> ImportResult:
         self.import_calls.append(sat_bytes)
         return ImportResult(
             components=[

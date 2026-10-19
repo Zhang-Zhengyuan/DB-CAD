@@ -20,6 +20,21 @@
 #include "entity_graph_codec.h"
 #include "session.h"
 
+// STEP 导入（P9）：Spatial InterOp（授权包 _deps/interop）。头存在才编入；
+// 缺包时 import 对 .step/.stp 显式报错（错误显式，不静默）。
+#if __has_include("SPAIDocument.h")
+#define DBCAD_HAS_INTEROP 1
+#include "SPAIAcisDocument.h"
+#include "SPAIConverter.h"
+#include "SPAIFile.h"
+#include "SPAIOptions.h"
+#include "SPAIResult.h"
+#include "SPAISystem.h"
+#include "SPAIOptionName.h"
+#include "SPAIValue.h"
+#include "SPAIDocument.h"
+#endif
+
 #include "vendor/nlohmann/json.hpp"
 
 #include "acis.hxx"
@@ -37,6 +52,7 @@
 #include "acis/include/rnd_api.hxx"
 #include "acis/include/vers.hxx"
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -104,6 +120,50 @@ bool restoreEntityList(const fs::path& path, ENTITY_LIST& entities) {
     return ok;
 }
 
+// 统一模型装载：SAT 直接恢复；STEP/STP 经 InterOp 转换（BRep+Assembly）。
+bool loadModel(const fs::path& path, ENTITY_LIST& entities, std::string& why) {
+    std::string ext = path.extension().string();
+    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+    if (ext != ".step" && ext != ".stp") {
+        if (restoreEntityList(path, entities)) return true;
+        why = "SAT restore failed: " + path.string();
+        return false;
+    }
+#if DBCAD_HAS_INTEROP
+    ENTITY_LIST* converted = nullptr;
+    {
+        SPAIAcisDocument dst;
+        SPAIDocument src(path.string().c_str());
+        SPAIFile console(1);
+        SPAIOptions options;
+        SPAIValue representation("BRep+Assembly");
+        options.Add(SPAIOptionName::Representation, representation);
+        SPAIConverter converter;
+        SPAIResult result = converter.StartLog(console);
+        result &= converter.SetOptions(options);
+        result &= converter.Convert(src, dst);
+        result &= converter.StopLog(console);
+        result &= dst.GetEntities(converted);
+        if (!result.IsSuccess()) {
+            why = "STEP conversion failed: " + path.string();
+            return false;
+        }
+    }
+    if (!converted || converted->count() == 0) {
+        why = "STEP contained no entities: " + path.string();
+        return false;
+    }
+    for (ENTITY* ent = converted->first(); ent; ent = converted->next()) entities.add(ent);
+    delete converted;  // 实体归 ACIS 管理，仅归还列表容器
+    return true;
+#else
+    (void)path;
+    (void)entities;
+    why = "STEP import not compiled (Spatial InterOp missing from _deps/interop)";
+    return false;
+#endif
+}
+
 bool fileBytes(const fs::path& path, std::string& out) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) return false;
@@ -123,9 +183,10 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
     if (ec) return fail("cannot create outdir: " + ec.message());
 
     ENTITY_LIST entities;
-    if (!restoreEntityList(satPath, entities))
-        return fail("SAT restore failed: " + satPath.string());
-    if (entities.count() == 0) return fail("SAT contains no entities");
+    std::string loadError;
+    if (!loadModel(satPath, entities, loadError))
+        return fail(loadError);
+    if (entities.count() == 0) return fail("model contains no entities");
 
     // v3 组件三类：体/面/线同级（P6 重建存量投影依赖面/线组件可导入）。
     std::vector<ENTITY*> roots;
@@ -139,11 +200,18 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
         ENTITY* entity = roots[i];
         const std::string stem = "comp-" + std::to_string(i);
 
+        // 网格化容错（P9 压测实证：STEP 转换产物含无面体/不可离散面——
+        // 线框体是合法几何，渲染缺网格只降级不失败）：GLB 跳过 + manifest
+        // 标记 mesh_error，SAT/graph（几何真相与投影）照常产出。
         dbcad::MeshResult mesh = dbcad::MeshExtractor::extractEntity(*entity, dbcad::MeshQuality::MediumFine);
-        if (!mesh.ok) return fail(stem + ": mesh extraction failed: " + mesh.error);
-        std::string glbError;
-        const std::vector<unsigned char> glb = dbcad::GlbWriter::write(mesh.mesh, &glbError);
-        if (glb.empty()) return fail(stem + ": glb write failed: " + glbError);
+        std::string meshError;
+        std::vector<unsigned char> glb;
+        if (mesh.ok) {
+            glb = dbcad::GlbWriter::write(mesh.mesh, &meshError);
+            if (glb.empty()) meshError = "glb write: " + meshError;
+        } else {
+            meshError = mesh.error;
+        }
 
         const fs::path satOut = outDir / (stem + ".sat");
         ENTITY_LIST single;
@@ -173,8 +241,8 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
             if (!stream) return fail(stem + ": graph write failed");
         }
 
-        const fs::path glbOut = outDir / (stem + ".glb");
-        {
+        if (!glb.empty()) {
+            const fs::path glbOut = outDir / (stem + ".glb");
             std::ofstream stream(glbOut, std::ios::binary);
             stream.write(reinterpret_cast<const char*>(glb.data()), (std::streamsize)glb.size());
             if (!stream) return fail(stem + ": GLB write failed");
@@ -194,12 +262,20 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
         }
 
         if (i) manifest += ",";
-        manifest += "{\"id\":\"" + stem + "\",\"sat\":\"" + stem + ".sat\",\"glb\":\"" + stem +
-                    ".glb\",\"graph\":\"" + stem + ".graph.json\"" +
+        // mesh_error 文本转义（保守：反斜杠/引号），保 JSON 合法
+        std::string meshErrorJson;
+        for (char ch : meshError) {
+            if (ch == '\\' || ch == '"') meshErrorJson += '\\';
+            meshErrorJson += ch;
+        }
+        manifest += "{\"id\":\"" + stem + "\",\"sat\":\"" + stem + ".sat\"," +
+                    (glb.empty() ? std::string("\"glb\":\"\"") : "\"glb\":\"" + stem + ".glb\"") +
+                    ",\"graph\":\"" + stem + ".graph.json\"" +
                     ",\"graph_nodes\":" + std::to_string(graphNodes) +
                     ",\"graph_fallback\":\"" + graphFallback + "\"" +
                     ",\"triangles\":" + std::to_string(mesh.mesh.triangleCount()) +
                     ",\"vertices\":" + std::to_string(mesh.mesh.vertexCount()) +
+                    (meshErrorJson.empty() ? "" : ",\"mesh_error\":\"" + meshErrorJson + "\"") +
                     ",\"bbox\":{\"min\":[" + quote(boxMin.x()) + "," + quote(boxMin.y()) + "," +
                     quote(boxMin.z()) + "],\"max\":[" + quote(boxMax.x()) + "," + quote(boxMax.y()) +
                     "," + quote(boxMax.z()) + "]}," +
@@ -441,6 +517,9 @@ int main(int argc, char** argv) {
         terminate_acis(level);
         return fail("ACIS init failed");
     }
+#if DBCAD_HAS_INTEROP
+    SPAISystem::Initialize();
+#endif
 
     int code = 1;
     const std::string command = argc >= 2 ? argv[1] : "";
@@ -492,12 +571,15 @@ int main(int argc, char** argv) {
         code = importDirectory(fs::path(argv[3]), fs::path(argv[5]));
     } else {
         std::fprintf(stderr,
-                     "usage: dbcad_worker import --sat <p> --outdir <dir>\n"
+                     "usage: dbcad_worker import --sat <p.sat|p.step|p.stp> --outdir <dir>\n"
                      "       dbcad_worker merge --sat-list <a,b> --out <p>\n"
                      "       dbcad_worker export --sat-list <a,b> --glb-out <p>\n"
                      "       dbcad_worker selftest\n");
     }
 
+#if DBCAD_HAS_INTEROP
+    SPAISystem::Shutdown();
+#endif
     terminate_acis(level);
     return code;
 }

@@ -45,7 +45,7 @@
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(DBCADDepsRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(DBCADDepsRoot);$(DBCADDepsRoot)\interop\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- ACIS 官方要求：调用方必须用 /MD（即使 Debug 构建）；SPAAcisDsd.dll 自身
@@ -61,8 +61,8 @@
       <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(DBCADDepsRoot);$(DBCADDepsRoot)\interop\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>legacy_stdio_definitions.lib;SPAIInterop.lib;SPAIAcis.lib;SPAIopUtilities.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- ACIS 官方要求：栈保留 4MB（深度递归的几何算法）。 -->
       <StackReserveSize>4194304</StackReserveSize>
       <SubSystem>Console</SubSystem>
@@ -73,7 +73,7 @@
     <ClCompile>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(DBCADDepsRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(DBCADDepsRoot);$(DBCADDepsRoot)\interop\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <SDLCheck>false</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;SPA_NO_AUTO_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ExceptionHandling>Async</ExceptionHandling>
@@ -84,8 +84,8 @@
       <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(DBCADDepsRoot)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>legacy_stdio_definitions.lib;SPAIInterop.lib;SPAIAcis.lib;SPAIopUtilities.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(DBCADDepsRoot);$(DBCADDepsRoot)\interop\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <StackReserveSize>4194304</StackReserveSize>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -115,6 +115,10 @@
   </ItemGroup>
   <PropertyGroup>
     <OutDir>$(MSBuildProjectDirectory)\..\x64\$(Configuration)\</OutDir>
+    <!-- InterOp 运行时 DLL（STEP 转换器链）随构建暂存到输出目录 -->
+    <PostBuildEvent Condition="Exists('$(DBCADDepsRoot)\interop\bin')">
+      <Command>xcopy /E /I /Y /D "$(DBCADDepsRoot)\interop\bin\*" "$(MSBuildProjectDirectory)\..\x64\$(Configuration)"</Command>
+    </PostBuildEvent>
     <IntDir Condition="'$(DBCADMeshTests)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\MeshTests\$(Configuration)\</IntDir>
     <TargetName Condition="'$(DBCADMeshTests)' == 'true'">mesh_tests</TargetName>
     <IntDir Condition="'$(DBCADMeshBench)' == 'true'">$(MSBuildProjectDirectory)\..\x64\obj\MeshBench\$(Configuration)\</IntDir>

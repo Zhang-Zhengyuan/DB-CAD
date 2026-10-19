@@ -82,7 +82,7 @@ class FakePool:
 
 
 class FakeBatchWorker:
-    def import_sat(self, sat_bytes: bytes) -> ImportResult:
+    def import_sat(self, sat_bytes: bytes, filename: str = "upload.sat") -> ImportResult:
         return ImportResult(components=[ImportedComponent(sat=sat_bytes, glb=b"glTF-fake")])
 
 
