@@ -10,6 +10,7 @@ Onshape 同款）；redo 弹出撤销栈。
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 
 from ...dependencies import verify_api_password
+from ...entity_projection import write_projections
 from ...events_hub import hub
 from ...v1_store import SceneComponent, get_v1_store
 from ...worker_client import WorkerError as _BatchWorkerError
@@ -239,6 +240,7 @@ async def execute_command(project_id: str, payload: dict = Body(...)) -> dict:
             bbox_max=[float(v) for v in entry.get("bbox", {}).get("max", target.bbox_max)],
             triangles=int(entry.get("triangles", target.triangles)),
             vertices=int(entry.get("vertices", target.vertices)),
+            graph=entry.get("graph_bytes", target.graph),
         )
         manifest[manifest.index(target)] = replacement
     for entry in result.get("added", []):
@@ -254,6 +256,7 @@ async def execute_command(project_id: str, payload: dict = Body(...)) -> dict:
             bbox_max=[float(v) for v in bbox.get("max", [0.0, 0.0, 0.0])],
             triangles=int(entry.get("triangles", 0)),
             vertices=int(entry.get("vertices", 0)),
+            graph=entry.get("graph_bytes", ""),
         )
         manifest.append(component)
         added.append(component)
@@ -264,6 +267,15 @@ async def execute_command(project_id: str, payload: dict = Body(...)) -> dict:
         author=author,
         components=manifest,
         base_version=head_number,
+    )
+    # 实体级投影（P6/ADR-3）：变更组件入库后写 Neo4j/内存投影（幂等，
+    # 未变更组件零写入）；投影失败不阻断版本（派生数据可重建）。
+    projections = write_projections(
+        store,
+        [
+            (entry.get("sat_bytes"), entry.get("graph_json"))
+            for entry in (*result.get("modified", []), *result.get("added", []))
+        ],
     )
     hub.publish(
         project_id,
@@ -286,6 +298,7 @@ async def execute_command(project_id: str, payload: dict = Body(...)) -> dict:
         "added": [c.to_scene_json() for c in added],
         "removed": sorted(removed),
         "components": [c.to_scene_json() for c in version.components],
+        "entity_projection": projections,
     }
 
 

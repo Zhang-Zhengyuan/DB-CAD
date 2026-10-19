@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from .entity_projection import normalize_entity_projection, projection_stats
 from .neo4j_store import ProjectRecord
 
 
@@ -50,6 +51,7 @@ class SceneComponent:
     bbox_max: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     triangles: int = 0
     vertices: int = 0
+    graph: str = ""  # 实体图投影资产哈希（P6；旧组件为空）
 
     def to_scene_json(self) -> dict[str, Any]:
         return {
@@ -57,6 +59,7 @@ class SceneComponent:
             "name": self.name,
             "sat": self.hash_sat,
             "glb": self.hash_glb,
+            "graph": self.graph,
             "color": self.color,
             "bbox": {"min": self.bbox_min, "max": self.bbox_max},
             "triangles": self.triangles,
@@ -88,6 +91,52 @@ class MemoryV1Store:
         # 撤销栈（进程内）：undo 压入被撤销清单，redo 弹出重放。
         # 不随 Neo4j 持久化——服务重启后 redo 清空是可接受语义。
         self.redo_stacks: dict[str, list[list[SceneComponent]]] = {}
+        # 实体级投影（P6/ADR-3）：hash_sat → 规范化投影 {nodes, rels,
+        # serializer_build}。组件不可变 ⇒ 投影幂等，已存在即零写入。
+        self.entity_projections: dict[str, dict[str, Any]] = {}
+
+    # ---- 实体级投影（P6/ADR-3）-----------------------------------------
+    def write_entity_projection(self, component_hash: str, graph: dict[str, Any]) -> dict[str, Any]:
+        """写入组件实体投影；已存在则零写入。返回 {written, entities, rels}。"""
+        if component_hash in self.entity_projections:
+            stats = projection_stats(self.entity_projections[component_hash])
+            return {"written": False, **stats}
+        projection = normalize_entity_projection(component_hash, graph)
+        self.entity_projections[component_hash] = projection
+        return {"written": True, **projection_stats(projection)}
+
+    def get_entity_projection(self, component_hash: str) -> dict[str, Any] | None:
+        return self.entity_projections.get(component_hash)
+
+    def query_entities(
+        self,
+        component_hashes: list[str],
+        label: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """按组件清单查实体节点；label 大小写不敏感过滤（face / Face 皆可）。"""
+        wanted = {h for h in component_hashes}
+        results: list[dict[str, Any]] = []
+        needle = label.lower() if label else None
+        for component_hash in component_hashes:
+            projection = self.entity_projections.get(component_hash)
+            if projection is None:
+                continue
+            for node in projection["nodes"]:
+                labels = [str(l) for l in node.get("labels", [])]
+                if needle and needle not in (l.lower() for l in labels):
+                    continue
+                results.append(
+                    {
+                        "component": component_hash,
+                        "id": str(node.get("id", "")),
+                        "labels": labels,
+                        "props": node.get("props", {}),
+                    }
+                )
+                if len(results) >= limit:
+                    return results
+        return results
 
     def push_redo(self, project_id: str, components: list[SceneComponent]) -> None:
         self.redo_stacks.setdefault(project_id, []).append(list(components))
@@ -130,6 +179,8 @@ class MemoryV1Store:
         self.tags.pop(project_id, None)
         self.branches.pop(project_id, None)
         self.redo_stacks.pop(project_id, None)
+        # 实体投影按组件（内容寻址）归属而非项目——组件可跨项目复用，
+        # 项目删除不动投影；投影生命周期与组件资产一致。
 
     def touch(self, project_id: str) -> None:
         self.projects[project_id].updated_at = _now()
@@ -214,6 +265,11 @@ class Neo4jV1Store(MemoryV1Store):
 
     P1 规模（项目数 × 版本数 = O(10^4)）下全量预载最简单且一致；命令引擎
     （P2）接入后若需要按项目惰性加载，再拆分镜像粒度。
+
+    实体级投影（P6/ADR-3）：库内双表示——权威载荷 labels_json/props_json +
+    原生标签与一级扁平字段（可查询投影，"细"档同 v2 Phase B 语义）。挂载
+    (V1Component)-[:HAS_ENTITY]->(V1Entity)，拓扑关系为统一边型
+    [:TOPOLOGY {rel_type}]（MERGE 不支持动态关系类型，rel_type 属性可查）。
     """
 
     def __init__(self, driver: Any, database: str) -> None:
@@ -264,6 +320,7 @@ class Neo4jV1Store(MemoryV1Store):
                         bbox_max=list(c.get("bbox_max", [0.0, 0.0, 0.0])),
                         triangles=int(c.get("triangles", 0)),
                         vertices=int(c.get("vertices", 0)),
+                        graph=c.get("hash_graph", ""),
                     )
                     for c, _ in ordered
                     if c is not None
@@ -315,7 +372,9 @@ class Neo4jV1Store(MemoryV1Store):
                     SET c.hash_glb = $comps[i].hash_glb, c.name = $comps[i].name,
                         c.color = $comps[i].color, c.bbox_min = $comps[i].bbox_min,
                         c.bbox_max = $comps[i].bbox_max, c.triangles = $comps[i].triangles,
-                        c.vertices = $comps[i].vertices
+                        c.vertices = $comps[i].vertices,
+                        c.hash_graph = CASE WHEN $comps[i].graph <> ''
+                                            THEN $comps[i].graph ELSE c.hash_graph END
                     CREATE (v)-[:CONTAINS {order: i}]->(c)
                     """,
                     pid=project_id,
@@ -334,12 +393,103 @@ class Neo4jV1Store(MemoryV1Store):
                             "bbox_max": c.bbox_max,
                             "triangles": c.triangles,
                             "vertices": c.vertices,
+                            "graph": c.graph,
                         }
                         for c in components
                     ],
                 ).consume()
             )
         return version
+
+    def write_entity_projection(  # type: ignore[override]
+        self, component_hash: str, graph: dict[str, Any]
+    ) -> dict[str, Any]:
+        from .json_graph_native import entity_write_projection, native_label_set_clauses
+
+        with self._driver.session(database=self._database) as session:
+            existing = session.run(
+                "MATCH (c:V1Component {hash_sat: $h})-[:HAS_ENTITY]->() RETURN 1 AS hit LIMIT 1",
+                h=component_hash,
+            ).single()
+            if existing is not None:
+                count = session.run(
+                    "MATCH (:V1Component {hash_sat: $h})-[:HAS_ENTITY]->(e) "
+                    "RETURN count(e) AS entities",
+                    h=component_hash,
+                ).single()["entities"]
+                return {"written": False, "entities": int(count), "rels": -1}
+            projection = normalize_entity_projection(component_hash, graph)
+            node_rows = [entity_write_projection(n) for n in projection["nodes"]]
+            rel_rows = [
+                {"type": str(r.get("type", "")), "start": str(r.get("start", "")), "end": str(r.get("end", ""))}
+                for r in projection["rels"]
+                if r.get("start") and r.get("end")
+            ]
+            session.execute_write(
+                lambda tx: tx.run(
+                    """
+                    UNWIND $nodes AS item
+                    MERGE (e:V1Entity {component_hash: $hash, entity_id: item.id})
+                    SET e.labels_json = item.labels_json, e.props_json = item.props_json,
+                        e.raw_labels = item.raw_labels, e.native_skipped = item.native_skipped,
+                        e += item.native_fields
+                    """
+                    + native_label_set_clauses("item.native_labels")
+                    + """
+                    WITH $hash AS h
+                    MATCH (c:V1Component {hash_sat: h})
+                    MATCH (e:V1Entity {component_hash: h})
+                    MERGE (c)-[:HAS_ENTITY]->(e)
+                    """,
+                    hash=component_hash,
+                    nodes=node_rows,
+                ).consume()
+            )
+            if rel_rows:
+                session.execute_write(
+                    lambda tx: tx.run(
+                        """
+                        UNWIND $rels AS rel
+                        MATCH (s:V1Entity {component_hash: $hash, entity_id: rel.start})
+                        MATCH (t:V1Entity {component_hash: $hash, entity_id: rel.end})
+                        MERGE (s)-[:TOPOLOGY {rel_type: rel.type}]->(t)
+                        """,
+                        hash=component_hash,
+                        rels=rel_rows,
+                    ).consume()
+                )
+            return {"written": True, **projection_stats(projection)}
+
+    def query_entities(  # type: ignore[override]
+        self,
+        component_hashes: list[str],
+        label: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        import json as _json
+
+        clause = "MATCH (c:V1Component)-[:HAS_ENTITY]->(e:V1Entity) WHERE c.hash_sat IN $hashes"
+        if label:
+            clause += " AND $needle IN [l IN labels(e) | toUpper(l)]"
+        clause += " RETURN c.hash_sat AS component, e.entity_id AS id, e.labels_json AS labels_json, e.props_json AS props_json ORDER BY component, id LIMIT $limit"
+        with self._driver.session(database=self._database) as session:
+            rows = session.run(
+                clause,
+                hashes=list(component_hashes),
+                needle=label.upper() if label else None,
+                limit=limit,
+            ).data()
+        results = []
+        for row in rows:
+            try:
+                labels = _json.loads(row.get("labels_json") or "[]")
+                props = _json.loads(row.get("props_json") or "{}")
+            except (TypeError, ValueError):
+                labels, props = [], {}
+            results.append(
+                {"component": row["component"], "id": row["id"], "labels": labels, "props": props}
+            )
+        return results
 
 
 _store: MemoryV1Store | None = None

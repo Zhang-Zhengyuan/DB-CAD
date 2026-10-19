@@ -17,6 +17,7 @@
 // 退出码：0 成功 / 1 失败（stderr 带原因）。错误显式，不静默兜底（v3 原则）。
 #include "kernel/mesh_extractor.h"
 #include "kernel/glb_writer.h"
+#include "entity_graph_codec.h"
 #include "session.h"
 
 #include "vendor/nlohmann/json.hpp"
@@ -149,6 +150,28 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
         std::string why;
         if (!saveEntityList(satOut, single, why)) return fail(stem + ": SAT save failed: " + why);
 
+        // 实体图投影（P6/ADR-3）：结构 + fallback 覆盖标记；root id 为临时
+        // stem，网关以 SAT 内容哈希重编（同 P2 sid 重编语义）。
+        std::string graphText;
+        int graphNodes = 0;
+        const char* graphFallback = "fine_grained";
+        try {
+            nlohmann::json graph = dbcad::worker::serializeEntityGraph(stem, *body);
+            for (const auto& node : graph.value("nodes", nlohmann::json::array())) {
+                const nlohmann::json& props = node.value("props", nlohmann::json::object());
+                if (props.value("fallback", "") == "sat_asset") graphFallback = "sat_asset";
+            }
+            graphNodes = (int)graph.value("nodes", nlohmann::json::array()).size();
+            graphText = graph.dump();
+        } catch (const std::exception& error) {
+            return fail(stem + ": graph emit failed: " + error.what());
+        }
+        {
+            std::ofstream stream(outDir / (stem + ".graph.json"), std::ios::binary);
+            stream.write(graphText.data(), (std::streamsize)graphText.size());
+            if (!stream) return fail(stem + ": graph write failed");
+        }
+
         const fs::path glbOut = outDir / (stem + ".glb");
         {
             std::ofstream stream(glbOut, std::ios::binary);
@@ -171,7 +194,10 @@ int importDirectory(const fs::path& satPath, const fs::path& outDir) {
 
         if (i) manifest += ",";
         manifest += "{\"id\":\"" + stem + "\",\"sat\":\"" + stem + ".sat\",\"glb\":\"" + stem +
-                    ".glb\",\"triangles\":" + std::to_string(mesh.mesh.triangleCount()) +
+                    ".glb\",\"graph\":\"" + stem + ".graph.json\"" +
+                    ",\"graph_nodes\":" + std::to_string(graphNodes) +
+                    ",\"graph_fallback\":\"" + graphFallback + "\"" +
+                    ",\"triangles\":" + std::to_string(mesh.mesh.triangleCount()) +
                     ",\"vertices\":" + std::to_string(mesh.mesh.vertexCount()) +
                     ",\"bbox\":{\"min\":[" + quote(boxMin.x()) + "," + quote(boxMin.y()) + "," +
                     quote(boxMin.z()) + "],\"max\":[" + quote(boxMax.x()) + "," + quote(boxMax.y()) +
@@ -230,6 +256,32 @@ int selftest(const fs::path& scratch) {
     if (!fileBytes(out / "comp-0.glb", glb)) return fail("selftest glb missing");
     if (glb.size() < 20 || glb.compare(0, 4, "glTF") != 0)
         return fail("selftest glb header invalid");
+
+    // 实体图投影断言（P6）：文件存在、schema 正确、root 为 body 顶层节点
+    // 且带合法 fallback 标记。ATTRIB 链在 ACIS 实体上是常态（v2 probe 基线
+    // 同为 sat_fragment），故 fallback 两种取值都合法，只验值域与拓扑计数。
+    std::string graphText;
+    if (!fileBytes(out / "comp-0.graph.json", graphText)) return fail("selftest graph missing");
+    {
+        json graph = json::parse(graphText, nullptr, false);
+        if (graph.is_discarded() || graph.value("schema", "") != "dbcad.entity_graph.v2")
+            return fail("selftest graph schema invalid");
+        const json& nodes = graph.value("nodes", json::array());
+        if (nodes.empty()) return fail("selftest graph has no nodes");
+        bool rootOk = false;
+        for (const json& node : nodes) {
+            const json& labels = node.at("labels");
+            const json& props = node.at("props");
+            if (props.value("top_level", false)) {
+                const std::string fb = props.value("fallback", "");
+                rootOk = labels.size() == 1 && labels[0] == "body" &&
+                         (fb == "fine_grained" || fb == "sat_asset") &&
+                         props.value("topology_node_count", 0) == (int)nodes.size();
+            }
+        }
+        if (!rootOk) return fail("selftest graph root node invalid");
+        if (graph.value("rels", json::array()).empty()) return fail("selftest graph has no rels");
+    }
 
     // 导出链路自检：组件合并回整体 SAT，再合成整体 GLB。
     const fs::path merged = scratch / "merged.sat";

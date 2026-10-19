@@ -172,7 +172,7 @@ class GeometryPool:
             return result
 
     def _collect(self, project_id: str, result: dict) -> None:
-        """把 worker 发射的组件文件搬进内容寻址组件库。"""
+        """把 worker 发射的组件文件搬进内容寻址组件库（含实体图投影）。"""
         assets = get_component_store()
         session = self._sessions.get(project_id)
         if session is None:
@@ -186,6 +186,22 @@ class GeometryPool:
                 entry["sat_bytes"] = assets.put("sat", sat_path.read_bytes())
             if glb_path.exists():
                 entry["glb_bytes"] = assets.put("glb", glb_path.read_bytes())
+            graph_path = session.spool / entry.get("graph", "")
+            if graph_path.exists() and entry.get("sat_bytes"):
+                from .entity_projection import normalize_entity_projection
+
+                # 资产与投影统一存规范化形态（root=组件 SAT 哈希）；
+                # normalize 幂等，store 侧再次 normalize 为 no-op。
+                try:
+                    normalized = normalize_entity_projection(
+                        str(entry["sat_bytes"]), json.loads(graph_path.read_text(encoding="utf-8"))
+                    )
+                except ValueError as exc:
+                    raise WorkerError(f"entity graph payload invalid: {exc}") from exc
+                entry["graph_json"] = normalized
+                entry["graph_bytes"] = assets.put(
+                    "graph", json.dumps(normalized, ensure_ascii=False).encode("utf-8")
+                )
 
     async def shutdown(self) -> None:
         for session in list(self._sessions.values()):

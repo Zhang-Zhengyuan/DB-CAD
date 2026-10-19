@@ -1,14 +1,18 @@
 """/api/v1/files：SAT 导入建项目 / 版本级导出（V3_PLAN.md §2）。
 
-导入流水线（P1 核心）：上传 SAT → C++ worker（MeshExtractor + GlbWriter）
-→ 组件（SAT 源 + GLB）内容寻址入库 → 版本 1 提交 → WS 广播。组件不可变，
-同几何跨项目/跨版本自动去重。
+导入流水线（P1 核心 + P6 投影）：上传 SAT → C++ worker（MeshExtractor +
+GlbWriter + 实体图 codec）→ 组件（SAT 源 + GLB + graph）内容寻址入库 →
+版本 1 提交 → 实体投影写入 → WS 广播。组件不可变，同几何跨项目/跨版本
+自动去重。
 """
+
+import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 
 from ...component_store import get_component_store
 from ...dependencies import verify_api_password
+from ...entity_projection import write_projections
 from ...events_hub import hub
 from ...v1_store import SceneComponent, get_v1_store
 from ...worker_client import WorkerError, get_worker_gateway
@@ -18,21 +22,36 @@ from .versions import _version_or_404
 router = APIRouter(dependencies=[Depends(verify_api_password)])
 
 
-def _store_components(components) -> list[SceneComponent]:
+def _store_components(components) -> tuple[list[SceneComponent], list[tuple[str, dict | None]]]:
+    """入库 SAT/GLB/graph 三资产；返回 (场景组件, (hash, graph) 投影对)。"""
     store = get_component_store()
-    return [
-        SceneComponent(
-            hash_sat=store.put("sat", part.sat),
-            hash_glb=store.put("glb", part.glb),
-            name=f"component-{index}",
-            color=part.color,
-            bbox_min=part.bbox_min,
-            bbox_max=part.bbox_max,
-            triangles=part.triangles,
-            vertices=part.vertices,
+    scene: list[SceneComponent] = []
+    projection_pairs: list[tuple[str, dict | None]] = []
+    for index, part in enumerate(components):
+        hash_sat = store.put("sat", part.sat)
+        graph_hash = ""
+        if part.graph is not None:
+            from ...entity_projection import normalize_entity_projection
+
+            normalized = normalize_entity_projection(hash_sat, part.graph)
+            graph_hash = store.put(
+                "graph", json.dumps(normalized, ensure_ascii=False).encode("utf-8")
+            )
+        scene.append(
+            SceneComponent(
+                hash_sat=hash_sat,
+                hash_glb=store.put("glb", part.glb),
+                name=f"component-{index}",
+                color=part.color,
+                bbox_min=part.bbox_min,
+                bbox_max=part.bbox_max,
+                triangles=part.triangles,
+                vertices=part.vertices,
+                graph=graph_hash,
+            )
         )
-        for index, part in enumerate(components)
-    ]
+        projection_pairs.append((hash_sat, part.graph))
+    return scene, projection_pairs
 
 
 @router.post("/files/import", status_code=status.HTTP_201_CREATED)
@@ -62,13 +81,14 @@ async def import_sat(
     except WorkerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"geometry worker failed: {exc}") from exc
 
-    components = _store_components(imported.components)
+    components, projection_pairs = _store_components(imported.components)
     version = store.commit_version(
         project_id,
         message=f"import {file.filename or 'upload.sat'}",
         author=author,
         components=components,
     )
+    projections = write_projections(store, projection_pairs)
     hub.publish(
         project_id,
         "version.committed",
@@ -78,6 +98,7 @@ async def import_sat(
         "project_id": project_id,
         "version": version.number,
         "components": [c.to_scene_json() for c in version.components],
+        "entity_projection": projections,
     }
 
 

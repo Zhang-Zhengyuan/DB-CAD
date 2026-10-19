@@ -5,7 +5,7 @@
 
 from fastapi import APIRouter
 
-from . import assets, commands, events, files, projects, versions
+from . import assets, commands, entities, events, files, projects, versions
 
 router = APIRouter(prefix="/api/v1", tags=["v1"])
 router.include_router(projects.router)
@@ -14,3 +14,4 @@ router.include_router(assets.router)
 router.include_router(files.router)
 router.include_router(commands.router)
 router.include_router(events.router)
+router.include_router(entities.router)

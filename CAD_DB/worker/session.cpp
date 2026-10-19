@@ -2,6 +2,7 @@
 // 图元表复用 kernel/acis_primitives.inc（纯 ACIS switch，无 Qt 依赖）。
 #include "session.h"
 
+#include "entity_graph_codec.h"
 #include "kernel/glb_writer.h"
 #include "kernel/mesh_extractor.h"
 #include "kernel/model_types.h"
@@ -263,11 +264,32 @@ std::string GeometrySession::emitComponent(ComponentRef& component, bool added) 
         color[2] = native.blue();
     }
     (void)added;
+    // 实体图投影（P6/ADR-3）：codec 移植自 v2 serializer，SAT 资产由上面的
+    // saveEntityList 独立承载，graph.json 只含结构 + fallback 覆盖标记。
+    json graph;
+    try {
+        graph = serializeEntityGraph(component.sid, *component.entity);
+    } catch (const std::exception& error) {
+        throw CommandError(std::string("graph emit failed for ") + component.sid + ": " + error.what());
+    }
+    {
+        std::ofstream stream(fs::path(spoolDir_) / (component.sid + ".graph.json"), std::ios::binary);
+        const std::string text = graph.dump();
+        stream.write(text.data(), (std::streamsize)text.size());
+        if (!stream) throw CommandError("graph write failed for " + component.sid);
+    }
     json emit;
     emit["sid"] = component.sid;
     emit["kind"] = component.kind;
     emit["sat"] = component.sid + ".sat";
     emit["glb"] = component.sid + ".glb";
+    emit["graph"] = component.sid + ".graph.json";
+    emit["graph_nodes"] = graph.value("nodes", json::array()).size();
+    emit["graph_fallback"] = [&] {
+        for (const auto& node : graph.value("nodes", json::array()))
+            if (node.value("props", json::object()).value("fallback", "") == "sat_asset") return "sat_asset";
+        return "fine_grained";
+    }();
     emit["triangles"] = mesh.mesh.triangleCount();
     emit["vertices"] = mesh.mesh.vertexCount();
     emit["bbox"] = {{"min", json::array({boxMin.x(), boxMin.y(), boxMin.z()})},

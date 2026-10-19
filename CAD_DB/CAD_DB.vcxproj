@@ -164,6 +164,7 @@
     <ClCompile Include="..\scripts\tests\mesh_tests.cpp" Condition="'$(DBCADMeshTests)' == 'true'" />
     <ClCompile Include="worker\main.cpp" Condition="'$(DBCADWorker)' == 'true'" />
     <ClCompile Include="worker\session.cpp" Condition="'$(DBCADWorker)' == 'true'" />
+    <ClCompile Include="worker\entity_graph_codec.cpp" Condition="'$(DBCADWorker)' == 'true'" />
     <ClCompile Include="kernel\mesh_extractor.cpp" />
     <ClCompile Include="kernel\glb_writer.cpp" />
   </ItemGroup>
@@ -183,6 +184,8 @@
     <ClInclude Include="kernel\glb_writer.h" />
     <ClInclude Include="kernel\model_types.h" />
     <ClInclude Include="kernel\document_model.h" />
+    <ClInclude Include="worker\session.h" />
+    <ClInclude Include="worker\entity_graph_codec.h" />
     <ClInclude Include="acis.hxx" />
     <ClInclude Include="common.hxx" />
     <ClInclude Include="access.hxx" />

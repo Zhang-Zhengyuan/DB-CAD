@@ -40,7 +40,9 @@ public:
 
     // 执行一条命令，返回 JSON 结果对象：
     //   {"added":[emit...], "modified":[emit...], "removed":[sid...]}
-    // emit = {"sid","kind","sat","glb","bbox":{"min","max"},"color","triangles","vertices"}
+    // emit = {"sid","kind","sat","glb","graph","graph_nodes","graph_fallback",
+    //         "bbox":{"min","max"},"color","triangles","vertices"}
+    //   graph = spool 内 {sid}.graph.json 实体图投影（P6/ADR-3）
     // 失败抛 CommandError（命令原子性尽力而为：失败后网关应重建会话）。
     std::string exec(const std::string& commandJson);
 

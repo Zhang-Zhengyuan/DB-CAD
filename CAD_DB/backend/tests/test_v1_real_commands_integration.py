@@ -116,3 +116,58 @@ def test_face_and_edge_primitives_are_components(client):
     assert arc["triangles"] == 0  # 纯线图元：只有边折线
     arc_glb = client.get(f"/api/v1/assets/{arc['glb']}.glb")
     assert arc_glb.status_code == 200 and arc_glb.content[:4] == b"glTF"
+
+
+def test_entity_projection_on_real_kernel(client):
+    """P6/ADR-3 验收：真 ACIS 拓扑入投影、label 原生可查、幂等零写入、
+    graph 资产可拉取、root 重编为组件哈希。"""
+    project = client.post("/api/v1/projects", json={"name": "p6-projection"}).json()
+    project_id = project["id"]
+    cube = _command(client, project_id, {
+        "action": "component.create",
+        "params": {"kind": "cube", "width": 10, "height": 10, "depth": 10},
+    })
+    assert cube["entity_projection"]["written"] == 1
+    assert cube["entity_projection"]["entities"] > 10  # 真拓扑非骨架
+
+    payload = client.get(f"/api/v1/projects/{project_id}/entities").json()
+    by_label: dict[str, int] = {}
+    for entity in payload["entities"]:
+        by_label[entity["labels"][0]] = by_label.get(entity["labels"][0], 0) + 1
+    assert by_label.get("body") == 1
+    assert by_label.get("face") == 6  # 立方体六面
+    assert by_label.get("edge") == 12
+    assert by_label.get("vertex") == 8
+
+    # label 过滤 + 几何细档字段（face → plane + uv_range）
+    faces = client.get(
+        f"/api/v1/projects/{project_id}/entities", params={"label": "face"}
+    ).json()
+    assert faces["count"] == 6
+    assert {e["props"]["geometry"]["type"] for e in faces["entities"]} == {"plane"}
+
+    # root 重编：top_level body 的 id 即组件 SAT 哈希
+    bodies = client.get(
+        f"/api/v1/projects/{project_id}/entities", params={"label": "body"}
+    ).json()["entities"]
+    component_hash = cube["components"][0]["sat"]
+    assert bodies[0]["id"] == component_hash
+    assert bodies[0]["props"]["uuid"] == component_hash
+    assert bodies[0]["props"]["fallback"] in ("fine_grained", "sat_asset")
+
+    # graph 投影资产可经 /assets 拉取（内容寻址不可变）
+    graph_hash = cube["components"][0]["graph"]
+    assert graph_hash
+    asset = client.get(f"/api/v1/assets/{graph_hash}.graph")
+    assert asset.status_code == 200
+    assert asset.json()["schema"] == "dbcad.entity_graph.v2"
+
+    # 幂等：同内容组件再投影 → 零写入，实体数不膨胀
+    from app.v1_store import get_v1_store
+
+    outcome = get_v1_store().write_entity_projection(
+        component_hash, asset.json()
+    )
+    assert outcome["written"] is False
+    again = client.get(f"/api/v1/projects/{project_id}/entities").json()
+    assert again["count"] == payload["count"]

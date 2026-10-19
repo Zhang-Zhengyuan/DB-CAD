@@ -27,6 +27,7 @@ class WorkerError(RuntimeError):
 class ImportedComponent:
     sat: bytes
     glb: bytes
+    graph: dict | None = None  # 实体图投影（P6/ADR-3）；旧 worker 无此产物时为 None
     bbox_min: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     bbox_max: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     color: list[float] = field(default_factory=lambda: [0.8, 0.8, 0.8])
@@ -82,11 +83,19 @@ class SubprocessWorkerGateway:
             glb_path = out_dir / entry.get("glb", "")
             if not sat_path.exists() or not glb_path.exists():
                 raise WorkerError(f"worker component files missing: {entry}")
+            graph_payload: dict | None = None
+            graph_path = out_dir / entry.get("graph", "")
+            if entry.get("graph") and graph_path.exists():
+                try:
+                    graph_payload = json.loads(graph_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as exc:
+                    raise WorkerError(f"worker graph payload is not JSON: {exc}") from exc
             bbox = entry.get("bbox", {})
             components.append(
                 ImportedComponent(
                     sat=sat_path.read_bytes(),
                     glb=glb_path.read_bytes(),
+                    graph=graph_payload,
                     bbox_min=[float(v) for v in bbox.get("min", [0.0, 0.0, 0.0])],
                     bbox_max=[float(v) for v in bbox.get("max", [0.0, 0.0, 0.0])],
                     color=[float(v) for v in entry.get("color", [0.8, 0.8, 0.8])],

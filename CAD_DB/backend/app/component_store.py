@@ -12,8 +12,13 @@ import hashlib
 from uuid import uuid4
 from pathlib import Path
 
-KINDS = ("sat", "glb")
-KIND_MEDIA_TYPES = {"sat": "application/octet-stream", "glb": "model/gltf-binary"}
+KINDS = ("sat", "glb", "graph")
+KIND_MEDIA_TYPES = {
+    "sat": "application/octet-stream",
+    "glb": "model/gltf-binary",
+    # 实体图投影（P6/ADR-3）：worker codec 产出的结构 JSON，组件派生资产。
+    "graph": "application/json",
+}
 
 
 class ComponentStore:

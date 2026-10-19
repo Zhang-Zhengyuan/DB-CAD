@@ -2,7 +2,7 @@
 
 # 存储链路收敛与重构计划（架构取舍）
 
-> 2026-10-18 头注（晚些更新）：Phase A 已完成并入 master；Phase C 已执行；**Phase B（库内原生标签+扁平字段）已于 refactor/architecture-v2 分支实施**（见 `app/json_graph_native.py`、`scripts/migrate_json_graph_native_v2.py`、L3 测试 `test_json_graph_native_v2.py`——权威载荷仍是 labels_json/props_json，原生投影可查询且迁移幂等）；Phase D（实体级增量）仍为路线图。D 栈代码已不在工作区，字段映射参考见本文 §3 与 ENTITY_STORAGE_TEST_PLAN 的实体矩阵。
+> 2026-10-18 头注（晚些更新）：Phase A 已完成并入 master；Phase C 已执行；**Phase B（库内原生标签+扁平字段）已于 refactor/architecture-v2 分支实施**（见 `app/json_graph_native.py`、`scripts/migrate_json_graph_native_v2.py`、L3 测试 `test_json_graph_native_v2.py`——权威载荷仍是 labels_json/props_json，原生投影可查询且迁移幂等）；Phase D（实体级增量）已提级进 v3 计划（P6 全量投影 + P8 实体级增量），见 V3_PLAN.md。D 栈代码已不在工作区，字段映射参考见本文 §3 与 ENTITY_STORAGE_TEST_PLAN 的实体矩阵。
 
 > 前置文档：[ENTITY_STORAGE_TEST_PLAN.md](ENTITY_STORAGE_TEST_PLAN.md)（逐实体单元测试与 Phase 1 实测基线）。
 > 本文回答的问题：四条存储链路收敛成几条、废弃什么、保留什么、补什么。
@@ -128,7 +128,7 @@
 
 ### Phase D：实体级增量更新（论文第 5 章的完整恢复）
 
-Phase B 稳定后启动，协议不变，详见第 4 节演进路线。**验收**：仅改一个 face 半径的二次 push，库内新增实体节点数 ≈ 变更实体数（而非整个组件）；版本回放与全量图等价（L3 断言）。
+Phase B 稳定后启动，协议不变，详见第 4 节演进路线。（2026-10-19 提级进 v3：P6 先落 worker 侧全量投影，P8 按第 4 节演进路线完成实体级增量；写入方从 v2 客户端换为 v3 worker/网关，版本语义从组件整替换为内容寻址组件链，见 V3_PLAN.md。）**验收**：仅改一个 face 半径的二次 push，库内新增实体节点数 ≈ 变更实体数（而非整个组件）；版本回放与全量图等价（L3 断言）。
 
 ## 6. 风险与兼容
 
