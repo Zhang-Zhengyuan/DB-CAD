@@ -18,6 +18,21 @@ body {
 }
 
 .app { display: flex; flex-direction: column; height: 100%; }
+.login-screen { display: grid; place-items: center; height: 100%; }
+.login-form { width: 340px; padding: 28px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+.login-form label { display: grid; gap: 8px; margin-bottom: 16px; }
+.login-form p { color: #ffd9d9; }
+.login-form input, .project-create input {
+  min-width: 0; width: 100%; padding: 6px 8px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px;
+}
+.login-form button, .project-create button {
+  padding: 5px 10px; color: var(--text); background: #2b3a4d;
+  border: 1px solid #3d5a80; border-radius: 4px; cursor: pointer;
+}
+.project-create { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.project-create input { grid-column: 1 / -1; }
+.project-create button:disabled { opacity: 0.45; cursor: default; }
 .header {
   display: flex; align-items: center; gap: 14px;
   padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border);

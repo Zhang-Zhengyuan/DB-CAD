@@ -82,6 +82,15 @@ export function Toolbar() {
     });
   };
 
+  const download = async (fmt: "sat" | "glb" | "stl") => {
+    if (!projectId) return;
+    try {
+      await api.download(projectId, fmt, scene?.version);
+    } catch (e) {
+      useViewer.setState({ error: `导出失败：${e instanceof Error ? e.message : String(e)}` });
+    }
+  };
+
   return (
     <div className="toolbar">
       <div className="segmented">
@@ -191,19 +200,19 @@ export function Toolbar() {
         </button>
         <button
           disabled={!active || !scene}
-          onClick={() => projectId && window.open(api.exportUrl(projectId, "sat", scene?.version), "_blank")}
+          onClick={() => void download("sat")}
         >
           ⬇ SAT
         </button>
         <button
           disabled={!active || !scene}
-          onClick={() => projectId && window.open(api.exportUrl(projectId, "glb", scene?.version), "_blank")}
+          onClick={() => void download("glb")}
         >
           ⬇ GLB
         </button>
         <button
           disabled={!active || !scene}
-          onClick={() => projectId && window.open(api.exportUrl(projectId, "stl", scene?.version), "_blank")}
+          onClick={() => void download("stl")}
         >
           ⬇ STL
         </button>

@@ -89,24 +89,6 @@ function New-StrongPassword([int]$Length = 32) {
     }
 }
 
-function Test-WeakDeploymentPassword([string]$Password) {
-    if ([string]::IsNullOrWhiteSpace($Password)) {
-        return $true
-    }
-
-    $value = $Password.Trim()
-    if ($value.Length -lt 16) {
-        return $true
-    }
-
-    if ($value -match "^\d+$") {
-        return $true
-    }
-
-    $weakValues = @("12345678", "password", "neo4j", "changeme", "your_password", "dbcad")
-    return ($weakValues -contains $value.ToLowerInvariant())
-}
-
 function New-DefaultLocalConfig([string]$Password) {
     return @{
         DBCAD_PASSWORD = $Password
@@ -149,18 +131,16 @@ function Ensure-UnifiedPasswordConfig([string]$ConfigFilePath, [hashtable]$Confi
     $rewrite = $false
 
     if ([string]::IsNullOrWhiteSpace($password)) {
-        if (-not (Test-WeakDeploymentPassword $legacyNeo4jPassword)) {
+        if (-not [string]::IsNullOrWhiteSpace($legacyNeo4jPassword)) {
             $password = $legacyNeo4jPassword
-        } elseif (-not (Test-WeakDeploymentPassword $legacyApiPassword)) {
+        } elseif (-not [string]::IsNullOrWhiteSpace($legacyApiPassword)) {
             $password = $legacyApiPassword
         }
         $rewrite = $true
     }
 
-    if (Test-WeakDeploymentPassword $password) {
-        $password = New-StrongPassword
-        $rewrite = $true
-        Write-Warning "The local deployment password was missing or weak. A new strong DBCAD_PASSWORD was generated in $ConfigFilePath. Recreate the local Neo4j Docker data once with -ResetNeo4jDockerData."
+    if ([string]::IsNullOrWhiteSpace($password)) {
+        throw "Set DBCAD_PASSWORD to the existing database password in $ConfigFilePath."
     }
 
     if ($Config.ContainsKey("DBCAD_NEO4J_PASSWORD") -or $Config.ContainsKey("DBCAD_API_PASSWORD")) {

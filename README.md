@@ -13,6 +13,10 @@
 ```powershell
 .\scripts\check-environment.ps1
 .\scripts\build.ps1 -Configuration Release
+Push-Location web
+npm ci
+npm run build
+Pop-Location
 .\CAD_DB\deploy\start_dbcad_fullstack.cmd
 ```
 
@@ -67,6 +71,6 @@ docs/                     架构、计划、基准、上手指南；docs/history
 .\CAD_DB\deploy\stop_dbcad_fullstack.cmd
 ```
 
-启动链路：Neo4j 容器 → FastAPI → 浏览器 `http://127.0.0.1:8000/web/`。worker 由 FastAPI 按需拉起，无需手工启动。服务默认提供 `/health`、`/docs`、`/web`、`/webui`，端口 8000；参数与密码管理见 [部署说明](CAD_DB/DEPLOYMENT.md)。
+启动链路：Neo4j → FastAPI → 浏览器 `/web/`，worker 由后端按需启动。默认端口 8000，以启动器输出地址为准；登录使用 `CAD_DB/deploy/dbcad.local.env` 中的 `DBCAD_PASSWORD`。重建与同机双客户端测试见[上手指南](docs/GETTING_STARTED.md#修改代码后重新运行)，参数见[部署说明](CAD_DB/DEPLOYMENT.md)。
 
 [架构](docs/ARCHITECTURE.md) · [v3 计划](docs/V3_PLAN.md) · [压测基准](docs/BENCHMARK_v3.md) · [贡献说明](CONTRIBUTING.md) · [后端说明](CAD_DB/backend/README.md)

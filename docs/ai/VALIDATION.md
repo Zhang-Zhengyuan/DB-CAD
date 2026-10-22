@@ -42,3 +42,5 @@ npx playwright test  # 真浏览器 + 真后端 + 真 worker（e2e-server.cmd，
 ```
 
 e2e 会自建隔离后端（临时组件库目录），不污染开发实例。格式沿用 `.clang-format` / `.editorconfig`；当前 pyproject 未配置 Ruff 依赖，不能把未安装的 lint 命令声称为既有 CI。
+
+源码启动器回归：在仓库根执行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/test-fullstack-launcher.ps1` 和 `CAD_DB/deploy/start_dbcad_fullstack.cmd -PrepareOnly`。Web e2e 使用隔离内存存储和测试密码，覆盖登录、资产/导入导出认证及双会话同步，不代表 Neo4j 持久化验收。

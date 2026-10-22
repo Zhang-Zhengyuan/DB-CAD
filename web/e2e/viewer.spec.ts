@@ -2,6 +2,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const API = "/api/v1";
+const headers = { "X-API-Password": "dbcad-e2e-access" };
 
 async function api(page: Page, path: string, payload?: unknown) {
   const response = await page.request[path.startsWith("/projects") ? "get" : "get"](API + path, {});
@@ -9,14 +10,14 @@ async function api(page: Page, path: string, payload?: unknown) {
 }
 
 async function command(page: Page, projectId: string, payload: Record<string, unknown>) {
-  const response = await page.request.post(`${API}/projects/${projectId}/commands`, { data: payload });
+  const response = await page.request.post(`${API}/projects/${projectId}/commands`, { data: payload, headers });
   expect(response.ok(), await response.text()).toBeTruthy();
   return response.json();
 }
 
 test("真栈端到端：渲染/建模/测量/版本切换", async ({ page }) => {
   // 种子项目（真 ACIS worker）
-  const created = await page.request.post(`${API}/projects`, { data: { name: `e2e-${Date.now()}` } });
+  const created = await page.request.post(`${API}/projects`, { data: { name: `e2e-${Date.now()}` }, headers });
   expect(created.ok(), await created.text()).toBeTruthy();
   const project = await created.json();
   await command(page, project.id, {
@@ -29,6 +30,7 @@ test("真栈端到端：渲染/建模/测量/版本切换", async ({ page }) => 
   });
 
   // 打开查看器
+  await page.addInitScript(() => sessionStorage.setItem("dbcad.password", "dbcad-e2e-access"));
   await page.goto("/web/");
   await page.getByRole("listitem").filter({ hasText: project.name }).click();
   await expect(page.locator(".header .project")).toContainText("v2", { timeout: 15_000 });
@@ -46,7 +48,7 @@ test("真栈端到端：渲染/建模/测量/版本切换", async ({ page }) => 
     return entry ? entry.name.split("/").pop() : null;
   });
   expect(glbHash).toBeTruthy();
-  const asset = await page.request.get(`${API}/assets/${glbHash}`);
+  const asset = await page.request.get(`${API}/assets/${glbHash}`, { headers });
   expect(asset.ok()).toBeTruthy();
   expect((await asset.headers())["cache-control"]).toContain("immutable");
 

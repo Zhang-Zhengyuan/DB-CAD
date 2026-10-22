@@ -80,7 +80,8 @@ function Start-FastApi(
     [int]$Port,
     [string]$ApiPassword,
     [bool]$SkipDependencySync,
-    [string]$LogDir
+    [string]$LogDir,
+    [hashtable]$BackendEnvironment = @{}
 ) {
     if (!(Test-Path -LiteralPath (Join-Path $ServerDir "app\main.py")) -or !(Test-Path -LiteralPath (Join-Path $ServerDir "pyproject.toml"))) {
         throw "Backend package is incomplete. Expected app/main.py and pyproject.toml in $ServerDir"
@@ -102,10 +103,10 @@ function Start-FastApi(
         Write-Host "[INFO] Skip dependency sync (-SkipDependencySync)."
     }
 
-    [Environment]::SetEnvironmentVariable("CAD_DB_API_PASSWORD", $ApiPassword, "Process")
-
     $args = @(
         "run",
+        "--frozen",
+        "--no-sync",
         "uvicorn",
         "app.main:app",
         "--host", $HostAddress,
@@ -114,5 +115,18 @@ function Start-FastApi(
 
     $stdout = Join-Path $LogDir "fastapi.out.log"
     $stderr = Join-Path $LogDir "fastapi.err.log"
-    return Start-Process -FilePath $uv -ArgumentList $args -WorkingDirectory $ServerDir -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $childEnvironment = @{} + $BackendEnvironment
+    $childEnvironment["CAD_DB_API_PASSWORD"] = $ApiPassword
+    $previousEnvironment = @{}
+    try {
+        foreach ($name in $childEnvironment.Keys) {
+            $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+            [Environment]::SetEnvironmentVariable($name, [string]$childEnvironment[$name], "Process")
+        }
+        return Start-Process -FilePath $uv -ArgumentList $args -WorkingDirectory $ServerDir -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    } finally {
+        foreach ($name in $previousEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], "Process")
+        }
+    }
 }

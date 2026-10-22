@@ -9,7 +9,7 @@ import { Canvas, useLoader, useThree } from "@react-three/fiber";
 import { Html, OrbitControls, TransformControls } from "@react-three/drei";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import * as THREE from "three";
-import { api, type SceneComponent } from "./api";
+import { api, authHeaders, type SceneComponent } from "./api";
 import { useViewer } from "./store";
 
 // 组件组注册表：TransformControls 需要跨组件拿到主选组的 Object3D。
@@ -19,7 +19,7 @@ function ComponentModel({ component }: { component: SceneComponent }) {
   // P9：无面体/不可离散组件降级为无 GLB（mesh_error）——只入树不渲染。
   if (!component.glb) return null;
   const url = api.assetUrl(component.glb, "glb");
-  const gltf = useLoader(GLTFLoader, url);
+  const gltf = useLoader(GLTFLoader, url, (loader) => loader.setRequestHeader(authHeaders()));
   const isSelected = useViewer((s) => s.selected.includes(component.component_id));
   const intents = useViewer((s) => s.intents);
   const editingBy = useMemo(
