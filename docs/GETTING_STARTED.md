@@ -9,7 +9,7 @@ git clone https://github.com/Zhang-Zhengyuan/DB-CAD.git
 cd DB-CAD
 ```
 
-安装 Visual Studio 2022 的 C++ 桌面开发工作负载与 Windows SDK、Python 3.11+、uv、Node.js 20+、Docker Desktop（Linux 容器引擎）。无 Qt 依赖（P7 已移除 Qt 客户端）。
+安装 Visual Studio 2022 的 C++ 桌面开发工作负载与 Windows SDK、Python 3.11+、uv、Node.js 20.19+ 或 22.12+、Docker Desktop（Linux 容器引擎）。无 Qt 依赖（P7 已移除 Qt 客户端）。
 
 ## 2. 准备依赖包
 
@@ -36,7 +36,10 @@ Pop-Location
 
 ```powershell
 .\scripts\build.ps1 -Configuration Release   # CAD_DB.sln → dbcad_worker.exe（含 ACIS 运行时暂存）
-cd web ; npm install ; npm run build          # 可选：本地开发用 npm run dev
+Push-Location web
+npm ci
+npm run build
+Pop-Location
 ```
 
 脚本自动定位 Visual Studio 的 MSBuild，输出到 `x64/Release/`。支持 `-DepsRoot`、`-RuntimeDir` 参数。Debug 必须配套 Debug SDK/运行时。生产部署直接使用 FastAPI 托管的 `/web`，本地前端开发才需要 Vite。
@@ -48,7 +51,28 @@ cd web ; npm install ; npm run build          # 可选：本地开发用 npm run
 .\CAD_DB\deploy\stop_dbcad_fullstack.cmd
 ```
 
-启动链路：Neo4j 容器（5.15 + APOC）→ FastAPI（端口 8000）→ 浏览器打开 `http://127.0.0.1:8000/web/`。worker 由 FastAPI 按需拉起，无需手工启动。首次运行自动生成被 Git 忽略的 `CAD_DB/deploy/dbcad.local.env` 与密码；不要上传生成配置或数据库数据。
+启动链路：Neo4j（5.15 + APOC）→ FastAPI → 浏览器 `/web/`。默认端口 8000，以启动器输出为准；登录使用 `CAD_DB/deploy/dbcad.local.env` 中的 `DBCAD_PASSWORD`。worker 默认选择 Release，用 `-Configuration Debug` 可切换。首次运行生成被 Git 忽略的本机配置，不要上传配置或数据库数据。
+
+`start_dbcad_fullstack.cmd -PrepareOnly` 只检查 worker 和 Web 构建是否存在，不启停服务，也不验证数据库认证、DLL 或许可。
+
+### 修改代码后重新运行
+
+VS/MSBuild 只构建 C++ worker，前端由 Node/Vite 构建，Python 源码重启即可。在仓库根目录执行，仅重建修改涉及的模块：
+
+```powershell
+.\CAD_DB\deploy\stop_dbcad_fullstack.cmd
+# C++ 修改后：
+.\scripts\build.ps1 -Configuration Release
+# 前端修改后：
+Push-Location web
+npm run build              # package-lock.json 变化时先 npm ci
+Pop-Location
+.\CAD_DB\deploy\start_dbcad_fullstack.cmd
+```
+
+启动器同步锁定的 Python 依赖；Debug 构建需传 `-Configuration Debug`。更新代码时不要用 `-KeepExistingServices`，它会复用旧后端。停止脚本停止已记录的后端及 worker，保留数据库。
+
+前端开发可在 `web/` 执行 `npm run dev`，访问 `http://localhost:5173/web/`。代理默认指向后端 8000；其他端口在运行前设置 `$env:DBCAD_DEV_API_URL='http://127.0.0.1:18000'`。正式 `/web/` 仍需重新构建。
 
 服务检查：`/health`、`/docs`、`/web`（CAD 客户端）、`/webui`（Neo4j 管理台，要求 API 密码）。
 
@@ -56,7 +80,9 @@ cd web ; npm install ; npm run build          # 可选：本地开发用 npm run
 
 ## 6. 功能验收
 
-浏览器开两个标签页登录同名项目；A 插入几何体并等待版本提交，B 刷新后看到相同模型；B 执行修改命令，A 侧收到版本事件提示。再检查：布尔/删除/撤销重做、STEP 导入（装配体组件树）、实体查询 `/api/v1/projects/{id}/entities`、过期 base_version 的 409 冲突提示、SAT/GLB/STL 导出。维护者记录实际结果，不能以编译通过替代完整验收。
+同机只启动一套服务，用普通窗口与无痕窗口分别登录同一地址。A 创建项目，B 点击“刷新列表”后打开同一项目；顶部应出现两个用户。A、B 交替插入图元，另一窗口应自动更新模型和版本。不要各建一个同名项目，也不要复制标签页共享会话身份。
+
+再检查布尔/删除/撤销重做、SAT/STEP 导入、实体查询、冲突组件的旧 base_version 返回 409、SAT/GLB/STL 导出，以及重启后数据仍在。编译通过不代表完整验收。
 
 跨机器访问：服务器侧放行 8000 端口，客户端浏览器直接访问；正式部署按组织网络环境设置防火墙和访问控制。
 
@@ -67,6 +93,8 @@ cd web ; npm install ; npm run build          # 可选：本地开发用 npm run
 | exe 缺 DLL | 提供完整依赖运行时并重新构建 |
 | Docker engine 未启动 | 启动 Docker Desktop 并确认 `docker info` |
 | Neo4j/APOC 检查失败 | 检查镜像下载、容器日志和端口；不要盲目重置 |
+| Neo4j authentication failed | 配置里的密码与数据库当前密码不匹配；修正配置或使用 `-Neo4jPassword`。容器的初始 NEO4J_AUTH 不代表当前数据库密码，不要直接清库 |
+| Web client is not built | 在 web/ 执行 npm ci、npm run build，再重启后端 |
 | worker 拉起失败 | 看 FastAPI 日志中 worker 路径与 ACIS DLL 是否就位 |
 | 401 Invalid API password | 使用 `dbcad.local.env` 生成的密码；测试环境置空 `CAD_DB_API_PASSWORD` |
 

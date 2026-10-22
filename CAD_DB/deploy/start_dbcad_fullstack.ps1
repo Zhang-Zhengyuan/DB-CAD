@@ -9,6 +9,8 @@ param(
     [string]$ApiPassword = "",
     [string]$Author = "dbcad-web",
     [string]$ConfigPath = "",
+    [ValidateSet("Release", "Debug")][string]$Configuration = "Release",
+    [switch]$PrepareOnly = $false,
     [int]$Neo4jHttpPort = 7474,
     [string]$Neo4jDockerName = "",
     [string]$Neo4jDockerImage = "",
@@ -45,6 +47,14 @@ $ConfigPath = Resolve-FullPath $ConfigPath
 $localConfig = Ensure-LocalConfig -ConfigFilePath $ConfigPath
 $localConfig = Ensure-UnifiedPasswordConfig -ConfigFilePath $ConfigPath -Config $localConfig
 $UnifiedPassword = Get-ConfigValue -Config $localConfig -Name "DBCAD_PASSWORD" -DefaultValue ""
+
+$workerExe = Join-Path $repoRoot "x64\$Configuration\dbcad_worker.exe"
+if (-not (Test-Path -LiteralPath $workerExe -PathType Leaf)) {
+    throw "Worker not found: $workerExe. Run scripts/build.ps1 -Configuration $Configuration."
+}
+if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "web\dist\index.html"))) {
+    throw "Web client is not built. From the repository root run: Push-Location web; npm ci; npm run build; Pop-Location. Then restart the launcher."
+}
 
 if (-not $PSBoundParameters.ContainsKey("FastApiHost")) {
     $FastApiHost = Get-ConfigValue -Config $localConfig -Name "DBCAD_FASTAPI_HOST" -DefaultValue $FastApiHost
@@ -91,9 +101,17 @@ if ([string]::IsNullOrWhiteSpace($Neo4jDockerName)) { $Neo4jDockerName = "neo4j-
 if ([string]::IsNullOrWhiteSpace($Neo4jDockerImage)) { $Neo4jDockerImage = "neo4j:5.15" }
 if ([string]::IsNullOrWhiteSpace($Neo4jDockerDataRoot)) { $Neo4jDockerDataRoot = Join-Path $repoRoot "neo4j-runtime" }
 
+Write-Host "[INFO] Config: $ConfigPath"
+Write-Host "[INFO] Worker: $workerExe"
+if ($PrepareOnly) {
+    Write-Host "[OK] Source preparation checks passed. No services started; database authentication and worker runtime have not been checked."
+    return
+}
+
 $runDir = Ensure-Directory (Join-Path $projectRoot "deploy\run")
 $logDir = Ensure-Directory (Join-Path $runDir "logs")
 $pidFile = Join-Path $runDir "pids.json"
+$previousRun = if (Test-Path -LiteralPath $pidFile) { Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json } else { $null }
 $stopScript = Join-Path $scriptRoot "stop_dbcad_fullstack.ps1"
 if ((-not $KeepExistingServices) -and (Test-Path -LiteralPath $stopScript) -and (Test-Path -LiteralPath $pidFile)) {
     Write-Host "[INFO] Stopping services from previous launcher run..."
@@ -132,9 +150,14 @@ $backendProcess = $null
 if (Test-ServiceHealth "$fastApiUrl/health") {
     if ($KeepExistingServices) {
         Write-Warning "FastAPI is already healthy at $fastApiUrl/health. Reusing it because -KeepExistingServices was set."
+        if ($null -ne $previousRun -and $previousRun.backend_pid -and $previousRun.fastapi_url -eq $fastApiUrl) {
+            $recorded = Get-Process -Id $previousRun.backend_pid -ErrorAction SilentlyContinue
+            if ($null -ne $recorded -and $recorded.StartTime.ToUniversalTime().ToString("o") -eq $previousRun.backend_start_time_utc) {
+                $backendProcess = $recorded
+            }
+        }
     } else {
-        Write-Host "[INFO] FastAPI is already running at $fastApiUrl/health. Stopping old process to restart..."
-        Stop-ProcessByPort -Port $FastApiPort
+        throw "Port $FastApiPort already serves an untracked API. Stop that instance explicitly or pass -KeepExistingServices to reuse it."
     }
 }
 if (-not (Test-ServiceHealth "$fastApiUrl/health")) {
@@ -144,6 +167,12 @@ if (-not (Test-ServiceHealth "$fastApiUrl/health")) {
         -HostAddress $FastApiHost `
         -Port $FastApiPort `
         -ApiPassword $ApiPassword `
+        -BackendEnvironment @{
+            CAD_DB_NEO4J_URI = $Neo4jUri
+            CAD_DB_NEO4J_USER = $Neo4jUser
+            CAD_DB_NEO4J_PASSWORD = $Neo4jPassword
+            CAD_DB_WORKER_EXE = $workerExe
+        } `
         -SkipDependencySync $false `
         -LogDir $logDir
     if (-not (Wait-ServiceHealth -Url "$fastApiUrl/health" -Process $backendProcess -ServiceName "FastAPI" -Attempts $RetryCount -DelaySeconds $RetryDelaySeconds)) {
@@ -161,6 +190,7 @@ if (-not $SkipBrowser) {
 
 Write-PidFile -Path $pidFile -Data ([ordered]@{
     backend_pid = if ($null -ne $backendProcess) { $backendProcess.Id } else { $null }
+    backend_start_time_utc = if ($null -ne $backendProcess) { $backendProcess.StartTime.ToUniversalTime().ToString("o") } else { $null }
     collaboration_mode = "v3_server_authoritative"
     fastapi_url = $fastApiUrl
     started_at = (Get-Date).ToString("o")

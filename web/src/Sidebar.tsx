@@ -113,6 +113,18 @@ export function Sidebar() {
   const showVersion = useViewer((s) => s.showVersion);
   const select = useViewer((s) => s.select);
   const toggleSelect = useViewer((s) => s.toggleSelect);
+  const [projectName, setProjectName] = useState("");
+  const createProject = async () => {
+    if (!projectName.trim()) return;
+    try {
+      const project = await api.createProject(projectName.trim());
+      setProjectName("");
+      await loadProjects();
+      await openProject(project.id);
+    } catch (e) {
+      useViewer.setState({ error: `创建项目失败：${String(e)}` });
+    }
+  };
 
   useEffect(() => {
     void loadProjects();
@@ -123,6 +135,12 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <Section title="项目">
+        <form className="project-create" onSubmit={(event) => { event.preventDefault(); void createProject(); }}>
+          <input aria-label="新项目名称" placeholder="新项目名称" value={projectName}
+            onChange={(event) => setProjectName(event.target.value)} />
+          <button type="submit" disabled={!projectName.trim()}>创建项目</button>
+          <button type="button" onClick={() => void loadProjects()}>刷新列表</button>
+        </form>
         <ul className="project-list">
           {projects.map((project) => (
             <li

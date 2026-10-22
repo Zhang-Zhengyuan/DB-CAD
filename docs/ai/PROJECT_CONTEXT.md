@@ -24,7 +24,7 @@
 | Neo4j 管理 WebUI | `backend/app/neo4j_webui/`、`static/webui/` | 鉴权与页面人工验证 |
 | 压测与基准 | `backend/scripts/benchmark_v3.py` | `docs/BENCHMARK_v3.md`（ABC 200 样本） |
 | 本机环境、构建依赖 | `scripts/check-environment.ps1`、`build.ps1`、`Directory.Build.props` | `docs/GETTING_STARTED.md`、`DEPENDENCIES.md` |
-| 部署和打包 | `CAD_DB/deploy/`、`deploy/lib/` | `CAD_DB/DEPLOYMENT.md`、`scripts/tests/`（PR 策略检查） |
+| 部署和打包 | `CAD_DB/deploy/`、`deploy/lib/` | `CAD_DB/DEPLOYMENT.md`；`scripts/tests/test-fullstack-launcher.ps1`；`web/e2e/` |
 
 表内 backend 路径相对 `CAD_DB/`。不确定文件名先限定目录用 `rg --files` 查找。
 

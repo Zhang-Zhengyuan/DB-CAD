@@ -13,6 +13,7 @@ export default defineConfig({
     trace: "off",
   },
   webServer: {
+    env: { CAD_DB_API_PASSWORD: "dbcad-e2e-access", CAD_DB_NEO4J_URI: "" },
     command: "..\\..\\web\\scripts\\e2e-server.cmd",
     cwd: "../CAD_DB/backend",
     url: "http://127.0.0.1:8765/health",

@@ -2,8 +2,8 @@
 
 v3 架构（V3_PLAN P7 起）：**浏览器是唯一客户端**。启动 Neo4j 与 FastAPI
 （`/api/v1` + `/web` 静态托管 Web 客户端 + `/webui` Neo4j 管理台），几何
-计算在服务端 C++ worker（`x64/<Configuration>/dbcad_worker.exe`，启动器
-按配置自动定位）。Qt 客户端与 C++ Bridge 已移除。首次环境准备见
+计算在服务端 C++ worker（默认 `x64/Release/dbcad_worker.exe`，可传
+`-Configuration Debug`）。Qt 客户端与 C++ Bridge 已移除。首次环境准备见
 [新成员指南](../docs/GETTING_STARTED.md)。
 
 统一部署入口：
@@ -12,7 +12,9 @@ v3 架构（V3_PLAN P7 起）：**浏览器是唯一客户端**。启动 Neo4j �
 .\CAD_DB\deploy\start_dbcad_fullstack.cmd
 ```
 
-启动链路：Neo4j 容器 → FastAPI → 打开浏览器 `http://127.0.0.1:8000/web/`。
+启动链路：Neo4j 容器 → FastAPI → 打开浏览器 `/web/`。默认端口 8000，已有
+`dbcad.local.env` 可覆盖端口；使用启动器打印的 `Web client` 地址并输入
+`DBCAD_PASSWORD` 登录。构建与重启步骤见[上手指南](../docs/GETTING_STARTED.md#修改代码后重新运行)。
 worker 由 FastAPI 按需拉起（GeometryPool 每项目一进程），无需手工启动；
 构建入口 `scripts/build.ps1`（解决方案默认目标即 `dbcad_worker.exe`）。
 
@@ -62,12 +64,9 @@ DBCAD_AUTHOR=dbcad-web
    worker 进程执行（ADR-1/ADR-2）。
 3. FastAPI 的访问密码使用 `DBCAD_PASSWORD`（空密码 = 关闭鉴权，仅限本地测试）。
 
-修改密码后，需要重建本地 Neo4j 数据，因为 Neo4j 只会在首次初始化数据库时
-应用 `NEO4J_AUTH`：
-
-```powershell
-.\CAD_DB\deploy\start_dbcad_fullstack.cmd -ResetNeo4jDockerData
-```
+`NEO4J_AUTH` 只初始化新数据库。认证失败时应修正配置，修改密码应先通过
+Neo4j 用户管理完成，再同步配置；正常启动不轮换已有密码。仅在允许丢弃
+数据时才使用 `-ResetNeo4jDockerData`。
 
 ## Docker Neo4j 和 APOC
 
@@ -114,12 +113,14 @@ http://127.0.0.1:8000/webui   Neo4j 管理台（V1 模型 + 实体投影浏览�
 | 参数 | 用途 |
 |---|---|
 | `-ConfigPath` | 指定统一配置文件，默认 `CAD_DB\deploy\dbcad.local.env` |
-| `-ResetNeo4jDockerData` | 删除并重建本地 Neo4j 容器与 `neo4j-runtime` 数据。修改 `DBCAD_PASSWORD` 后需要使用 |
+| `-ResetNeo4jDockerData` | 删除并重建本地 Neo4j 容器与 `neo4j-runtime` 数据；仅限明确允许丢弃数据时使用 |
+| `-Configuration` | 选择 Release（默认）或 Debug worker；与构建配置一致 |
+| `-PrepareOnly` | 只检查 worker、Web 构建及本机配置；不启停服务、不连接数据库 |
 | `-SkipNeo4jDocker` | 不创建、不启动 Docker 容器。适合使用外部 Neo4j |
 | `-FastApiHost` / `-FastApiPort` | FastAPI 监听地址和端口，默认来自 `dbcad.local.env` |
 | `-Neo4jHost` / `-Neo4jPort` | Neo4j Bolt 地址，默认来自 `dbcad.local.env` |
 | `-Neo4jUser` / `-Neo4jPassword` | Neo4j 认证信息，默认 `DBCAD_NEO4J_USER` 与统一 `DBCAD_PASSWORD` |
-| `-ApiPassword` | FastAPI 访问密码，默认统一 `DBCAD_PASSWORD`；空值会关闭鉴权 |
+| `-ApiPassword` | FastAPI 访问密码，默认统一 `DBCAD_PASSWORD`；全栈启动器要求非空 |
 | `-SkipBrowser` | 启动服务但不自动打开浏览器 |
 | `-KeepExistingServices` | 如果 8000 已有健康服务，复用现有服务 |
 
@@ -129,5 +130,5 @@ http://127.0.0.1:8000/webui   Neo4j 管理台（V1 模型 + 实体投影浏览�
    构建 worker 并暂存运行时。
 2. 执行一次启动器，让它创建或迁移 `CAD_DB\deploy\dbcad.local.env`。
 3. 正常启动（无需重置）：`.\CAD_DB\deploy\start_dbcad_fullstack.cmd`
-4. 浏览器打开 `http://127.0.0.1:8000/web/`，两个标签页（不同 author）即可
-   验证实时协作。
+4. 用两个独立浏览器会话访问启动器打印的同一地址，输入密码并打开同一项目，
+   即可验证实时协作；具体步骤和修改代码后的重启流程见[上手指南](../docs/GETTING_STARTED.md#修改代码后重新运行)。

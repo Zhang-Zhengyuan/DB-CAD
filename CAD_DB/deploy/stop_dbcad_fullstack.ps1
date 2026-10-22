@@ -29,7 +29,7 @@ function Get-DescendantProcessIds([int]$ParentProcessId) {
     return $ids
 }
 
-function Stop-Pid([object]$PidValue, [string]$Name) {
+function Stop-Pid([object]$PidValue, [string]$Name, [string]$ExpectedStartTime = "") {
     if ($null -eq $PidValue) {
         return
     }
@@ -50,6 +50,14 @@ function Stop-Pid([object]$PidValue, [string]$Name) {
             Write-Host "[INFO] $Name is not running (PID $processId)."
         }
         return
+    }
+
+    if ($Name -eq "FastAPI") {
+        if ([string]::IsNullOrWhiteSpace($ExpectedStartTime) -or
+            $process.StartTime.ToUniversalTime().ToString("o") -ne $ExpectedStartTime) {
+            Write-Warning "Skipping PID $processId`: launch identity is missing or no longer matches. Stop the old instance explicitly if needed."
+            return
+        }
     }
 
     $descendants = @(Get-DescendantProcessIds -ParentProcessId $processId | Select-Object -Unique)
@@ -107,7 +115,7 @@ if ($null -ne $data.client_pids) {
 } else {
     Stop-Pid -PidValue $data.client_pid -Name "client"
 }
-Stop-Pid -PidValue $data.backend_pid -Name "FastAPI"
+Stop-Pid -PidValue $data.backend_pid -Name "FastAPI" -ExpectedStartTime $data.backend_start_time_utc
 
 Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
 if (-not $Quiet) {

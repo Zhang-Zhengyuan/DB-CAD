@@ -21,7 +21,8 @@ function Invoke-Docker([string[]]$Arguments, [switch]$AllowFailure = $false) {
         if ($AllowFailure) {
             return $output
         }
-        throw "docker $($Arguments -join ' ') failed: $output"
+        # Arguments may contain credentials; never echo the command line.
+        throw "Docker operation failed (exit $exitCode): $output"
     }
     return $output
 }
@@ -62,6 +63,7 @@ function Ensure-Neo4jDocker(
         throw "Docker is not available. Install Docker Desktop or pass -SkipNeo4jDocker."
     }
 
+    Invoke-Docker -Arguments @("info", "--format", "{{.ServerVersion}}") | Out-Null
     $dataRootFull = Ensure-Directory $DataRoot
     $confDir = Join-Path $dataRootFull "conf"
     $dataDir = Join-Path $dataRootFull "data"
@@ -134,7 +136,10 @@ function Wait-Neo4jApoc(
             "RETURN apoc.version() AS apoc;"
         ) -AllowFailure
         $lastOutput = ($output | Out-String).Trim()
-        if ($lastOutput -match "\d+\.\d+\.\d+") {
+        if ($lastOutput -match '(?i)unauthorized|authentication failure|credentials.*expired') {
+            throw "Neo4j authentication failed in container '$ContainerName'. Set DBCAD_PASSWORD to the database's current password (or pass -Neo4jPassword). NEO4J_AUTH only initializes a new database; do not reset existing data to fix a login error."
+        }
+        if ($lastOutput -match '(?m)^"?\d+\.\d+\.\d+(?:[-+][\w.-]+)?"?\s*$') {
             return
         }
         if ($i -lt $Attempts) {
@@ -142,5 +147,5 @@ function Wait-Neo4jApoc(
         }
     }
 
-    throw "Neo4j APOC is not available in Docker container '$ContainerName'. Recreate local Neo4j with -ResetNeo4jDockerData. Last check output: $lastOutput"
+    throw "Neo4j APOC check failed in Docker container '$ContainerName'. Check container logs, credentials and plugin configuration. Existing data was preserved. Last check output: $lastOutput"
 }

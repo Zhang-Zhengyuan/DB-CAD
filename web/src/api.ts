@@ -2,6 +2,15 @@
 // 设置 VITE_API_BASE。
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 
+export function setApiPassword(password: string) {
+  sessionStorage.setItem("dbcad.password", password);
+}
+
+export function authHeaders(): Record<string, string> {
+  const password = sessionStorage.getItem("dbcad.password");
+  return password ? { "X-API-Password": password } : {};
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -15,6 +24,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
     headers: {
+      ...authHeaders(),
       ...init?.headers,
       ...(init?.body && !(init.body instanceof FormData)
         ? { "Content-Type": "application/json" }
@@ -89,6 +99,9 @@ export const userName =
 
 export const api = {
   projects: () => request<ProjectInfo[]>("/api/v1/projects"),
+  createProject: (name: string) => request<ProjectInfo>("/api/v1/projects", {
+    method: "POST", body: JSON.stringify({ name }),
+  }),
   openProject: (id: string) => request<ProjectInfo>(`/api/v1/projects/${id}`),
   versions: (id: string) => request<VersionList>(`/api/v1/projects/${id}/versions`),
   scene: (id: string, version?: number) =>
@@ -107,12 +120,22 @@ export const api = {
     form.append("file", file);
     form.append("project_id", projectId);
     form.append("author", userName);
-    const response = await fetch(`${BASE}/api/v1/files/import`, { method: "POST", body: form });
+    const response = await fetch(`${BASE}/api/v1/files/import`, { method: "POST", body: form, headers: authHeaders() });
     if (!response.ok) throw new ApiError(response.status, (await response.json())?.detail);
     return (await response.json()) as { project_id: string; version: number };
   },
   exportUrl: (projectId: string, fmt: "sat" | "glb" | "stl", version?: number) =>
     `${BASE}/api/v1/projects/${projectId}/files/export?fmt=${fmt}${version ? `&v=${version}` : ""}`,
+  download: async (projectId: string, fmt: "sat" | "glb" | "stl", version?: number) => {
+    const response = await fetch(api.exportUrl(projectId, fmt, version), { headers: authHeaders() });
+    if (!response.ok) throw new ApiError(response.status, (await response.json())?.detail);
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${projectId}${version ? `-v${version}` : ""}.${fmt}`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
   eventsUrl: (projectIds: string[]) =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${BASE}/api/v1/events?projects=${projectIds.join(",")}&user=${encodeURIComponent(userName)}`,
 };
