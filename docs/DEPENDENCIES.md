@@ -55,3 +55,5 @@ C++ 使用 v143 与 C++23（v3 起 Qt-free，P7 已移除 Qt 依赖）。给其�
 Python 使用 `CAD_DB/backend/pyproject.toml` 与 `uv.lock`。`requirements.txt` 仅保留直接依赖兼容入口，不承诺传递依赖版本一致；可复现环境统一使用 `uv sync --frozen`。
 
 本机迁移配置、启动入口及实际测试限制v2 时期的本机 Qt 迁移配置见 [history/LOCAL_SETUP.md](history/LOCAL_SETUP.md)（已归档）。Debug 与 Release 都使用 /MD 运行时（ACIS 官方要求），Debug 仍保留完整符号及禁用优化。
+
+Linux 接收者的固定运行包目录为 `_deps/runtime/linux/dbcad-worker-linux/`，主 README 已给出精确包名、SHA256、本机配置和完整 CAD 启动步骤；无需 SDK，也无需执行源码构建章节。首次仍需联网安装锁定的 Python/npm 依赖。
