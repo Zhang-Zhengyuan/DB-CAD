@@ -2,11 +2,14 @@
 
 目标为 Ubuntu x86_64（amd64，64 位 Intel/AMD）。Linux worker 是独立进程，供网关通过 stdin/stdout JSON 行协议调用，不是可被 Python `import` 或 `dlopen` 的库。
 
+
+接收预编译运行包、部署网页/网关/Neo4j，请先按[主 README 的 Linux 六步流程](../README.md#linux收到运行包后部署完整-cad-系统)执行。固定运行包目录为 `_deps/runtime/linux/dbcad-worker-linux/`；下面的 SDK 编译章节供维护者重新构建使用，接收者无需执行。
+
 ## 当前状态与平台边界
 
 已使用授权 Linux ACIS / InterOp 2026.1.0.1 完成 Ubuntu 22.04 / GCC 11.4 的 Release 构建。两份独立运行包在不挂载项目/SDK 的 Ubuntu 22.04 与 24.04 amd64 容器中均通过自检、175 项网格检查、常驻协议与真实 STEP 导入；AI-DBCAD 包另通过原生特征/查询和 STEP 往返。教师实际电脑尚未验收。
 
-Ubuntu 24.04 / GCC 13 的 Debug/Release 均已编译、自检并通过各 175 项网格检查；它的成品要求更高的系统运行库，交付优先采用 22.04 构建。两个项目各 6 项真实 worker API 集成在 Ubuntu 22.04 与 24.04 通过（内存存储，含建模、撤销重做、SAT/STEP）；Ubuntu 24.04 后端非集成分别为 AI-DBCAD 135 passed、DB-CAD 45 passed。Linux 工具回归在 22.04 与 24.04 各 7 passed。Windows/macOS 原生重编译、Neo4j 持久化和浏览器全栈不属于本次已验证结论。
+Ubuntu 24.04 / GCC 13 的 Debug/Release 均已编译、自检并通过各 175 项网格检查；它的成品要求更高的系统运行库，交付优先采用 22.04 构建。两个项目各 6 项真实 worker API 集成在 Ubuntu 22.04 与 24.04 通过（内存存储，含建模、撤销重做、SAT/STEP）；Ubuntu 24.04 后端非集成分别为 AI-DBCAD 135 passed、DB-CAD 45 passed。Linux 工具回归在 22.04 与 24.04 各 7 passed。以上为 worker 构建阶段的记录；接收运行包后的真实数据库与浏览器通路补验见下。
 
 AI-DBCAD 的 Windows/macOS 构建入口已存在；DB-CAD 默认分支原先只有 Windows 构建入口。两者来自同一 v3 架构，但 worker 源码并不相同：AI-DBCAD 有额外的 AI 几何命令、查询与 STEP 导出，不能默认交换二进制。分别在对应仓库执行相同的 Linux 构建入口。
 
@@ -58,24 +61,22 @@ docker build --platform linux/amd64 -t dbcad-worker-builder - < scripts/linux-wo
 
 运行镜像时将源码挂到 `/src`、ACIS 与 InterOp SDK 分别只读挂到 `/sdk/acis`、`/sdk/interop`，许可头只读挂到 `/private/spatial_license.h`，然后使用与上面相同的 `build` 参数，另加 `--license-header /private/spatial_license.h`。JSON 头必须位于源码 `_deps/vendor/nlohmann/json.hpp` 或由 `--json-include` 指定。普通 clone 的 `.git` 在源码内即可；Git worktree 还需可访问其 git common directory。构建输出与 SDK/许可均保持 Git 忽略。
 
-## 教师收到运行包后
+## 已安装运行包的独立自检
 
 ```bash
-mkdir -p worker-linux
-tar -xzf worker-linux-x86_64-release.tar.gz -C worker-linux
-./worker-linux/dbcad-worker-linux/dbcad_worker selftest
+./_deps/runtime/linux/dbcad-worker-linux/dbcad_worker selftest
 printf '%s\n' '{"id":1,"op":"ping"}' '{"id":2,"op":"close"}' \
-  | ./worker-linux/dbcad-worker-linux/dbcad_worker serve
+  | ./_deps/runtime/linux/dbcad-worker-linux/dbcad_worker serve
 ```
 
 检查返回中对应 id 的 `ok` 为 true；自检使用系统临时目录，不依赖源码或数据库。`selftest` 本身不覆盖 STEP，需另用授权的 STEP 样本：
 
 ```bash
-./worker-linux/dbcad-worker-linux/dbcad_worker import \
+./_deps/runtime/linux/dbcad-worker-linux/dbcad_worker import \
   --sat /absolute/path/sample.step --outdir /absolute/path/new-step-output
 ```
 
-## 网关/整套系统接入
+## 手工接入已有网关（可选）
 
 Linux 默认 worker 为 `build/linux/Release/dbcad_worker`。使用独立运行包或自定义构建时，在后端 `.env` 设置：
 
@@ -121,3 +122,9 @@ uv run --frozen pytest -q tests/test_v1_real_commands_integration.py \
 ```
 
 最后对独立包运行相同检查，并验证 Neo4j 持久化、浏览器建模、失败命令、撤销/重做、SAT/STEP 导入；AI-DBCAD 另验证 AI 扩展命令与 STEP 导出。出现 skip 必须核对缺少的 fixture/SDK，不能据此声称通过。教师目标机、Neo4j 持久化和浏览器全栈仍属单独验收范围；不要把真 worker + 内存存储 API 测试称作生产全栈验收。
+
+## Linux 完整 CAD 部署补验
+
+使用干净的 Git 跟踪文件快照（无 SDK/旧前端构建），把上文匹配的私有运行包解压到 `_deps/runtime/linux/`。前端在 Linux Node 22 容器中执行 `npm ci && npm run build`；网关在 Ubuntu 24.04 amd64 运行，连接独立新建的 Neo4j 5.26.12 数据卷。两个项目均检查真实网页静态资源、访问密码认证、立方体建模、GLB 资产、Neo4j 中的项目记录，以及网关重启后的版本/模型读回。浏览器另验证登录、打开持久化模型、WebGL canvas 与插入实体。测试使用合成模型和隔离数据库；没有重置用户数据库或删除数据卷。
+
+依赖严格沿用原 `uv.lock`；Mac 的 amd64 模拟环境里 uv 曾异常，验证环境通过锁文件导出的带哈希 requirements 安装同版本包，未修改应用依赖。教师原生 Ubuntu 尚待实际部署；Windows/macOS 重编译、大模型付费调用和 AI 专用渲染/上游环境不包含在这次基础 CAD 部署验收内。
