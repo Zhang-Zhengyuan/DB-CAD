@@ -75,4 +75,4 @@ docs/                     架构、计划、基准、上手指南；docs/history
 
 [架构](docs/ARCHITECTURE.md) · [v3 计划](docs/V3_PLAN.md) · [压测基准](docs/BENCHMARK_v3.md) · [贡献说明](CONTRIBUTING.md) · [后端说明](CAD_DB/backend/README.md)
 
-Linux worker 构建、独立运行包与网关接入见 [Linux 指南](docs/LINUX.md)（当前待 Linux SDK 真内核验收）。
+Linux worker 构建、独立运行包与网关接入见 [Linux 指南](docs/LINUX.md)（平台和验收范围见指南）。

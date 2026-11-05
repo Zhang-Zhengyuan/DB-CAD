@@ -4,7 +4,7 @@
 
 ## 当前状态与平台边界
 
-本次增加 Linux 构建、平台检查、可迁移运行包和网关默认路径。**尚未使用 Linux ACIS/InterOp SDK 编译真实 worker，尚未在教师的目标 Ubuntu 上完成验收。** SDK 到位后必须执行下述 Debug/Release 与真内核检查，才能交付运行包。
+已使用授权 Linux ACIS / InterOp 2026.1.0.1 完成 Ubuntu 24.04 amd64 下 Debug/Release 编译、自检、每种配置 175 项网格检查、常驻协议与真实 STEP 导入。AI-DBCAD 额外通过原生特征/查询与 STEP 往返，并在不挂载 SDK 的容器中验证独立运行包。目标教师实体机器尚未验收；Ubuntu 22.04 兼容构建与验证另行记录。
 
 AI-DBCAD 的 Windows/macOS 构建入口已存在；DB-CAD 默认分支原先只有 Windows 构建入口。两者来自同一 v3 架构，但 worker 源码并不相同：AI-DBCAD 有额外的 AI 几何命令、查询与 STEP 导出，不能默认交换二进制。分别在对应仓库执行相同的 Linux 构建入口。
 
@@ -13,7 +13,7 @@ AI-DBCAD 的 Windows/macOS 构建入口已存在；DB-CAD 默认分支原先只�
 ## 输入依赖
 
 - 与机器架构一致、有授权的 **Linux ACIS 2026.1.0.1**、配套 **Linux InterOp 2026** 和对应许可头。不能仅下载 Mac/Windows SDK；不能把商业 SDK、许可或成品提交到 GitHub。
-- Python 3.11+（推荐 3.12）、支持 C++20 且满足该 SDK 官方 ABI 要求的编译器、`ldd`。Ubuntu 可安装 `build-essential`，实际 SDK 所需编译器版本以其发行说明为准。现有锁文件中的 Pydantic 不支持 Python 3.14，后端请显式用 3.12。
+- 构建工具需要 Python 3.10+；后端需要 Python 3.11+（推荐 3.12）。另需支持 C++20 且满足该 SDK 官方 ABI 要求的编译器、`ldd`。Ubuntu 可安装 `build-essential`，实际 SDK 所需编译器版本以其发行说明为准。现有锁文件中的 Pydantic 不支持 Python 3.14，后端请显式用 3.12。
 - `_deps/vendor/nlohmann/json.hpp`，沿用项目已有依赖包，不重复引入新版本。
 - 默认许可头为 `CAD_DB/spatial_license.h`，也可用 `--license-header` 指定私有文件；若源码目录也有许可，两者必须一致。
 
@@ -30,18 +30,31 @@ python3 scripts/linux-worker.py build --configuration Release \
   --interop-root /opt/spatial/interop \
   --interop-bin /opt/spatial/interop/LINUX_PLATFORM/code/bin
 
-python3 scripts/linux-worker.py check build/linux/Release
+python3 scripts/linux-worker.py check build/linux/Release --step-fixture /absolute/path/sample.step
 python3 scripts/linux-worker.py package build/linux/Release \
+  --step-fixture /absolute/path/sample.step \
   --output output/worker-linux-x86_64-release.tar.gz
 ```
 
-执行时先把 `LINUX_PLATFORM` 替换成真实目录名。Debug 同样执行 `build --configuration Debug` 与 `check build/linux/Debug`；该模式对本项目源码使用 `-O0 -g`，默认链接相同 SDK Release 运行库，不假定厂商提供 Debug 内核。可用 `--cxx` 选择 SDK 兼容编译器。输出目录必须尚不存在；重编译用 `--output build/linux/Release-<run-id>` 并同步后续命令路径，不自动删除旧产物。
+执行时先把 `LINUX_PLATFORM` 替换成真实目录名。Debug 同样执行 `build --configuration Debug` 与 `check build/linux/Debug`；该模式对本项目源码使用 `-O0 -g`，默认链接相同 SDK Release 运行库，不假定厂商提供 Debug 内核。可用 `--cxx` 选择 SDK 兼容编译器。厂商 Linux 库无 SONAME，链接必须使用 `-l:库名.so` 与 `$ORIGIN`，不能把库的绝对路径写入 ELF；脚本与回归会检查这一点。输出目录必须尚不存在；重编译用 `--output build/linux/Release-<run-id>` 并同步后续命令路径，不自动删除旧产物。
 
-构建复制运行库实际内容，保留 InterOp 的 `runtime/code/bin/`、`runtime/resources/`、`runtime/reffiles/` 相对结构。拒绝 ACIS/InterOp 同名不同内容文件、损坏链接和错误 ELF 架构。启动包装设置 `LD_LIBRARY_PATH`、转换器 `PATH` 与 ACIS 所需最小栈；网关应指向包装入口，不要直接调用 `.bin`。
+构建暂存 SDK 运行库实际内容；打包仅选择 worker 和 SAT/STEP BRep 适配器的动态依赖闭包，避免携带无关 GUI / 格式插件。保留 InterOp 的 `runtime/code/bin/`、`runtime/resources/`、`runtime/reffiles/` 相对结构。拒绝 ACIS/InterOp 同名不同内容文件、损坏链接和错误 ELF 架构。启动包装设置 `LD_LIBRARY_PATH`、转换器 `PATH` 与 ACIS 所需最小栈；网关应指向包装入口，不要直接调用 `.bin`。
 
-`check` 检查动态依赖、worker selftest、mesh_tests（存在时）与常驻 serve 的 ping/open/非法命令/close。`package` 复制到全新临时目录并重新执行这些检查，通过后才生成 `.tar.gz`；缺依赖、错误架构、许可失败或自检失败均停止。包中包含 `build.json`、`validation.json` 和 `SHA256.json`，不包含源码、许可头、对象文件、数据库、凭据或 SDK include。仅在已有 Spatial 分发授权范围内私下提供运行包；许可可能编入二进制，不能将包作为公共 Release。
+`check` 检查动态依赖、worker selftest、mesh_tests（存在时）与常驻 serve 的 ping/open/非法命令/close。指定 `--step-fixture` 时还做真实 STEP 导入（含中文输出目录），校验 SAT/GLB/graph 产物；含 STEP 适配器的运行包必须提供这个参数。`package` 复制到全新临时目录并重新执行这些检查，通过后才生成 `.tar.gz`；缺依赖、错误架构、许可失败或自检失败均停止。包中包含 `build.json`、`validation.json` 和 `SHA256.json`，不包含源码、许可头、对象文件、数据库、凭据或 SDK include。仅在已有 Spatial 分发授权范围内私下提供运行包；许可可能编入二进制，不能将包作为公共 Release。
 
 Linux 的 glibc/libstdc++ 与 SDK ABI 必须兼容目标 Ubuntu；在较新系统上构建，不保证能在较旧 Ubuntu 运行。最终需在目标 Ubuntu 或匹配的容器中编译/验收；当前容器内脚本回归不代表真内核或任意 Ubuntu 版本通过。`ldd` 可发现链接依赖，运行时按需加载的转换器依赖还须用实际 STEP 文件验证。
+
+## 用 Ubuntu 22.04 工具链构建
+
+Ubuntu 24.04/GCC 13 构建出的程序可能要求 GLIBC 2.38 / GLIBCXX 3.4.32，不能直接发给 Ubuntu 22.04。面向 22.04 与 24.04 的通用交付应在 22.04 工具链中构建，并分别验证。
+
+可直接在 Ubuntu 22.04 安装构建工具，或使用仓库中的工具链镜像。下面使用空构建上下文，SDK、许可和源码都不会进入镜像层：
+
+```bash
+docker build --platform linux/amd64 -t dbcad-worker-builder - < scripts/linux-worker.Dockerfile
+```
+
+运行镜像时将源码挂到 `/src`、ACIS 与 InterOp SDK 分别只读挂到 `/sdk/acis`、`/sdk/interop`，许可头只读挂到 `/private/spatial_license.h`，然后使用与上面相同的 `build` 参数，另加 `--license-header /private/spatial_license.h`。JSON 头必须位于源码 `_deps/vendor/nlohmann/json.hpp` 或由 `--json-include` 指定。普通 clone 的 `.git` 在源码内即可；Git worktree 还需可访问其 git common directory。构建输出与 SDK/许可均保持 Git 忽略。
 
 ## 教师收到运行包后
 
@@ -105,4 +118,4 @@ uv run --frozen pytest -q tests/test_v1_real_commands_integration.py \
   tests/test_v1_real_worker_integration.py tests/test_v1_step_import_integration.py
 ```
 
-最后对独立包运行相同检查，并验证 Neo4j 持久化、浏览器建模、失败命令、撤销/重做、SAT/STEP 导入；AI-DBCAD 另验证 AI 扩展命令与 STEP 导出。出现 skip 必须核对缺少的 fixture/SDK，不能据此声称通过。上述真内核及目标机验收当前均待 SDK。
+最后对独立包运行相同检查，并验证 Neo4j 持久化、浏览器建模、失败命令、撤销/重做、SAT/STEP 导入；AI-DBCAD 另验证 AI 扩展命令与 STEP 导出。出现 skip 必须核对缺少的 fixture/SDK，不能据此声称通过。教师目标机、Neo4j 持久化和浏览器全栈仍属单独验收范围；不要把真 worker + 内存存储 API 测试称作生产全栈验收。
