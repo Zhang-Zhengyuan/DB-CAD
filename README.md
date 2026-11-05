@@ -28,6 +28,25 @@ uv sync --frozen --extra dev
 uv run --frozen pytest -q -m 'not integration'
 ```
 
+## 平台支持与部署运行
+
+| 平台 | worker（几何内核）来源 | 网关 / 前端 / Neo4j | 指南 |
+| --- | --- | --- | --- |
+| Windows 10/11 x64 | 本机源码构建（VS 2022 + 授权 ACIS Windows SDK） | 支持 | [复现与部署指南](docs/GETTING_STARTED.md) |
+| Linux x86_64（Ubuntu 22.04+，glibc ≥ 2.35） | 预编译 worker 运行包（无需 SDK），或授权 SDK 自建 | 支持 | [Linux 指南](docs/LINUX.md) |
+| macOS | 无官方构建入口（macOS 支持在 AI-DBCAD 仓库提供） | — | [AI-DBCAD](https://github.com/Zhang-Zhengyuan/AI-DBCAD) |
+
+各平台的网关、前端与 Neo4j 部署方式一致（Python 3.11+ / uv、Node.js 20.19+ 或 22.12+、Neo4j），差别只在 worker 二进制如何获得。Linux 运行包仅限 x86_64；ARM 主机与 glibc < 2.35 的旧发行版（CentOS 7、Ubuntu 20.04 等）不能运行。DB-CAD 与 AI-DBCAD 的 worker 同源但命令集不同（AI-DBCAD 含 AI 建模/查询与 STEP 导出扩展），二进制不可互换。
+
+### 新机器部署流程
+
+1. **取代码**：`git pull` 本仓库。商业 SDK 与许可不随源码分发，仓库不包含任何授权组件。
+2. **放运行库**：向维护者索取对应平台的依赖/运行包，统一放在仓库根 `_deps/`（整个目录不进 Git，布局见 [依赖说明](docs/DEPENDENCIES.md)）：
+   - Windows 构建者：ACIS Windows TeamKit 解压为 `_deps/acis/` 等目录（含 InterOp 依赖）；
+   - Linux 使用者：预编译 worker 运行包解压到任意目录，在后端 `.env` 设置 `CAD_DB_WORKER_EXE` 指向解压出的 `dbcad_worker` 包装入口（详见 [Linux 指南](docs/LINUX.md)）。
+3. **首次安装与构建**：Windows 见上文[新成员上手](#新成员上手)的命令序列；Linux 按 [Linux 指南](docs/LINUX.md) 安装依赖并构建前端。
+4. **启动**：Windows 执行 `.\CAD_DB\deploy\start_dbcad_fullstack.cmd`；Linux 在 `CAD_DB/backend` 运行 `uv run --frozen uvicorn app.main:app --host 127.0.0.1 --port 8000`，浏览器访问 `http://127.0.0.1:8000/web/`。Neo4j 需独立可用（连接配置见各指南与 `CAD_DB/backend/.env.example`）。
+
 ## 功能与模式（v3，2026-10-19 定稿）
 
 - **服务端权威命令**：建模（曲线/曲面/布尔/抽壳/变换）、撤销/重做全部在 ACIS worker 执行，浏览器只提交命令与消费网格（ADR-2：每项目一 worker 进程，命令串行队列即版本链）。
