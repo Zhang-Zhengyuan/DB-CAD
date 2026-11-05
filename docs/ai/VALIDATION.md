@@ -1,5 +1,7 @@
 # 按改动选择验证
 
+Linux worker 构建、Debug/Release 自检、SAT/STEP 运行包迁移检查见 [Linux 指南](../LINUX.md)；工具链回归为 `python3 scripts/tests/test-linux-worker.py`，真几何检查为 `python3 scripts/linux-worker.py check <build-dir> --step-fixture <sample.step>`。
+
 记录执行目录、命令、退出状态、结果摘要和未运行原因。历史验证记录不是本次证据；无服务测试不等于全栈验收。不修改公共/真实模型库来制造测试环境。
 
 | 改动 | 最低验证 | 额外验收 |

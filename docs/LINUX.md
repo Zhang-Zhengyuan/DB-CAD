@@ -4,7 +4,9 @@
 
 ## 当前状态与平台边界
 
-已使用授权 Linux ACIS / InterOp 2026.1.0.1 完成 Ubuntu 24.04 amd64 下 Debug/Release 编译、自检、每种配置 175 项网格检查、常驻协议与真实 STEP 导入。AI-DBCAD 额外通过原生特征/查询与 STEP 往返，并在不挂载 SDK 的容器中验证独立运行包。目标教师实体机器尚未验收；Ubuntu 22.04 兼容构建与验证另行记录。
+已使用授权 Linux ACIS / InterOp 2026.1.0.1 完成 Ubuntu 22.04 / GCC 11.4 的 Release 构建。两份独立运行包在不挂载项目/SDK 的 Ubuntu 22.04 与 24.04 amd64 容器中均通过自检、175 项网格检查、常驻协议与真实 STEP 导入；AI-DBCAD 包另通过原生特征/查询和 STEP 往返。教师实际电脑尚未验收。
+
+Ubuntu 24.04 / GCC 13 的 Debug/Release 均已编译、自检并通过各 175 项网格检查；它的成品要求更高的系统运行库，交付优先采用 22.04 构建。两个项目各 6 项真实 worker API 集成在 Ubuntu 22.04 与 24.04 通过（内存存储，含建模、撤销重做、SAT/STEP）；Ubuntu 24.04 后端非集成分别为 AI-DBCAD 135 passed、DB-CAD 45 passed。Linux 工具回归在 22.04 与 24.04 各 7 passed。Windows/macOS 原生重编译、Neo4j 持久化和浏览器全栈不属于本次已验证结论。
 
 AI-DBCAD 的 Windows/macOS 构建入口已存在；DB-CAD 默认分支原先只有 Windows 构建入口。两者来自同一 v3 架构，但 worker 源码并不相同：AI-DBCAD 有额外的 AI 几何命令、查询与 STEP 导出，不能默认交换二进制。分别在对应仓库执行相同的 Linux 构建入口。
 
@@ -97,7 +99,7 @@ uv run --frozen uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 访问 `http://127.0.0.1:8000/web/`；worker 由网关按项目启动。需要其他电脑访问时，按部署环境配置绑定地址、鉴权和访问入口。不要在 Linux 调用 Windows PowerShell 启动器或 Mac 专用启动器。
 
-## 回归与 SDK 到位后的验收
+## 回归与真内核验收
 
 无需 SDK 的脚本回归（其中 ELF 动态加载/重定位和 POSIX 中文路径测试需要 Linux C/C++ 编译器）：
 
@@ -108,7 +110,7 @@ uv sync --python 3.12 --frozen --extra dev
 uv run --frozen pytest -q -m 'not integration'
 ```
 
-Linux SDK 到位后必须先完成两种配置的 `build` / `check`，再运行真实 worker 接入验证：
+使用匹配的 Linux SDK，先完成两种配置的 `build` / `check`，再运行真实 worker 接入验证：
 
 ```bash
 # 工作目录：CAD_DB/backend
