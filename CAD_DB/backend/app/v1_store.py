@@ -443,6 +443,55 @@ class Neo4jV1Store(MemoryV1Store):
             )
         return record
 
+    def rename_project(self, project_id: str, name: str) -> ProjectRecord:
+        record = super().rename_project(project_id, name)
+        with self._driver.session(database=self._database) as session:
+            session.run(
+                "MATCH (p:V1Project {id:$id}) SET p.name=$name, p.updated_at=$ua",
+                id=project_id,
+                name=record.name,
+                ua=record.updated_at.isoformat(),
+            )
+        return record
+
+    def delete_project(self, project_id: str) -> None:
+        super().delete_project(project_id)
+
+        def _delete_all(tx: Any) -> None:
+            # 版本/标签按 project_id 属性归属项目（与 V1Project 无边相连）；
+            # 组件与实体投影内容寻址、跨项目共享（ADR-3），不随项目删除。
+            tx.run(
+                "MATCH (v:V1Version {project_id:$pid}) DETACH DELETE v",
+                pid=project_id,
+            ).consume()
+            tx.run(
+                "MATCH (t:V1Tag {project_id:$pid}) DELETE t",
+                pid=project_id,
+            ).consume()
+            tx.run(
+                "MATCH (p:V1Project {id:$pid}) DETACH DELETE p",
+                pid=project_id,
+            ).consume()
+
+        # 单事务：三条要么全成要么全不成，不留半删状态。
+        with self._driver.session(database=self._database) as session:
+            session.execute_write(_delete_all)
+
+    def tag_version(
+        self, project_id: str, name: str, version: int
+    ) -> dict[str, Any]:
+        tag = super().tag_version(project_id, name, version)
+        # 属性名与 initialize() 的 V1Tag 载入逐字一致；MERGE 使同名重打为
+        # 覆盖，与 Memory 侧 dict 赋值语义对齐。
+        with self._driver.session(database=self._database) as session:
+            session.run(
+                "MERGE (t:V1Tag {project_id:$pid, name:$name}) SET t.version=$v",
+                pid=project_id,
+                name=name,
+                v=version,
+            )
+        return tag
+
     def commit_version(  # type: ignore[override]
         self,
         project_id: str,
