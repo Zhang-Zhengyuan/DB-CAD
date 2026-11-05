@@ -1,0 +1,25 @@
+name: Linux worker tooling
+on:
+  push:
+    paths:
+      - 'scripts/linux-worker.py'
+      - 'scripts/tests/test-linux-worker.py'
+      - '**/worker/file_io.h'
+      - '.github/workflows/linux-worker.yml'
+  pull_request:
+    paths:
+      - 'scripts/linux-worker.py'
+      - 'scripts/tests/test-linux-worker.py'
+      - '**/worker/file_io.h'
+      - '.github/workflows/linux-worker.yml'
+permissions:
+  contents: read
+jobs:
+  runtime-tooling:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/tests/test-linux-worker.py

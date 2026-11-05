@@ -50,3 +50,5 @@ worker（`x64/<Configuration>/dbcad_worker.exe`）由 FastAPI 的 GeometryPool �
 HTTP 鉴权头为 `X-API-Password`，WS 使用 password 查询参数。部署默认生成非空密码；独立开发的空密码行为保留，管理界面要求设置密码。模式、事件字段和 base_version 是协议约定。
 
 装配位于 app/main.py；模块边界见 [架构说明](../../docs/ARCHITECTURE.md)。静态资源随 app/ 打包，不依赖源码工作目录。v2 的 json-delta/WS 模型提交协议已随 Qt 客户端移除，历史见 [docs/history/](../../docs/history/README.md)。
+
+Linux 默认 worker 为 `build/linux/Release/dbcad_worker`；可通过 `CAD_DB_WORKER_EXE` 指向独立包启动入口，详见 [Linux 指南](../../docs/LINUX.md)。

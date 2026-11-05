@@ -1,7 +1,7 @@
 """P2 验收集成测试：真实常驻 worker（ACIS）上纯 API 跑通建模全流程。
 
 链路：建项目 → 参数化创建（体/面/线）→ 变换 → 布尔 → 场景/资产 → 撤销 →
-导出。运行条件：x64/Debug/dbcad_worker.exe 已构建。
+导出。运行条件：settings.worker_exe（支持 CAD_DB_WORKER_EXE）已构建。
 
     uv run --frozen pytest -q tests/test_v1_real_commands_integration.py -m integration
 """
@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
+from app.config import settings
 from app.component_store import ComponentStore, set_component_store
 from app.v1_store import initialize_v1_store, shutdown_v1_store
 from app.worker_pool import GeometryPool, set_worker_pool
@@ -21,7 +22,7 @@ from app.worker_pool import GeometryPool, set_worker_pool
 pytestmark = pytest.mark.integration
 
 _REPO = Path(__file__).resolve().parents[3]
-WORKER = _REPO / "x64" / "Debug" / "dbcad_worker.exe"
+WORKER = Path(settings.worker_exe)
 
 
 @pytest.fixture()

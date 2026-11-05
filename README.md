@@ -74,3 +74,5 @@ docs/                     架构、计划、基准、上手指南；docs/history
 启动链路：Neo4j → FastAPI → 浏览器 `/web/`，worker 由后端按需启动。默认端口 8000，以启动器输出地址为准；登录使用 `CAD_DB/deploy/dbcad.local.env` 中的 `DBCAD_PASSWORD`。重建与同机双客户端测试见[上手指南](docs/GETTING_STARTED.md#修改代码后重新运行)，参数见[部署说明](CAD_DB/DEPLOYMENT.md)。
 
 [架构](docs/ARCHITECTURE.md) · [v3 计划](docs/V3_PLAN.md) · [压测基准](docs/BENCHMARK_v3.md) · [贡献说明](CONTRIBUTING.md) · [后端说明](CAD_DB/backend/README.md)
+
+Linux worker 构建、独立运行包与网关接入见 [Linux 指南](docs/LINUX.md)（当前待 Linux SDK 真内核验收）。

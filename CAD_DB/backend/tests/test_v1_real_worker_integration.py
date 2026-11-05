@@ -2,7 +2,7 @@
 
 P1 验收的"真栈"版本（V3_PLAN.md P1）：导入 SAT（先用 worker 自检产线的同款
 SAT 字节？否——直接用 TestClient 走 HTTP，SAT 样本来自仓库 fixtures 或现场
-生成）。运行条件：x64/Debug/dbcad_worker.exe 已构建。
+生成）。运行条件：settings.worker_exe（支持 CAD_DB_WORKER_EXE）已构建。
 
     uv run --frozen pytest -q tests/test_v1_real_worker_integration.py -m integration
 
@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
+from app.config import settings
 from app.component_store import ComponentStore, set_component_store
 from app.v1_store import initialize_v1_store, shutdown_v1_store
 from app.worker_client import SubprocessWorkerGateway, set_worker_gateway
@@ -24,7 +25,7 @@ from app.worker_client import SubprocessWorkerGateway, set_worker_gateway
 pytestmark = pytest.mark.integration
 
 _REPO = Path(__file__).resolve().parents[3]
-WORKER = _REPO / "x64" / "Debug" / "dbcad_worker.exe"
+WORKER = Path(settings.worker_exe)
 SAT_FIXTURES = list((_REPO / "scripts" / "tests" / "acis").glob("*.sat"))[:1]
 
 

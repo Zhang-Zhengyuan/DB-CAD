@@ -19,6 +19,7 @@
 #include "kernel/glb_writer.h"
 #include "entity_graph_codec.h"
 #include "session.h"
+#include "file_io.h"
 
 // STEP 导入（P9）：Spatial InterOp（授权包 _deps/interop）。头存在才编入；
 // 缺包时 import 对 .step/.stp 显式报错（错误显式，不静默）。
@@ -79,7 +80,7 @@ std::string quote(double value) {
 
 // ---- ACIS SAT 读写（Qt-free 版，模式同 kernel/acis_sat_io.hxx）-----------
 bool saveEntityList(const fs::path& path, const ENTITY_LIST& entities, std::string& why) {
-    FILE* file = _wfopen(path.wstring().c_str(), L"w+b");
+    FILE* file = dbcad::worker::openFile(path, true);
     if (!file) {
         why = "fopen failed: " + path.string();
         return false;
@@ -113,7 +114,7 @@ bool saveEntityList(const fs::path& path, const ENTITY_LIST& entities, std::stri
 }
 
 bool restoreEntityList(const fs::path& path, ENTITY_LIST& entities) {
-    FILE* file = _wfopen(path.wstring().c_str(), L"rb");
+    FILE* file = dbcad::worker::openFile(path, false);
     if (!file) return false;
     const bool ok = api_restore_entity_list(file, TRUE, entities).ok();
     std::fclose(file);
