@@ -1,6 +1,7 @@
 // GeometrySession 实现：命令执行器（图元创建/变换/布尔/求交/去重/删除）。
 // 图元表复用 kernel/acis_primitives.inc（纯 ACIS switch，无 Qt 依赖）。
 #include "session.h"
+#include "file_io.h"
 
 #include "entity_graph_codec.h"
 #include "kernel/glb_writer.h"
@@ -79,7 +80,7 @@ std::string quote(double value) {
 }
 
 bool saveEntityList(const fs::path& path, const ENTITY_LIST& entities) {
-    FILE* file = _wfopen(path.wstring().c_str(), L"w+b");
+    FILE* file = dbcad::worker::openFile(path, true);
     if (!file) return false;
     bool ok = api_save_version(get_major_version(), get_minor_version()).ok();
     FileInfo info;
@@ -94,7 +95,7 @@ bool saveEntityList(const fs::path& path, const ENTITY_LIST& entities) {
 }
 
 bool restoreEntityList(const fs::path& path, ENTITY_LIST& entities) {
-    FILE* file = _wfopen(path.wstring().c_str(), L"rb");
+    FILE* file = dbcad::worker::openFile(path, false);
     if (!file) return false;
     const bool ok = api_restore_entity_list(file, TRUE, entities).ok();
     std::fclose(file);

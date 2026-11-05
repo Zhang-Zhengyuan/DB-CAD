@@ -106,3 +106,8 @@ scripts/tests/acis/*.obj
 
 # v1 组件内容寻址资产库（后端本地数据，不入库）
 CAD_DB/backend/data/
+
+# Linux native build and private runtime outputs
+/build/
+/output/
+/.local/

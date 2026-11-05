@@ -2,6 +2,8 @@
 
 核对日期：2026-10-19（v3.2）。本文是定位索引，实际源码、锁文件、构建文件与当前 CI 是事实来源；历史设计稿描述的目标不等于已实现。模块路径或命令变化时同 PR 更新本索引。
 
+Linux worker 构建/运行包：[`scripts/linux-worker.py`](../../scripts/linux-worker.py)，依赖与平台验收边界见 [Linux 指南](../LINUX.md)。目标 Ubuntu x86_64；不替代完整网关/数据库部署。
+
 ## 运行链路（v3 服务端权威）
 
 `浏览器（React + three.js 薄客户端）→ FastAPI 网关 → ACIS worker（C++，每项目一进程，命令串行队列即版本链，ADR-2）`。
