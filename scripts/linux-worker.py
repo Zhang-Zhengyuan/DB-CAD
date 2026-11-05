@@ -41,8 +41,11 @@ def elf(path, machine):
 
 
 def digest(path):
+    value = hashlib.sha256()
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
 
 
 def copy_runtime(source, destination, ancestors=()):
@@ -128,8 +131,11 @@ def build(args):
         source = interop_bin.parent.parent / name
         if source.is_dir():
             copy_runtime(source, output / "runtime" / name)
-    flags = ["-std=c++20", "-fPIC", "-pthread", "-DSPA_NO_AUTO_LINK",
+    # Match the vendor's Linux sample ABI/aliasing flags without suppressing diagnostics.
+    flags = ["-std=c++20", "-fPIC", "-fvisibility=hidden", "-fno-strict-aliasing", "-pthread", "-DSPA_NO_AUTO_LINK",
              "-O2" if args.configuration == "Release" else "-O0"]
+    if machine == "x86_64":
+        flags += ["-m64"]
     if args.configuration == "Debug":
         flags += ["-g"]
     flags += ["-I" + str(p) for p in (include, cad, args.json_include.resolve(), interop / "include")]
@@ -142,7 +148,9 @@ def build(args):
         objects.append(obj)
     # Link against the staged SDK so its transitive dependencies are also resolved.
     link = ["-pthread", "-L" + str(bin_dir), "-Wl,-rpath,$ORIGIN", "-Wl,-rpath-link," + str(bin_dir)]
-    staged_libs = [bin_dir / lib.name for lib in libs]
+    # Vendor .so files have no SONAME. Passing absolute filenames would embed
+    # the build directory in DT_NEEDED and break every relocated package.
+    staged_libs = ["-l:" + lib.name for lib in libs]
     run(args.cxx, *objects, *link, *staged_libs, "-ldl", "-o", bin_dir / "dbcad_worker.bin")
     run(args.cxx, *flags, ROOT / "scripts/tests/mesh_tests.cpp", *objects[:4], *link, *staged_libs,
         "-ldl", "-o", bin_dir / "mesh_tests.bin")
@@ -156,6 +164,9 @@ def build(args):
                 "source_dirty": bool(run("git", "-C", ROOT, "status", "--porcelain", capture_output=True, text=True).stdout),
                 "compiler": run(args.cxx, "--version", capture_output=True, text=True).stdout.splitlines()[0],
                 "sdk_libraries": {lib.name: digest(lib) for lib in libs},
+                "builder_sha256": digest(Path(__file__)),
+                "link_mode": "library-name; ORIGIN rpath; no absolute DT_NEEDED",
+                "os_release": {key: platform.freedesktop_os_release().get(key) for key in ("ID", "VERSION_ID")},
                 "libc": list(platform.libc_ver()),
                 "source_files": {str(p.relative_to(ROOT)): digest(p)
                                  for folder in (cad, cad / "worker", cad / "kernel")
@@ -167,16 +178,20 @@ def build(args):
 
 
 def dependencies(directory, machine):
+    """Return the SAT/STEP BRep runtime closure, excluding unrelated SDK plugins.
+
+    InterOp loads format adapters with dlopen, so they must be explicit roots
+    in addition to the executables' DT_NEEDED dependencies.
+    """
     bin_dir = directory / "runtime/code/bin"
     env = dict(os.environ, LD_LIBRARY_PATH=str(bin_dir))
     env.pop("LD_PRELOAD", None)
-    for item in bin_dir.rglob("*"):
-        if not item.is_file():
-            continue
-        with item.open("rb") as stream:
-            is_elf = stream.read(4) == b"\x7fELF"
-        if not is_elf:
-            continue
+    names = ("dbcad_worker.bin", "mesh_tests.bin", "libSPAXStep.so", "libSPAXStepSplitter.so",
+             "SPAXChildConnect", "SPAXChildProcess", "SPAXChildUConnectAcis", "libSPAXConnectAssemblyMP.so")
+    roots = {bin_dir / name for name in names if (bin_dir / name).is_file()}
+    roots.update(bin_dir.glob("libSPAXAcis*.so"))
+    selected = set(roots)
+    for item in sorted(roots):
         elf(item, machine)
         result = subprocess.run(["ldd", str(item)], env=env, capture_output=True, text=True)
         listing = result.stdout + result.stderr
@@ -186,6 +201,9 @@ def dependencies(directory, machine):
             raise ValueError(f"Unresolved runtime dependencies for {item.name}: {listing}")
         for line in listing.splitlines():
             if "=>" not in line:
+                direct = line.strip().split(" (", 1)[0]
+                if direct.startswith("/") and not Path(direct).name.startswith(SYSTEM_LIBS):
+                    raise ValueError(f"Absolute linked library path: {direct}; link by -l:name instead of an absolute filename")
                 continue
             name, location = line.split("=>", 1)
             if name.strip().startswith(SYSTEM_LIBS):
@@ -193,9 +211,12 @@ def dependencies(directory, machine):
             resolved = Path(location.strip().split(" (", 1)[0])
             if not resolved.resolve().is_relative_to(directory.resolve()):
                 raise ValueError(f"External non-system dependency: {line.strip()}; stage its Linux runtime in the SDK bin directory")
+            elf(resolved, machine)
+            selected.add(resolved)
+    return selected
 
 
-def check(directory):
+def check(directory, step_fixture=None):
     machine = host()
     directory = directory.resolve()
     elf(directory / "runtime/code/bin/dbcad_worker.bin", machine)
@@ -214,7 +235,21 @@ def check(directory):
         replies = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         if [(r.get("id"), r.get("ok")) for r in replies] != [(1, True), (2, True), (3, False), (4, True)]:
             raise ValueError(f"Unexpected worker serve protocol: {replies}")
-    print("Linux dependencies, selftest, mesh (if present) and serve checks passed. STEP/full-stack checks remain separate.")
+        if step_fixture is not None:
+            fixture = step_fixture.resolve(strict=True)
+            imported = Path(scratch) / "STEP中文导入"
+            run(directory / "dbcad_worker", "import", "--sat", fixture, "--outdir", imported, timeout=180)
+            manifest = json.loads((imported / "manifest.json").read_text())
+            components = manifest.get("components", [])
+            if manifest.get("schema") != "dbcad.worker.import/1" or not components:
+                raise ValueError("STEP import produced no valid component manifest")
+            for component in components:
+                for field in ("sat", "glb", "graph"):
+                    file = imported / component.get(field, "")
+                    if not file.is_file() or not file.stat().st_size:
+                        raise ValueError(f"STEP import missing {field} artifact")
+    print("Linux dependencies, selftest, mesh (if present), serve" +
+          (", STEP import" if step_fixture else "") + " checks passed. Full-stack checks remain separate.")
 
 
 def package(args):
@@ -225,23 +260,38 @@ def package(args):
         raise ValueError(f"Package already exists: {output}")
     if output.is_relative_to(source):
         raise ValueError("Archive must be outside the build directory")
+    step_fixture = getattr(args, "step_fixture", None)
+    if (source / "runtime/code/bin/libSPAXStep.so").exists() and step_fixture is None:
+        raise ValueError("STEP runtime packaging requires --step-fixture to validate dlopen adapters after relocation")
     # Test the relocated copy without build headers, objects or original SDK paths.
     with tempfile.TemporaryDirectory(prefix="dbcad-package-") as scratch:
         root = Path(scratch) / "dbcad-worker-linux"
         root.mkdir()
-        shutil.copytree(source / "runtime", root / "runtime", symlinks=False)
+        binaries = root / "runtime/code/bin"
+        binaries.mkdir(parents=True)
+        for item in dependencies(source, platform.machine()):
+            shutil.copy2(item, binaries / item.name)
+        for name in ("resources", "reffiles"):
+            if (source / "runtime" / name).is_dir():
+                shutil.copytree(source / "runtime" / name, root / "runtime" / name, symlinks=False)
         for name in ("dbcad_worker", "mesh_tests", "build.json"):
             shutil.copy2(source / name, root / name)
-        check(root)
+        if step_fixture:
+            check(root, step_fixture)
+        else:
+            check(root)
         (root / "validation.json").write_text(json.dumps({
             "architecture": platform.machine(), "libc": list(platform.libc_ver()),
-            "passed": ["dependencies", "selftest", "mesh_tests", "serve"],
-            "not_checked": ["STEP round trip", "FastAPI/Neo4j/browser integration"]}, indent=2) + "\n")
+            "runtime_profile": "sat-step-brep",
+            "packager_sha256": digest(Path(__file__)),
+            "passed": ["dependencies", "selftest", "mesh_tests", "serve"] + (["STEP import"] if step_fixture else []),
+            "step_fixture_sha256": digest(step_fixture.resolve()) if step_fixture else None,
+            "not_checked": ["STEP export round trip", "FastAPI/Neo4j/browser integration"]}, indent=2) + "\n")
         (root / "README.txt").write_text("Linux ACIS worker runtime. Start: ./dbcad_worker serve\n"
             "Gateway: CAD_DB_WORKER_EXE=<absolute path>/dbcad_worker\n"
             "Requires the recorded architecture and compatible Linux glibc/libstdc++.\n"
             "Only distribute under your Spatial runtime/license authorization.\n"
-            "Validated: dependencies, selftest, mesh_tests, serve. STEP/full stack not implied.\n")
+            "See validation.json for checks performed; full-stack validation is separate.\n")
         files = {str(p.relative_to(root)): digest(p) for p in sorted(root.rglob("*")) if p.is_file()}
         (root / "SHA256.json").write_text(json.dumps(files, indent=2) + "\n")
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -263,15 +313,17 @@ def main():
     b.add_argument("--output", type=Path)
     c = sub.add_parser("check")
     c.add_argument("directory", type=Path)
+    c.add_argument("--step-fixture", type=Path)
     p = sub.add_parser("package")
     p.add_argument("directory", type=Path)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--step-fixture", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "build":
             build(args)
         elif args.command == "check":
-            check(args.directory)
+            check(args.directory, args.step_fixture)
         else:
             package(args)
     except (ValueError, OSError, subprocess.SubprocessError) as exc:

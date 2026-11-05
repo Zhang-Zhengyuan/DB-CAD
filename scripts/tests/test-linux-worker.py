@@ -54,6 +54,17 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Dangling"):
                 worker.copy_runtime(root / "sdk", root / "out")
 
+    def test_step_package_requires_real_fixture(self):
+        with tempfile.TemporaryDirectory() as scratch, patch.object(worker, "host", return_value="x86_64"):
+            root = Path(scratch)
+            binaries = root / "build/runtime/code/bin"
+            binaries.mkdir(parents=True)
+            (binaries / "libSPAXStep.so").touch()
+            args = argparse.Namespace(directory=root / "build", output=root / "package.tar.gz")
+            with self.assertRaisesRegex(ValueError, "--step-fixture"):
+                worker.package(args)
+            self.assertFalse(args.output.exists())
+
     @unittest.skipUnless(sys.platform == "linux" and shutil.which("c++"), "Linux C++ compiler required")
     def test_posix_file_io_unicode_and_failure(self):
         cad = worker.ROOT / "systems/dbcad/CAD_DB"
@@ -100,12 +111,19 @@ int main(int argc, char** argv) {
                 (build / name).write_text(worker.wrapper(name))
                 (build / name).chmod(0o755)
             (build / "build.json").write_text("{}")
+            absolute = root / "absolute/runtime/code/bin"
+            absolute.mkdir(parents=True)
+            subprocess.run(["cc", str(source / "main.c"), str(source / "libfixture.so"),
+                            "-o", str(absolute / "dbcad_worker.bin")], check=True)
+            with self.assertRaisesRegex(ValueError, "Absolute linked"):
+                worker.dependencies(root / "absolute", worker.host())
             with self.assertRaisesRegex(ValueError, "External non-system"):
                 worker.dependencies(build, worker.host())
             (binaries / "libfixture.so").unlink()
             with self.assertRaisesRegex(ValueError, "Unresolved"):
                 worker.dependencies(build, worker.host())
             shutil.copy2(source / "libfixture.so", binaries / "libfixture.so")
+            shutil.copy2(source / "libfixture.so", binaries / "libUnusedAdapter.so")
             worker.dependencies(build, worker.host())
             archive = root / "runtime.tar.gz"
             args = argparse.Namespace(directory=build, output=archive)
@@ -130,6 +148,7 @@ int main(int argc, char** argv) {
             relocated_check(unpack / "dbcad-worker-linux")
             manifest = json.loads((unpack / "dbcad-worker-linux/SHA256.json").read_text())
             self.assertIn("runtime/code/bin/libfixture.so", manifest)
+            self.assertNotIn("runtime/code/bin/libUnusedAdapter.so", manifest)
 
 
 if __name__ == "__main__":
